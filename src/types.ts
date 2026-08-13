@@ -25,7 +25,7 @@ export interface CloudItem {
   isFolder?: boolean;
   contentType?: string;
   downloadUrl?: string;
-  /** Graph 直传的下载 URL 字段（thumb byte-range 用）。 */
+  /** Graph 直传的下载 URL 字段（peek byte-range 用）。 */
   "@microsoft.graph.downloadUrl"?: string;
 }
 
@@ -45,7 +45,7 @@ export interface MoveOpts {
 //   online 拒删）；list-failed=列举失败确认不了空（drain 留队 defer、online 拒删）。绝不 throw 非空/列举失败（用 status 表达）。
 export interface FolderDeleteResult { status: "deleted" | "already-gone" | "non-empty" | "list-failed" }
 
-// 低层云端传输契约。WebPaint 用 OneDriveProvider（包 Graph），测试用 MockProvider。
+// 低层云端传输契约。生产用 OneDriveProvider（包 Graph），测试用 MockProvider。
 export interface CloudProvider {
   list(folder?: string): Promise<CloudItem[]>;
   getItemByPath(path: string): Promise<CloudItem | null>;

@@ -22,13 +22,13 @@
 - **`recordEdit(name)` 是唯一标脏入口**：原子地 set dirty + `_parent ← _base` → **dirty-without-parent 不可表示**（bypass 结构性消除，不是事后绊线）。
 - **seenBase 回退**：`_base` 缺失时回退读 cloud kv etag——**仅**用于 open/refresh 的"云端动没动"比较（非破坏性），**永不**作 dirty 的 If-Match。local-head 是**唯一**碰这个回退的地方（两条 etag 轨道唯一接触点，可审计）。
 - **两条 etag 轨道分开**：local-head 拥 per-tab `_base`/`_parent`；cloud-sync 拥 kv 持久 etag。只在 open/adopt 单向 seed（kv→`_base`），绝不反向。
-- **藏在接口后、app 永不 import**：local-head 是 store 的**内部脊椎**，不在 README.md 的 app 面（file/collection/...）里露出；消费它的只有库内深模块（push / freshness / delete / identity / offload / safe-resolve），各自只调它的 8 个方法（`ifMatchFor` / `seenBase` / `isDirty` / `recordEdit` / `markSeen` / `markSynced` / `onPushed` / `forget`）。**它就是最底的版本谱系脊椎，上面没有另一层。**（注：JRP 才把它从 WebPaint 的 `store.ts` inline 抽出来；WebPaint 仍 inline，未来 adapt 回去时以本模块为准。）
+- **藏在接口后、app 永不 import**：local-head 是 store 的**内部脊椎**，不在 README.md 的 app 面（file/collection/...）里露出；消费它的只有库内深模块（push / freshness / delete / identity / offload / safe-resolve），各自只调它的 8 个方法（`ifMatchFor` / `seenBase` / `isDirty` / `recordEdit` / `markSeen` / `markSynced` / `onPushed` / `forget`）。**它就是最底的版本谱系脊椎，上面没有另一层。**（注：本模块是从前身引擎 `store.ts` inline 抽出的；前身宿主 adapt 回来时以本模块为准。）
 
 ## 红线优先级（取舍时按此排）
 
 1. **绝不静默覆盖 / 绝不丢数据**（最高）——If-Match 用 `_parent` 不用 `_base`/共享 etag；陈旧 etag 当 If-Match 必 412 安全 surface。
 2. **绝不让脏字节进 merge**（captive-portal HTML / 截断）。
-3. **freshness / 别读陈旧**（较低，但**是 JRP 的命**："各端接着读"=新设备一开就要最新）——seenBase 回退服务这条。
+3. **freshness / 别读陈旧**（较低，但**是阅读类宿主的命**："各端接着读"=新设备一开就要最新）——seenBase 回退服务这条。
 
 ## 相邻模块（深模块现状）
 
@@ -41,36 +41,36 @@
 > 本地副本的语义收敛成**一个 bit：在本地 / 不在本地**（= kept offline / 不）。LRU 已废弃 → 没有「受保护 vs 可驱逐」两层 → "pin" 这词没有指称对象，整套 pin/unpin/evict/force 坍缩成两个动词。
 
 - **keepOffline** — 确保本地有一份副本（未缓存则 acquire）。`autoCacheOpenedFile:true` 下开即等价自动 keepOffline。**不叫 download**：`open` 内部已含下载子过程，叫 download 会误导。
-- **offload** — 移除本地副本（≠ delete，云端不动）。**红线守卫全在 `offload` 深模块一处**，复用 local-head 的 etag 谱系逻辑（不发明）：合法 = `clean ∧ 在线 ∧ 已登录 ∧ head.seenBase!=null（曾 synced = 有已知云版 = re-fetchable，对齐 WebPaint「有 etag」）∧ cloud.fetchMeta 存在 ∧ meta.size>0（挡 0B 幻象）`。cloudMoved（云端 etag≠seenBase 但有完整版）仍合法。**非法（dirty / 离线 / 未登录 / local-only / cloud-gone / 0B）= 本地是世界唯一副本 → 抛 `OffloadIllegalError`**（不软返回 kept；经 ui.reportError 出 banner，UX 不该暴露非法 offload）。要清掉唯一副本走 **delete** 语义，不是 offload。
-- **autoCacheOpenedFile**（store ctor）— 消费模式。`true`=读者/编辑器（JRP/JRB/WebPaint…），开即留本地；`false`=流式/过路消费（RealHome/Background Radio），开不留本地、只显式 keepOffline 才落地（⚠TODO 未实现，连 §2 range/streaming 一起设计）。
+- **offload** — 移除本地副本（≠ delete，云端不动）。**红线守卫全在 `offload` 深模块一处**，复用 local-head 的 etag 谱系逻辑（不发明）：合法 = `clean ∧ 在线 ∧ 已登录 ∧ head.seenBase!=null（曾 synced = 有已知云版 = re-fetchable，对齐前身引擎「有 etag」）∧ cloud.fetchMeta 存在 ∧ meta.size>0（挡 0B 幻象）`。cloudMoved（云端 etag≠seenBase 但有完整版）仍合法。**非法（dirty / 离线 / 未登录 / local-only / cloud-gone / 0B）= 本地是世界唯一副本 → 抛 `OffloadIllegalError`**（不软返回 kept；经 ui.reportError 出 banner，UX 不该暴露非法 offload）。要清掉唯一副本走 **delete** 语义，不是 offload。
+- **autoCacheOpenedFile**（store ctor）— 消费模式。`true`=读者/编辑器类 app，开即留本地；`false`=流式/过路消费类 app，开不留本地、只显式 keepOffline 才落地（⚠TODO 未实现，连 §2 range/streaming 一起设计）。
 
 ## 反-duplicate 不变量（本库存在的唯一意义 = AI 不得绕）
 
 > **本地副本的存在与去留 = store 独占职责。** app 唯一接口是 `file.keepOffline / offload / isKeptOffline` + `store.localKeys`。app 端**拿不到** etag / dirty / online / 云端有没有——这些 truth 全在库里。
 
-故 app 层出现任何回答「**什么在本地 / 要不要留 / 能不能安全删 / 容量 / LRU / frecency / 陈旧锁 / cloud-gone 收敛**」的逻辑 = **duplicate，必删**（它结构上喂不到输入，是死代码）。adapt 旧 app（如 WebPaint）回本库时跑 leak-test：
+故 app 层出现任何回答「**什么在本地 / 要不要留 / 能不能安全删 / 容量 / LRU / frecency / 陈旧锁 / cloud-gone 收敛**」的逻辑 = **duplicate，必删**（它结构上喂不到输入，是死代码）。adapt 旧 app 回本库时跑 leak-test：
 
 ```
 grep -rnE 'evict|offload|LRU|frecency|cacheCap|ensureRoom|storage\.estimate|reconcileCloudGone|idleLock|什么在本地' <store/ 之外的 app 层>
 ```
 
-store/ 外每一处命中都是 jailbreak（WebPaint 已知三处：`session-state.ts` 驱逐守卫 / `app-store.ts` cloud-gone 收敛 / `cloud-freshness.ts` 陈旧锁——吸进库后旧码喂不到输入、自然枯死）。
+store/ 外每一处命中都是 jailbreak（前身宿主已知三处：`session-state.ts` 驱逐守卫 / `app-store.ts` cloud-gone 收敛 / `cloud-freshness.ts` 陈旧锁——吸进库后旧码喂不到输入、自然枯死）。
 
 ## reconcile —— cloud-gone 收敛（#43；as-of 2026-07-17 **去抖后 send trash**，用户拍板升级）
 
-> 参考 WebPaint v227-228 etag-tombstone（GUID-free）。入口 `store.files.reconcileAll({activeFileName?})`（全库、仅用户显式指令）+ watchFolder remote frame 惰性 `reconcileFolder`（per-folder）——**都经同一 `converge` SSOT**。
+> 参考前身引擎 v227-228 etag-tombstone（GUID-free）。入口 `store.files.reconcileAll({activeFileName?})`（全库、仅用户显式指令）+ watchFolder remote frame 惰性 `reconcileFolder`（per-folder）——**都经同一 `converge` SSOT**。
 
 - **纯分类器** `classifyCloudGone(...)` → 该处理的 clean 孤儿。**去抖**在 converge 里叠加（`pending-gone` 深模块）。
 - **规则（升级）**：曾 synced 的 clean 本地、云端 path 没了 → **去抖**：第一次权威见 gone 只标 candidate（`pending-gone` kv，照常显示 + `pendingGone` syncState badge，**不删**）；连续第二次+且跨 **GRACE(~24h)** → **`local.trash`**（move-aside 可恢复）+ `cloud.clearState`/`head.forget` 清两轨 etag + 清 candidate。**重现**（云端权威又有）/ **被编辑**（dirty，makeRaw.save 里即时 `pendingGone.clear`）→ 自愈清 candidate。dirty 孤儿 → ghost、no-op。从没 synced → 永不碰。
   - **用户 argument**：本地 clean = 云端曾有备份；之后云端持续缺失（只要不是 store 别处/provider bug）= 用户同意的删除。但绝不一次网抖就删（故去抖）。
 - **失败-fetch 守卫（命门，不变）**：`authoritative`（reconcileAll=在线∧complete∧非空；reconcileFolder=该夹 complete），否则整个 no-op、**既不推进防抖也不清 candidate**。绝不据 partial/空列表推进。
 - **activeFileName（K1）**：createStore config 注入（读 appState.currentFile→全名），converge skip——**去抖 trash 绝不碰当前打开的 doc 本地缓存**（连 watchFolder 自动 reconcileFolder 也跳）。
-- **暂不做（仍 ⏸）**：裂卡 E / cloud-move A→B 的 **ghost UI / split-card / 阅读位置 re-key**（WebPaint 那版未真机验）。本模块只保证「clean 孤儿安全降级、绝不丢」，不解决 move 产生的重复卡或丢绑定。
+- **暂不做（仍 ⏸）**：裂卡 E / cloud-move A→B 的 **ghost UI / split-card / 阅读位置 re-key**（前身那版未真机验）。本模块只保证「clean 孤儿安全降级、绝不丢」，不解决 move 产生的重复卡或丢绑定。
 
 ## migration / schema-version（深模块，ADR-0019）
 
-> as-of v397 / 2026-07-13：**框架保留、迁移清空**。WebPaint 无用户、无后向兼容 → 历史 V001（webpaint-anchor）/ V002（裸名→全名）
-> 两条迁移的搬迁逻辑（tax）已删，库以**最新标准**出生（身份=全名 X.ora、appId 命名空间、dirty 双轨从出生即成立，无需搬迁）。
+> as-of v397 / 2026-07-13：**框架保留、迁移清空**。前身宿主无用户、无后向兼容 → 历史 V001（命名空间锚）/ V002（裸名→全名）
+> 两条迁移的搬迁逻辑（tax）已删，库以**最新标准**出生（身份=全名 X.dat、appId 命名空间、dirty 双轨从出生即成立，无需搬迁）。
 > 跨版本收敛仍靠**显式版本迁移**，不靠愈合（不写 `?? ora` 类 read-fallback）——只是当前注册表为空。
 
 - **schema-version** — kv 里一枚戳 `${ns}.database-version = vNNN-yyyymmdd`（ns=`${appId}.${databaseId}`）。字符串序即版本序（NNN 零填充）。= "这个客户端的 on-disk 结构有多新"，让陈旧可见（家族"缓存无失效机制→让龄可见"同源）。
@@ -81,13 +81,13 @@ store/ 外每一处命中都是 jailbreak（WebPaint 已知三处：`session-sta
 
 ## 命名空间根 `${appId}.${databaseId}` / 同 origin 隔离（ADR-0022 2026-07-12；窄腰重构 2026-07-13）
 
-> IndexedDB 和 localStorage 按 **origin**（scheme+host+port）隔离、**不按 path**。GitHub Pages 的 project site 同 origin（`user.github.io/webpaint/` 与 `/jrp/` 只 path 不同）。写死的库名/键前缀 → 兄弟 PWA 共用一份存储 = 灾难。
+> IndexedDB 和 localStorage 按 **origin**（scheme+host+port）隔离、**不按 path**。GitHub Pages 的 project site 同 origin（`user.github.io/app-a/` 与 `/app-b/` 只 path 不同）。写死的库名/键前缀 → 兄弟 PWA 共用一份存储 = 灾难。
 
-- **事故背景**：store-cutover 曾把 WebPaint 换成引擎写死的通用名（`sync-store-cache`、`sync.etag:`…），与同 origin 的 JRP **共用一个 IDB + 一批键** → 文件互漏、schema 戳互踩跳迁移 → 图库显 0 B。用户真机抓到。
+- **事故背景**：store-cutover 曾把某宿主换成引擎写死的通用名（`sync-store-cache`、`sync.etag:`…），与同 origin 的兄弟 app **共用一个 IDB + 一批键** → 文件互漏、schema 戳互踩跳迁移 → 图库显 0 B。用户真机抓到。
 - **根治 + 窄腰**（> as-of 2026-07-13）：`createStore({ appId, databaseId = "defaultStore" })`。命名空间根 `ns = ${appId}.${databaseId}`（同 app 多 store 实例传不同 databaseId 即互不打架）。
   - **IDB**：单库 `${ns}`、单 object store `blobs`，key=`${partition}/${name}`（`files/`·`trash/`·`backup/`·`collections/`；blob-partition 深模块 = IDB 侧唯一知道前缀的地方）。
   - **localStorage**：`namespacedKv(rawKv, ns)` 包一层 = **唯一 choke point**，各模块只用相对键（`database-version`·`files.etag:`·`files.dirty:`·`collections.etag:`/`.dirty:`·`settings.<key>`·`internal.pending_new_folders`/`_deletions`/`_uploads`），根前缀统一加、想漏漏不出。
   - **两个 cloud-sync 实例**：files（`appKey:"files"`, `manageDirty:false`, fileName 恒等）+ collections（`appKey:"collections"`, fileName `n=>`.${appId}/${n}.json``）→ etag 命名空间按实体分离（同名 file 与 collection 不撞）。
 - **isHidden 深模块**：列举层（cloud-sync/listing/reconcile 共用）过滤**末段以 `.` 开头**的项 → `.trash`/`.backup`/`.<appId>`(collections/settings) + 任意 dotfile/dotfolder 都不进图库。
-- 不传 `appId`/`databaseId` → 抛错，绝不静默共用。WebPaint=`"webpaint"`（databaseId 默认 defaultStore）。
-- **follow-up**：JRP 侧同一引擎 bake 回时接新签名（`appId`+`databaseId`）。
+- 不传 `appId`/`databaseId` → 抛错，绝不静默共用。示例：appId=`"app-a"`（databaseId 默认 defaultStore）。
+- **follow-up**：各前身宿主 bake 回时接新签名（`appId`+`databaseId`）。

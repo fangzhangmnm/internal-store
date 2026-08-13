@@ -1,9 +1,9 @@
-// cloud-sync —— session 级同步语义 over 低层 CloudProvider。从 WebPaint cloud.js 吸收、去 app 化。
+// cloud-sync —— session 级同步语义 over 低层 CloudProvider。从前身引擎 cloud.js 吸收、去 app 化。
 //
 // 这是 Store 消费的「cloud 后端」：push/pull/fetchMetadata/trash/restore/purge + etag/dirty 状态。
-// app-agnostic：命名（.ora/.md/.glb…）、kv 后端（localStorage/IDB/内存）、时钟 都注入。
+// app-agnostic：命名（.dat/.md/.bin…）、kv 后端（localStorage/IDB/内存）、时钟 都注入。
 // 低层 CloudProvider（list/getItemByPath/download/upload/delete/ensureFolder/move/rename）由各 app 实现：
-//   - WebPaint：OneDriveProvider（包 Graph，≈ 原 graph.js）
+//   - 生产：OneDriveProvider（包 Graph，≈ 原 graph.js）
 //   - 测试：MockCloudProvider
 //
 // 红线（与 potential-bugs 对应）：push 用 If-Match（baseEtag）· 412→CloudConflictError ·
@@ -43,7 +43,7 @@ export class CloudNameCollisionError extends Error {
   }
 }
 
-/** 内存 kv（测试用；WebPaint 传 localStorage 包装）。 */
+/** 内存 kv（测试用；宿主传 localStorage 包装）。 */
 export function memKv(): Kv {
   const m = new Map<string, string>();
   return {
@@ -60,7 +60,7 @@ interface CloudSyncCfg {
   provider: CloudProvider;
   kv: Kv;
   fileName: (name: string) => string;
-  /** 加密容器的云端命名（ADR-0012：加密文件外部扩展名 = .zip，防软件按 .ora/.txt 误认；
+  /** 加密容器的云端命名（ADR-0012：加密文件外部扩展名 = .zip，防软件按原扩展名误认；
    *  容器本来就是标准 zip，名实相符）。不配置 = 扩展名翻转关（兄弟 app 未接加密时零影响）。 */
   encFileName?: (name: string) => string;
   contentType?: string;
@@ -81,7 +81,7 @@ interface CloudSyncCfg {
  * @param {object} cfg
  * @param {object} cfg.provider  低层 CloudProvider
  * @param {object} cfg.kv        { get, set, remove }（etag/dirty 缓存）
- * @param {(name:string)=>string} cfg.fileName  session name → 云端文件名（如 n => n + ".ora"）
+ * @param {(name:string)=>string} cfg.fileName  session name → 云端文件名（如 n => n + ".dat"）
  * @param {string} [cfg.contentType]
  * @param {string} [cfg.trashFolder=".trash"]
  * @param {string} [cfg.appKey="sync"]  kv key 前缀
@@ -108,7 +108,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   // match(item)：哪些云端文件算"session"（扩展名 agnostic；默认所有非文件夹）。gallery 列表用。
   const match = cfg.match || ((it: CloudItem) => !it.isFolder);
   // toName(item)：云端文件名 → **身份**（fileName 的逆）。薄默认（身份=全名）：只去尾部一个 .zip（加密容器外扩展名，ADR-0012）。
-  //   X.ora→X.ora、X.ora.zip→X.ora（新加密件）、Y.zip→Y、Y.zip.zip→Y.zip。与 encFileName「追加 .zip」互逆、无损（多扩展名不丢信息）。
+  //   X.dat→X.dat、X.dat.zip→X.dat（新加密件）、Y.zip→Y、Y.zip.zip→Y.zip。与 encFileName「追加 .zip」互逆、无损（多扩展名不丢信息）。
   const toName = cfg.toName || ((name: string) => (name.endsWith(".zip") ? name.slice(0, -4) : name));
 
   const etagKey = (n: string) => `${appKey}.etag:${n}`;

@@ -1,6 +1,6 @@
 // 加密容器（ADR-0012：三层双 zip + 尾部加密 peek）。**sync-store 底座的一部分，格式盲**：
 // data.bin 是不透明字节（ora / atlas.zip / txt 都行）；peek 也是**不透明字节**——
-// 一段可 byte-range 的加密旁路小块，app 自己决定语义（WebPaint 放缩略图 PNG，文本类 app
+// 一段可 byte-range 的加密旁路小块，app 自己决定语义（图像类 app 放缩略图 PNG，文本类 app
 // 可放正文摘要），store/容器层从不解释它。peek blob 同时兼任「这是加密容器」的尾部探测标记，
 // 所以**永远写**（app 没给 peek 就加密空串——GCM of "" = 16 字节 tag，探测不变量照样成立）。
 //
@@ -8,7 +8,7 @@
 //   （payload 加密：pack7z/unpack7z = vendored 7z-wasm）。家族各兄弟同样方式 vendor。
 //
 // 加密文件的字节布局（路径身份明文；**云端文件名 = <name>.zip**——外层容器是标准 zip，
-// 名实相符、防软件按 .ora/.txt 误认；命名翻转在 cloud-sync 的 encFileName）：
+// 名实相符、防软件按原扩展名误认；命名翻转在 cloud-sync 的 encFileName）：
 //
 //   <name>.zip           ← 外层：明文 STORE zip。central directory 100% 干净
 //     ├── <GUID>            （加密在下一层；扫描器只看到 "zip 里有一坨不透明字节"）
@@ -30,7 +30,7 @@
 // 无密钥托管、无 salt 文件：salt 在各自 header（.7z header / peek header），换/丢设备零迁移。
 
 // HOST-SEAM(2026-06-21 改注入,去静态宿主依赖):zip/7z codec 由 createStore config 注入,
-// crypto-container **不再静态 import 宿主模块** → 不加密的项目(JRP)不被 zip/7z 拖累、store.ts 可独立构建。
+// crypto-container **不再静态 import 宿主模块** → 不加密的项目不被 zip/7z 拖累、store.ts 可独立构建。
 // 不提供 codec = 加密不可用(packContainer/unpackContainer 抛),探测类(looksEncryptedContainer 等)不受影响。
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
@@ -65,16 +65,16 @@ const PEEK_HEADER_LEN = 8 + 1 + 16 + 12 + 4;   // MAGIC + ver + salt + iv + len
 const PEEK_MAX_LEN = 8 * 1024 * 1024;          // len sanity（防 MAGIC false-positive 当头解析）
 const PBKDF2_ITERS = 250_000;                  // peek 强 KDF（app 专属，不影响 7z 恢复）
 
-// 尾部扫描窗口：peek（WebPaint 缩略图自适应 ≤70KB）+ 外层 CD/EOCD 余量。与 80KB byte-range 预算兼容。
+// 尾部扫描窗口：peek（缩略图类自适应 ≤70KB）+ 外层 CD/EOCD 余量。与 80KB byte-range 预算兼容。
 export const PEEK_TAIL_WINDOW = 98304;
 
 // 加密 peek blob 的 Blob.type 标记 —— byte-range 管线/缓存层靠它区分明文与密文（不解释内容）
 export const ENC_PEEK_MIME = "application/x-sync-store-enc-peek";
 
 // 加密容器外层 zip 里「加密旁路小块」entry 的名字。getPeek 按**文件名**在 CD 里认它 =「这是加密容器」，
-//   命中即返其字节(密文)供 app 解。当前写 "peek"；"thumb" 是 v233/234 老容器兼容名（都在此列）。
+//   命中即返其字节(密文)供 app 解。entry 名 = "peek"（0.1.0 greenfield：前身 v233/234 的 "thumb" 兼容名已拔除，老容器 peek 不再被认、正文仍可解）。
 export const CONTAINER_PEEK_ENTRY = "peek";
-export const CONTAINER_PEEK_ENTRIES: readonly string[] = [CONTAINER_PEEK_ENTRY, "thumb"];
+export const CONTAINER_PEEK_ENTRIES: readonly string[] = [CONTAINER_PEEK_ENTRY];
 
 const META_MAGIC = "WPMETA1\n";
 
@@ -249,7 +249,7 @@ export async function unpackContainer(blob: Blob | Uint8Array, password: string)
   if (_startsWith(whole, ZIP_MAGIC)) {
     try {
       const outer = await codec().zipUnpack(blob instanceof Blob ? blob : new Blob([whole as BlobPart]));
-      const g = Object.keys(outer).find((n) => !CONTAINER_PEEK_ENTRIES.includes(n));   // 非 peek/thumb = payload
+      const g = Object.keys(outer).find((n) => !CONTAINER_PEEK_ENTRIES.includes(n));   // 非 peek 旁路 = payload
       if (g && outer[g] && (_startsWith(outer[g], SEVENZ_MAGIC) || _startsWith(outer[g], ZIP_MAGIC))) {
         payload = outer[g]; guid = g;
       }

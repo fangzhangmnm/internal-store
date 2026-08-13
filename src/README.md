@@ -10,7 +10,7 @@
 ## 0. 铁律（用了本库就必须守）
 
 1. **禁止**直接碰 `localStorage`、`IndexedDB`、任何 cloud vendor（Microsoft Graph / MSAL / 裸 `fetch` 云端）。全部走本库。
-2. 本库**零内容格式知识**——你的文件是 `.ora`/`.glb`/`.pdf`/`.txt` 都一样，对库只是**不透明 binary blob**。库永不解码你的内容。（唯一例外：库懂 **zip 这种通用容器**，见 §2 `isZip`——那是容器机制，不是内容知识。）
+2. 本库**零内容格式知识**——你的文件是 `.png`/`.glb`/`.pdf`/`.txt` 都一样，对库只是**不透明 binary blob**。库永不解码你的内容。（唯一例外：库懂 **zip 这种通用容器**，见 §2 `isZip`——那是容器机制，不是内容知识。）
 3. **缺接口、库没实现你要的行为 → escalate to human 改库 API。绝不在 app 端绕过库自己实现。**
 4. **不要 deep import 库内部文件**。只从 `index.ts` 拿 `createStore` + 一个 provider。内部文件顶部有 WARNING，`scripts/build.sh` 的 deep-import lint 会挡（v415 起真的有这道 lint；在那之前这句只是约定）。
 5. **API 难用是故意的**（§7）。觉得别扭、想绕——**停下 escalate**，别绕。
@@ -45,18 +45,18 @@ const { provider } = createOneDriveProvider({ clientId, msalUrl: "./vendor/msal/
 const store = createStore({
   provider,                                  // 必填：云端低层（OneDrive / mock provider）
   ui,                                        // 必填：UI 回调 bundle，store 在决策点回调进来（见 §7）
-  appId: "webpaint",                         // **必填**：本 app 在本 origin 内的唯一命名空间（见下「⚠ appId 红线」）
+  appId: "my-app",                         // **必填**：本 app 在本 origin 内的唯一命名空间（见下「⚠ appId 红线」）
   autoCacheOpenedFile: true,                          // 选填(默认 true)：消费模式。true=开即自动留本地(读者/编辑器)；false=过路/流式(开整份拉云不落本地，§2；range 按需取片是 ⚠TODO 优化)
   // （旧 syncedSettingsFileName 已删 2026-07-13：设置/状态全走 store.collection，见 §4）
-  validateAdopt,                             // **所有 consumer 必填，禁 placeholder/noop**：采纳云字节覆盖本地前验真内容（PDF/.ora）。**库对加密透明 → 验的是解密后明文**。防损坏/captive-portal HTML 拿合法 etag 覆盖好本地=丢内容。
-  // ── 加密（§5）：JRP 不加密就不给（dormant，省 1.6MB）──
+  validateAdopt,                             // **所有 consumer 必填，禁 placeholder/noop**：采纳云字节覆盖本地前验真内容（如验 PDF magic）。**库对加密透明 → 验的是解密后明文**。防损坏/captive-portal HTML 拿合法 etag 覆盖好本地=丢内容。
+  // ── 加密（§5）：不加密就不给（dormant，省 1.6MB）──
   // crypto: myCodec,                        // 选填：app 注入的 zip/7z codec（不注入 = 加密不可用）
   // crypt: { ext, getPassword, makePeek },  // 选填：扩展名 + 非交互密码源 + peek 派生
 });
 ```
-> **关于 `crypto`**：加密**逻辑**全在库内，唯一例外是重型 7z 引擎（wasm ~1.6MB）由 app vendor + 注入（包成 `crypto` codec）——体积大，不塞进每个 app 的 bundle。不注入 → 加密 dormant（packContainer 抛、其余照常；JRP 不加密就不 vendor，省 1.6MB）。KDF/GCM 走内置 WebCrypto，不用注入。
+> **关于 `crypto`**：加密**逻辑**全在库内，唯一例外是重型 7z 引擎（wasm ~1.6MB）由 app vendor + 注入（包成 `crypto` codec）——体积大，不塞进每个 app 的 bundle。不注入 → 加密 dormant（packContainer 抛、其余照常；不加密的 app 就不 vendor，省 1.6MB）。KDF/GCM 走内置 WebCrypto，不用注入。
 >
-> **⚠ 命名空间根 `${appId}.${databaseId}`（同 origin 兄弟 PWA / 多 store 实例隔离）** > as-of 窄腰重构 2026-07-13：IndexedDB 和 localStorage 按 **origin** 隔离、**不按 path**（GitHub Pages `/webpaint/` 与 `/jrp/` 同 origin）。库把**所有持久化标识收进一个命名空间根 `${appId}.${databaseId}`**（`databaseId` 默认 `"defaultStore"`；同一 app 想开多个互不打架的 store → 传不同 databaseId）：
+> **⚠ 命名空间根 `${appId}.${databaseId}`（同 origin 兄弟 PWA / 多 store 实例隔离）** > as-of 窄腰重构 2026-07-13：IndexedDB 和 localStorage 按 **origin** 隔离、**不按 path**（GitHub Pages `/app-a/` 与 `/app-b/` 同 origin）。库把**所有持久化标识收进一个命名空间根 `${appId}.${databaseId}`**（`databaseId` 默认 `"defaultStore"`；同一 app 想开多个互不打架的 store → 传不同 databaseId）：
 > - **IndexedDB**：单库 `${appId}.${databaseId}`、单 object store `blobs`，key = `${partition}/${name}`（分区 `files/`·`trash/`·`backup/`·`collections/`，blob-partition 深模块）。
 > - **localStorage**：经 `namespacedKv` 统一加根前缀的**唯一 choke point**——`${ns}.database-version`（schema 戳）、`${ns}.files.etag:`(cloud-sync files 实例)、`${ns}.files.dirty:`(local-head，文件 dirty 权威)、`${ns}.collections.etag:`/`.dirty:`(collections 实例)、`${ns}.settings.<key>`(散键裸值)、`${ns}.internal.pending_new_folders`/`_deletions`/`_uploads`/`_folder_deletions`/`pending_gone`。各深模块只用相对键，想漏都漏不出命名空间。
 >
@@ -72,7 +72,7 @@ const store = createStore({
 
 | 拿到的 | 方法 | 章节 |
 |---|---|---|
-| `store.file(name, {isZip, mode})` → `RawFile`/`ZipFile` | **`mode:"new"\|"existing"` 必填**（new=新建画布，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
+| `store.file(name, {isZip, mode})` → `RawFile`/`ZipFile` | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
 | `store.collection(name, {manual?, local?, getInitData?})` | **单例**（同名返同一对象）。`setItem · deleteItem · getItem(id,def) · getEntry · entries · keys · onChange · init · reconcileWithRemote · flushLocal · isDirty`（`{local:true}` = **不推云**的设备本地变体；`getInitData` = 新库 seed，uat=1；删除=value:null 墓碑） | §3 |
 | `store.files.watchFolder(folder, cb)` | **唯一列举面**：订阅一个夹 → 立即本地帧、云端到了同一 cb 再闪（无 list/listAll/localKeys）。Item.syncState 含 `pendingGone`（cloud-gone clean 孤儿、防抖 grace 内） | §2 |
 | `store.files.nameOccupied(name)` → **boolean** | 名字占用（在线云端+本地都看，离线只看本地）。新建/另存/改名前预检 | §2 |
@@ -81,7 +81,7 @@ const store = createStore({
 | `store.files.listTrash · listBackup · restoreTrash · purgeTrash · emptyTrash · emptyBackup` | 回收站/备份箱：**本地↔云聚合**列举（TrashItem：side/encrypted/conflictLive，只元数据无 blob）·恢复·彻底删·清空 | §2 |
 | `store.files.reconcileAll({activeFileName?})` | **全库** cloud-gone 收敛（仅用户显式指令）：clean 孤儿**去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT） | §6 |
 | `store.encryption.*` | **裸字节**级加密面（文件还没进 store、无 name 可查时）：`isEncryptedBlob`（便宜嗅探）· `tryDecryptEncryptedBlob`（验+解**合一**，null=错密码）· `isEncryptedPeekBlob` | §5 |
-| 加密（at-rest，对齐 WebPaint） | config 注入 `crypto`(zip/7z codec) + `crypt`(ext/makePeek/getPassword)；透明封解 + `file.encrypt/decrypt/getEncryptedBlob`；不注入 = dormant | §5 |
+| 加密（at-rest） | config 注入 `crypto`(zip/7z codec) + `crypt`(ext/makePeek/getPassword)；透明封解 + `file.encrypt/decrypt/getEncryptedBlob`；不注入 = dormant | §5 |
 
 ---
 
@@ -98,7 +98,7 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 - **新建文件 = 对一个新 name `file(name,{mode:"new"}).save`**（没有单独的 create）。云端已有同名但内容不同 → 抛 collision，绝不覆盖。
 - **delete vs offload**：offload 只丢「可重取的 shadow」、云端不动；delete 是**销毁**。delete 内部按原子态分流——本地若是 offloadable shadow → 硬删本地（云端 .trash 已救着，不留双份）；本地若是唯一副本（dirty/local-only）→ 先变 local-only 再进**本地** .trash（未推字节可恢复，绝不硬删）。云端副本进**云端** .trash。两套 trash 各管各、不跨网（ADR-0015）。
 - **`open` 自动把字节缓存本地**（离线可读，你不碰 IndexedDB）。
-- **`autoCacheOpenedFile:false`（流式消费 app：RealHome glb / Background Radio）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。⚠TODO **range / streaming 优化**：大媒体按需取片（`provider.downloadRange` 已具备）、不整块下载——`open` 路由 cache-or-remote 取片，形状以后慢慢设计。
+- **`autoCacheOpenedFile:false`（流式消费 app：3D 模型/电台类）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。⚠TODO **range / streaming 优化**：大媒体按需取片（`provider.downloadRange` 已具备）、不整块下载——`open` 路由 cache-or-remote 取片，形状以后慢慢设计。
 - **列举唯一面 = `store.files.watchFolder(folder, cb)`**（订阅一夹→本地帧+云端帧同一 cb；无 `list`/`listAll`/`localKeys` 公开面）。snapshot `{ path, items, folders, complete }`，`complete:false` **别据此删缓存**。
 - `store.files.reconcileAll({activeFileName?})` — **全库** cloud-gone 收敛（仅用户显式指令）：曾 synced 的 clean 孤儿 → **去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈；`activeFileName` 跳过当前打开的 doc）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT）。dirty/从没同步/partial-or-空列表 一律不动。详见 CONTEXT.md。
 
@@ -127,13 +127,13 @@ store.files.emptyBackup({ scope: "both" });                         // 清空备
 
 ### `opts.isZip` —— 决定能否带预览图
 
-你的文件是不是 zip 容器格式（`.ora`/`.atlas.zip` 是；`.pdf`/`.txt` 不是），创建时声明。库据此**在编译期**给两种不同的对象：
+你的文件是不是 zip 容器格式（zip 容器件如 `.dat`（若实为 zip）是；`.pdf`/`.txt` 不是），创建时声明。库据此**在编译期**给两种不同的对象：
 
 ```ts
 const raw = store.file("a.pdf", { isZip: false });   // 类型 RawFile
 raw.getPeek();   // ❌ 编译错：RawFile 没有 getPeek
 
-const zip = store.file("a.ora", { isZip: true });    // 类型 ZipFile
+const zip = store.file("a.dat", { isZip: true });    // 类型 ZipFile
 const p = await zip.getPeek({ bytesLength: 131072, zipEntry: "Thumbnails/thumbnail.png" });
                                   // 一次尾片（本地切片或云端 byte-range）+ 库内 zip 解析，取该 entry 的 peek 字节，不全量下载
 ```
@@ -164,14 +164,14 @@ reading.keys();                                             // 全部 id（数�
 const off = reading.onChange((ids) => {/* 云端对齐带来值变 */});   // 整库订阅；或 onChange(id, cb) 绑单 key（返退订）
 await reading.reconcileWithRemote();                        // 事件驱动重拉 + resolve（local newer/pending 一并 push）；flushLocal() 只落本地（卸载兜底）
 ```
-- 用于：阅读位置表、笔架、设置/状态、任何"一堆小条目、跨设备合并、零冲突"的东西。app 每类持久化建一个 collection（见 §4）。
+- 用于：阅读位置表、预设架、设置/状态、任何"一堆小条目、跨设备合并、零冲突"的东西。app 每类持久化建一个 collection（见 §4）。
 - **不传 `encode/decode`**：value 是普通 JSON（裸值或对象），库自己序列化（content-agnostic 是给 §2 file 的不透明 blob；collection 本就是结构化可合并 JSON，库懂它的信封）。
 - **信封由类型强制，不靠约定**：库内部把每条包成 `{ id, uat, value }`——`id` 必填；`uat`（合并时间戳）**库内部盖戳，app 既传不进也看不到**（顺带守"内容里不放 timestamp"红线）；`value` = 你给的裸值/对象（`null`=墓碑）。
 - **getItem/setItem 两侧 value 浅拷贝隔离**：拿到的对象原地改、或传入的对象事后改，都不与库内信封互相污染（浅拷贝语义——深层嵌套要改整枝替换再 setItem）。
 - **item 是原子的：只有 `setItem`（整条替换），没有 partial update。** 想改一个字段 = 取整条 → 改 → 整条 setItem。换来合并简单 + 无中间态。
 - **删除 = 墓碑**：`deleteItem(id)` 写一条 `value:null`，带 uat 参与 LWW（删/编辑谁 uat 大谁胜）。墓碑留在库里跨设备传播删除、读面过滤——**无独立 trash 集合、无 resetAt 水位线**（时钟同步误差=已知风险，分钟级不成问题）。
 - 内部按 item 合并，**逐 item last-write-wins**（每 item 各带 uat，并发改不同 item 都不丢；同 item 并发 = 静默 last-win，**仅配置类可接受**，画作 content 绝不走此路，走 §2 file 的 If-Match）。
-- **新库 seed（eager）**：`getInitData` 在 **idb 无此 collection**（新库）时立即调，填初始值 uat=1（最低戳）。随后 init 后台 reconcile 拉云——**云端/别设备的真数据（uat>1）经 LWW 必胜过 seed、覆盖**；云端确实空则 seed 推上去。离线新设备照样立即有内容；在线新设备先显 seed、云端到了再覆盖。store 内容无关：app 域构造 `[{id, value}]`（如笔架把 builtin-brushes.json 映射进来）。
+- **新库 seed（eager）**：`getInitData` 在 **idb 无此 collection**（新库）时立即调，填初始值 uat=1（最低戳）。随后 init 后台 reconcile 拉云——**云端/别设备的真数据（uat>1）经 LWW 必胜过 seed、覆盖**；云端确实空则 seed 推上去。离线新设备照样立即有内容；在线新设备先显 seed、云端到了再覆盖。store 内容无关：app 域构造 `[{id, value}]`（如预设架把 builtin-presets.json 映射进来）。
 - **自动本地缓存**：离线、重新打开、意外关闭后都能读到上次的数据（你不碰 IndexedDB）。init 后台对齐云端、值变经 `onChange` 通知；事件驱动（focus/visible/online）重拉调 `reconcileWithRemote()`。页面卸载时调一次 `flushLocal()` 把最新状态落本地。
   > ⚠ 名字别搞混：collection 的重拉叫 **`reconcileWithRemote()`**（pull+push）；`store.file(name).pullIfClean()` 是 **file** 那一面的新鲜度检查（clean 快进），两回事。
 
@@ -185,7 +185,7 @@ await reading.reconcileWithRemote();                        // 事件驱动重�
 - **设备本地 vs 跨设备** → `{ local: true }`（只走 IDB、永不碰云）vs 默认（synced）。
 - **user-preference（跟人/设备的偏好）vs app-state（跨文件持久态）** → 语义分名，不同 collection。
 
-WebPaint 建了四个（app 层，非库硬编码）：
+典型宿主建四个（app 层，非库硬编码）：
 
 ```ts
 // 设备本地偏好（theme…）——local:true，不上云
@@ -203,11 +203,11 @@ syncedUserPref.onChange("lang", () => {/* 云端对齐把别台设备的改带�
 ```
 - **default 放 app 一处 SSoT**（一个 DEFAULTS 对象），别每次取值各写各的 default → 不一致。
 - **boot 门**：app 在 comp-root 前 `await collection.init()`（内部 hydrate 快、离线 OK、不碰网）→ 让 eval 期就要值的 lang/theme 读到 hydrate 后的值；云端后台对齐、`onChange` 通知（非默认语言用户不双载）。
-- **collection 名 = 合法文件名、不带后缀**（`synced-user-preference`/`brush-rack`）；store 映射云端自动追加 `.json` → `.${appId}/<name>.json`。已无保留名（`settings` 不再保留）。
+- **collection 名 = 合法文件名、不带后缀**（`synced-user-preference`/`preset-rack`）；store 映射云端自动追加 `.json` → `.${appId}/<name>.json`。已无保留名（`settings` 不再保留）。
 
 ---
 
-## 5. 加密 —— 逻辑在库，对 app 透明（已实现，对齐 WebPaint）
+## 5. 加密 —— 逻辑在库，对 app 透明（已实现）
 
 > ### 🔴 红线：解密后的明文永不落任何持久层
 >
@@ -231,7 +231,7 @@ syncedUserPref.onChange("lang", () => {/* 云端对齐把别台设备的改带�
 ```ts
 const store = createStore({
   provider, ui,
-  crypto: myCodec,                          // app 注入 zip/7z codec（WebPaint 用 sevenzip.ts+zip.ts 包成 CryptoCodec）
+  crypto: myCodec,                          // app 注入 zip/7z codec（参考实现 = 本仓 test/fixtures/）
   crypt: {
     ext: "ora",                             // 真扩展名 → 还原真名
     getPassword: (name) => cryptoState.get(name),   // 同步、非交互、只读内存（唯一密码源）
@@ -249,7 +249,7 @@ const store = createStore({
 - **读 at-rest 密文**（导出/拷贝/快照要原样搬密文、不能解壳）：`ZipFile.getEncryptedBlob()` → `EncryptedBlob | null`。
 
 > **未采用**：README 早期草拟的 `store.encryption` **超集**（库统一密钥 + `vault.salt` + `encrypted:true` + `saveEncrypted` + `addEncryption`）本版不实现
-> —— 注意别和 v415 落地的 `store.encryption`（只有三个**裸字节**级 helper，无密钥管理）混为一谈；那个是窄面，这个是被否掉的宽面——对齐 WebPaint 真机验过的 `getPassword`/`encrypt` 模型（见 `ai-docs/11`）。要库统一密钥再单独 escalate。
+> —— 注意别和 v415 落地的 `store.encryption`（只有三个**裸字节**级 helper，无密钥管理）混为一谈；那个是窄面，这个是被否掉的宽面——对齐前身引擎真机验过的 `getPassword`/`encrypt` 模型（出处 = WebPaint ai-docs/11）。要库统一密钥再单独 escalate。
 
 ---
 
@@ -289,7 +289,7 @@ const ui = {
 | `"cancel"` | 什么都不动；本地保持脏，下个周期再试 |
 
 ### store 编排的两条硬律（Model B 的代价 = 它的卖点）
-1. **先退 busy 遮罩、再弹 modal**：store 调 `resolveConflict` 前先退出 busy 遮罩，否则遮罩盖住对话框 = 死锁（WebPaint 踩过）。这套交错归 store 管、一次做对。（密码同理：app 的解锁循环也在 busy 外。）
+1. **先退 busy 遮罩、再弹 modal**：store 调 `resolveConflict` 前先退出 busy 遮罩，否则遮罩盖住对话框 = 死锁（前身踩过）。这套交错归 store 管、一次做对。（密码同理：app 的解锁循环也在 busy 外。）
 2. **await 期间 push-lock 安全**：flow 卡在回调 await 上时，同文件后续 push 排队、不死锁、不丢。
 
 ### 原子性不变量（#76）

@@ -5,8 +5,8 @@
 //   → items 仍从本地 appKeys 产出，**绝不返空、绝不 throw**。
 //
 // ★ 旧 app 层的 mergeLocalCloud（本地 ∪ 云端 union）**收进这里**。理由（store/CONTEXT.md §反-duplicate）：
-//   「什么在本地」是 store 独占职责，app 拿不到 etag/dirty/online→喂不到 union 的输入。两个 app（WebPaint/JRP）
-//   各自在 app 层重推过一次 union = 越狱，JRP 还漏了本地那半 = 登出/离线看不了本地论文的根因。收进库后不可能再漏。
+//   「什么在本地」是 store 独占职责，app 拿不到 etag/dirty/online→喂不到 union 的输入。两个前身宿主
+//   各自在 app 层重推过一次 union = 越狱，其一还漏了本地那半 = 登出/离线看不了本地文件的根因。收进库后不可能再漏。
 //
 // 纯分类器 classifySyncState 可穷举单测（对齐 reconcile.classifyCloudGone 的纪律）。
 import type { CloudSync, LocalCache } from "./types.ts";
@@ -141,8 +141,8 @@ export function createListing(cfg: ListingCfg) {
 
     const prefix = folder ? `${folder}/` : "";
     const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number }>();
-    // 身份 = **全名（c.name = toName(云端文件名)）**：明文 X.ora 恒等、加密 X.ora.zip 去尾 .zip → 都归一到 X.ora。
-    //   本地 key（appKeys / 迁移后）也是全名 X.ora → 两轴按同一 key 归一；否则 cloud 与 local 分裂成两项、open 对不上
+    // 身份 = **全名（c.name = toName(云端文件名)）**：明文 X.dat 恒等、加密 X.dat.zip 去尾 .zip → 都归一到 X.dat。
+    //   本地 key（appKeys / 迁移后）也是全名 X.dat → 两轴按同一 key 归一；否则 cloud 与 local 分裂成两项、open 对不上
     //   （=0B/打开空白的根因，v390）。app 在边界用 sessionFileName 把裸 session 名转全名；encFileName 负责加密件的 .zip 追加。
     for (const c of cloudRes?.files ?? []) { if (isHidden(c.name)) continue; cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }); }
 

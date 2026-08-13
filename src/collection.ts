@@ -39,7 +39,7 @@ export function collectionLocalKey(name: string): string { return `collections/$
 export interface CollectionEntry { id: string; uat: number; value: unknown; }
 export type ChangeCb = (changedIds: string[]) => void;
 
-// getInitData 的初始项：id + value（value 不可为 undefined）。app 域构造（如笔架把 builtin-brushes.json
+// getInitData 的初始项：id + value（value 不可为 undefined）。app 域构造（如预设架把 builtin-presets.json
 //   映射成 [{id, value}]），store 内容无关——不知道装的是笔。
 export interface CollectionInitItem { id: string; value: unknown; }
 
@@ -176,8 +176,8 @@ export function createCollection(cfg: CollectionConfig): Collection {
   }
   // ★ v436：本地写**失败也要说出来**。旧版 `.catch(reportStoreError(e,"log"))` 之后返回 localChain，
   //   于是 IDB 写被拒（配额满 / 存储被阻塞 / 隐私模式）时这个 promise 照样 resolve，且只进 console。
-  //   三个 unload 屏障（app-prefs / app-state / brush-rack-controller）全靠它当「关机前落盘」的保证——
-  //   一旦它说谎，用户的设置和笔架就**静默丢失**。而这是**本地**那条腿，不是云端：
+  //   三个 unload 屏障（app-prefs / app-state / preset-rack-controller）全靠它当「关机前落盘」的保证——
+  //   一旦它说谎，用户的设置和预设就**静默丢失**。而这是**本地**那条腿，不是云端：
   //   离线是正常坏天气，本地写不进去不是。分级也从 "log" 提到 "warning"（要出 banner）。
   function writeLocalNow(): Promise<{ ok: boolean; error?: unknown }> {
     if (!local) return Promise.resolve({ ok: true as const });
@@ -231,7 +231,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
   //   ★ v436：**返回结果，别收窄成 void**。folder-flow.sync 本来就产出
   //   {status:"synced"|"offline"|"invalid"|"dirty", pushed, error}，collection.sync/reconcile 一路带上来，
   //   却在这最后一步被抹平——于是「离线」「云端字节非法被拒」「push 没成、配置仍未上传」
-  //   在每个调用点都和成功长得一模一样。笔架点「刷新」永远停在「正在刷新…」就是这么来的。
+  //   在每个调用点都和成功长得一模一样。预设架点「刷新」永远停在「正在刷新…」就是这么来的。
   async function reconcileWithRemote(): Promise<ReconcileResult> {
     try { return (await reconcile()) ?? { status: "unchanged" }; }
     catch (e) { reportStoreError(e, "warning"); return { status: "error", error: e }; }
@@ -242,7 +242,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
     if (!getInitData) return;
     let initial: CollectionInitItem[];
     try { initial = await getInitData(); }
-    catch (e) { reportStoreError(e, "warning"); return; }   // 初始数据源（如 fetch builtin-brushes.json）失败 → surface
+    catch (e) { reportStoreError(e, "warning"); return; }   // 初始数据源（如 fetch builtin-presets.json）失败 → surface
     if (!initial || !initial.length) return;
     const seeded: FolderItem[] = initial
       .filter((it) => it && it.id != null && it.value !== undefined)

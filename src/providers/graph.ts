@@ -1,7 +1,7 @@
 // Microsoft Graph wrapper — 所有路径锚在 /me/drive/special/approot 沙盒。
-// AppFolder 沙盒 = `Apps/AtlasMaker/`，即使 token 泄漏也只能碰本 app 的目录。
+// AppFolder 沙盒 = `Apps/<应用注册名>/`（文件夹名由 Azure 应用注册决定），即使 token 泄漏也只能碰本 app 的目录。
 //
-// AtlasMaker 用得着的子集：
+// 本库用得着的 Graph 子集：
 //   - listChildren()            列 approot 下文件
 //   - getItemByPath(path)       拿 metadata（含 eTag）
 //   - downloadItemBlob(id)      取二进制（atlas zip）
@@ -98,7 +98,7 @@ export async function listChildren(subfolder = ""): Promise<GraphDriveItem[]> {
   const pathPart = subfolder ? `:/${encodeApprootPath(subfolder)}:` : "";
   const items: GraphDriveItem[] = [];
   // @microsoft.graph.downloadUrl：1h 短效 CDN URL，加进 $select 让 list 一次性带回
-  // → 后续 byte-range 直接打 CDN，省掉每张 thumb 的 metadata RTT
+  // → 后续 byte-range 直接打 CDN，省掉每个 peek 的 metadata RTT
   // 过期后 caller 拿 401/403 → 重新走 getDownloadUrl 申请
   let next: string | null = `/me/drive/special/approot${pathPart}/children?$top=200&$select=id,name,size,eTag,createdDateTime,lastModifiedDateTime,file,folder,@microsoft.graph.downloadUrl`;
   while (next) {
@@ -156,7 +156,7 @@ function _rangeHeader(offset: number | null, length: number): string {
     : `bytes=${offset}-${offset + length - 1}`;
 }
 
-// 直接打已知 CDN URL 的 byte-range（省掉每张 thumb 的 metadata RTT）
+// 直接打已知 CDN URL 的 byte-range（省掉每个 peek 的 metadata RTT）
 // caller 处理 401/403 = downloadUrl 过期，重申请 getDownloadUrl 重试一次
 export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number): Promise<ArrayBuffer> {
   const r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) } });

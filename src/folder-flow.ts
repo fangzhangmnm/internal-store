@@ -41,7 +41,7 @@ export interface FolderFlowResult {
 // createFolderFlow 注入配置。
 export interface FolderFlowConfig {
   cloud: CloudSync;                                  // 一个 CloudSync 实例（pull/push/getETag…）
-  name: string;                                      // 同步键（如 "rack"）
+  name: string;                                      // 同步键（如 "presets"）
   encode: (folder: FolderEnvelope) => Bytes | Blob;  // folder → 上传字节（app 决 envelope 格式）
   decode: (text: string) => FolderEnvelope | null;   // 云端字节 → folder（含旧格式迁移；非法/脏字节返 null）
   resolve?: ResolveFn;                               // 字段级合并 override（罕见；默认整 entry LWW）
@@ -57,7 +57,7 @@ export interface FolderFlow {
 /**
  * @param {object} cfg
  * @param {object} cfg.cloud      一个 CloudSync 实例（pull/push/getETag…）
- * @param {string} cfg.name       同步键（如 "rack"）
+ * @param {string} cfg.name       同步键（如 "presets"）
  * @param {(folder)=>Blob} cfg.encode   folder → 上传字节（app 决 envelope 格式）
  * @param {(text:string)=>object|null} cfg.decode  云端字节 → folder（含旧格式迁移；非法/脏字节返 null=伪在线防线）
  * @param {(x,y)=>object} [cfg.resolve]  字段级合并 override（罕见；默认整 entry LWW）

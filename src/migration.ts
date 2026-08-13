@@ -1,8 +1,8 @@
 // ⚠ 引擎内部深模块（ADR-0019 显式版本迁移）。app **碰不到**本文件（只走 createStore 的 file / collection 两面）。
-//   schema 名字/迁移是 store 独占。设计见 JRP src/store/CONTEXT.md 的 migration/schema-version 段。
+//   schema 名字/迁移是 store 独占。设计见 src/CONTEXT.md 的 migration/schema-version 段。
 //
-// **框架，不含迁移**（2026-07-13）：WebPaint 无用户、无后向兼容 → 历史 V001（webpaint-anchor）/ V002（裸名→全名）
-//   两条迁移的搬迁逻辑（tax）已删，库以**最新标准**出生（身份=全名 X.ora、appId 命名空间、dirty 双轨）。
+// **框架，不含迁移**（2026-07-13）：前身宿主无用户、无后向兼容 → 历史 V001（命名空间锚）/ V002（裸名→全名）
+//   两条迁移的搬迁逻辑（tax）已删，库以**最新标准**出生（身份=全名 X.dat、appId 命名空间、dirty 双轨）。
 //   保留的是**体系**：schema 版本戳 · 有序注册表 MIGRATIONS · 编排 runMigrations（读戳→按序跑→成功才盖戳，幂等崩溃安全）
 //   · 运行时命名空间 storeNamespace（IDB 库名 + localStorage 键前缀，据 appId 隔离同 origin 兄弟 PWA）。
 //   将来真有用户、真要改 kv/IDB 结构时 → 往 MIGRATIONS 加**第一条** Migration（version 单调），编排自动接管。
@@ -37,7 +37,7 @@ export function needsMigration(current: string | null, target: SchemaVersion): b
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // ② app 命名空间（运行时——create-store 用；同 origin 兄弟 PWA 隔离的红线，见 idb-store.ts 头注释）
-//   IndexedDB / localStorage 按 origin 隔离、不按 path → GitHub Pages 的 /webpaint/ 与 /jrp/ 同 origin。
+//   IndexedDB / localStorage 按 origin 隔离、不按 path → GitHub Pages 的 /app-a/ 与 /app-b/ 同 origin。
 //   写死的库名/键前缀会让两个 app 共用一份存储 = 灾难。∴ 所有持久化标识都从 appId 派生。
 // ══════════════════════════════════════════════════════════════════════════════════════════
 

@@ -1,7 +1,7 @@
 // ┌──────────────────────────────────────────────────────────────────────────┐
 // │ GENERIC — Folder shape merge engine.  app-agnostic 深模块。                  │
 // │ 知识面只有 entry = { id, uat, name? }，其余字段一律 opaque payload 原样搬运。  │
-// │ 不认识 brush / filter / 任何 app 概念。app 专属（笔架 dial、brush ref 用法）    │
+// │ 不认识任何 app 专属概念。app 语义（预设 dial、条目 ref 用法）      │
 // │ 留在 app 层，**别塞进这里**。                                                  │
 // │ 这是要 merge-up 到 MyPWAPatterns/sync-store/ 的那块（现在在地改 + 桌面单测）。  │
 // │ 模型见 MyPWAPatterns ADR-0011 §Refinement 2026-06-06/-06b、ADR-0004。        │
@@ -31,8 +31,8 @@ export interface FolderEnvelope {
 export type ResolveFn = (x: FolderItem, y: FolderItem) => FolderItem;
 
 // ── 冲突策略（N11，显式化）──────────────────────────────────────────────
-// **数据类区别（钉死）**：珍贵作品类（.ora 画作）走 If-Match、**绝不 LWW**——分歧一律 surface
-//   （冲突 sheet / .backup），见 cloud-sync。Folder 形状（笔架等**配置类**数据）则是
+// **数据类区别（钉死）**：珍贵作品类（用户文档）走 If-Match、**绝不 LWW**——分歧一律 surface
+//   （冲突 sheet / .backup），见 cloud-sync。Folder 形状（预设架等**配置类**数据）则是
 //   **有意采用 last-win**：同一支笔在两端并发改，时间戳（uat）新的胜、旧的丢——冲突概率近零、
 //   配置丢一次微调远轻于丢一幅画，这是经权衡的取舍（非红线违反）。
 //   删除同理：value:null 墓碑带 uat，与编辑竞争 last-win（删得晚→删掉，编辑得晚→留编辑）。

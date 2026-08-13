@@ -10,7 +10,7 @@
 //   - upload conflictBehavior="fail" 且 path 已存在 → 409
 //   - move conflictBehavior="fail" 且目标名占用 → 409（restoreCloudFromTrash 防覆盖循环依赖）
 //   - upload 到嵌套 path 自动建中间文件夹（Graph PUT-by-path 行为）
-//   - downloadRange(offset=null, n) 取末尾 n 字节（thumb byte-range 依赖）
+//   - downloadRange(offset=null, n) 取末尾 n 字节（peek byte-range 依赖）
 
 import type { Bytes } from "../substrate.ts";
 import type { CloudProvider, CloudItem, UploadOpts, MoveOpts } from "../types.ts";

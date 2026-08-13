@@ -24,7 +24,7 @@ export interface SafeResolveCfg {
   head: Pick<LocalHead, "isDirty" | "markSynced">;
   localDirty?: () => boolean;                                  // 活动 doc 未落盘（substrate.edits.localDirty）
   // N2 采纳云字节前的校验闸——**必传，无 noop 默认**（store 格式盲，逻辑 app 给）。验的是**解密后的明文**
-  //   （库对加密透明）：app 看到的是真 PDF/.ora，不是密文容器。挡 captive-portal HTML / 损坏云副本覆盖好本地。
+  //   （库对加密透明）：app 看到的是真明文文档，不是密文容器。挡 captive-portal HTML / 损坏云副本覆盖好本地。
   validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
   unseal?: (name: string, blob: Blob) => Promise<Blob | null>; // adopt 前解壳（seal 提供）：返明文；加密但锁定 → null。默认明文原样。
   onReplacing?: (on: boolean) => void;                         // N10：换内容临界段 gate（input 起笔门读它降级）
@@ -66,7 +66,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
       }
       const r = await cloud.pull(name);
       if (!r) return { ok: false, reason: "cloud-vanished", backupName };
-      // 库对加密透明：先解密，validateAdopt 验的是**明文**（app 看真 PDF/.ora，不是密文容器）。
+      // 库对加密透明：先解密，validateAdopt 验的是**明文**（app 看真明文文档，不是密文容器）。
       const plain = await unseal(name, r.blob);             // 加密但锁定 → null（无密码解不开）
       // N2：坏字节（captive-portal 200-HTML / 损坏云副本）→ 拒绝，绝不覆盖唯一一份好本地（clean 没 backup）。
       //   锁定解不开 → 退验加密容器封套（captive-portal HTML 不是合法容器；无密码时能做的最强校验）。

@@ -51,7 +51,7 @@ export interface Coalescer {
 
 export function createSubstrate(): Substrate {
   // ---- 编辑游标（④）：单一 SSoT。B2（work-file push）、本机合流（session）、本地落盘 dirty 共用同一游标。
-  //   mark()        内容变了（任何 wp:histchange 或会进 .ora 的状态变更）→ 推进游标。
+  //   mark()        内容变了（任何会进持久化文档的状态变更）→ 推进游标。
   //   markSaved()   本地落盘点：记下「已存进 IDB 的游标」。
   //   localDirty()  本地未落盘？= 游标自上次 markSaved 后又动过（取代 app 散落的 _docDirty 标志）。
   // cloud 未推是另一正交事实，走 cloud.isDirty（per-file、跨 reload 持久）；二者别混。

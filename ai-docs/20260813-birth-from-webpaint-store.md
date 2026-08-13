@@ -29,3 +29,16 @@
 - [ ] WebPaint cutover（下一批）：删 `src/store/` → `file:./vendor-pkgs/*.tgz`；build lint 正则改 bare-specifier；tsconfig include 清理；重复测试收敛。
 - [ ] JRP 副本收敛（分叉 32 文件 + JRP 独有 `settings.ts`，另案）。
 - [ ] Changesets / pull-package 脚本：等第一个真消费者接上再立。
+
+## 拍板落地记录（2026-08-13 过目第一轮后）
+
+user 十条拍板，全部已落地（除建仓）：
+1. **仓位修正**：挪到 PWAProjects 根 `20260813 internal-store/`（原误放 MyPWAPatterns 内）。CLAUDE.md 相对路径已同步。
+2. **MIT license** 已落（LICENSE + package.json）。
+3. **`wp:auth-changed` window 广播已删**（auth.ts `_emitAuth`）——订阅走本就暴露的 `createOneDriveProvider().auth.onAuthChanged` 回调，零新接口、零 browser 事件机制。消费方 cutover 时如仍要 window 事件，自己在回调里派发。
+4. **`"thumb"` peek 兼容名已拔**（greenfield）：`CONTAINER_PEEK_ENTRIES=["peek"]`。前身 v233/234 老容器 peek 不再被认（正文仍可解）；兄弟项目 import 时自适应。
+5. **AtlasMaker 注释已修**（graph.ts → `Apps/<应用注册名>/`）。
+6. **中性化洗稿完成**（~110 处）：纪律=例子中性化（preset-rack/builtin-presets.json/X.dat/app-a·app-b/裸名宿主·全名宿主·加密宿主）、**出处保真名**（WebPaint ai-docs/11、事故记录、DATA SAFETY 引用不动）；对照表在 src/FORK-BASE.md。OLD-ENGINE.md（纯前身史料）删除。
+7. 297 测试全绿（thumb 拔除后回归通过——老容器兼容测试用的本就是 "peek" entry）。
+
+未决：user 看完 dist/index.d.ts → 写 0.1.0 → `gh repo create internal-store --public` + tag（等 user 发话）。

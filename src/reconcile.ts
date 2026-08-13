@@ -1,6 +1,6 @@
 // ⚠ 使用前必读 README.md + DATA SAFETY GUIDELINE.md。store 内部深模块——app 经 createStore 的 store.reconcile。
 //
-// reconcile（深模块）—— cloud-gone 收敛（as-of 2026-07-17：**去抖后 send trash**，用户拍板升级；参考 WebPaint v227-228
+// reconcile（深模块）—— cloud-gone 收敛（as-of 2026-07-17：**去抖后 send trash**，用户拍板升级；参考前身引擎 v227-228
 //   etag-tombstone、GUID-free）：
 //     曾 synced 的 clean 本地、云端 path 没了（孤儿）→ **去抖**（pending-gone）：第一次权威见 gone 只标 candidate
 //     （照常显示 + pendingGone badge，不删）；连续第二次+且跨 GRACE(~24h) → `local.trash`（move-aside 可恢复）+ 清两条
@@ -20,7 +20,7 @@ import { reportStoreError } from "./error-handling.ts";
 import { asideStamp } from "./move-aside.ts";   // 单腿 trash 事件的 deleteEventId 生成器
 
 // 纯分类器（零 IO、可穷举单测）：返回该 demote 的 clean 孤儿名。
-//   规则（对齐 WebPaint gallery-model.classifyCloudGone，去掉 ghost/pin 轴——JRP 无 pin，dirty 孤儿一律留）：
+//   规则（对齐前身宿主 gallery-model.classifyCloudGone，去掉 ghost/pin 轴——库不做 pin，dirty 孤儿一律留）：
 //   not authoritative → 空 ｜ 云端还在 → skip ｜ seenBase==null(从没synced) → skip ｜ dirty → skip ｜ 余 = clean 孤儿 → demote
 export function classifyCloudGone(
   localNames: string[],

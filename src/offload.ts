@@ -1,12 +1,12 @@
 // ⚠ 使用前必读 README.md + DATA SAFETY GUIDELINE.md。store 内部深模块——app 经 createStore 的 file.offload。
 //
-// offload（深模块）—— 移除本地副本（offload ≠ delete：只丢本地，云端不动）。语义对齐 WebPaint unload。
+// offload（深模块）—— 移除本地副本（offload ≠ delete：只丢本地，云端不动）。语义对齐前身引擎 unload。
 //   只在「本地是云端某完整版的可重取 shadow」时合法 → hardDelete（不进 local trash，clean 可重下）。
 //   否则本地是**世界唯一副本**（local-only / 未上传 / sync 事故 / dirty / forked / cloud-gone / 离线）→ offload **不适用**
 //   → 抛 OffloadIllegalError（内部错误，经 ui.reportError 出 banner；UX 不该暴露非法 offload，#29）。绝不静默丢字节。
 //
 // 合法判定（用 local-head 已固化的 etag 谱系逻辑，不发明新东西）：
-//   exists ∧ !head.isDirty ∧ 在线 ∧ head.seenBase!=null（曾 synced = 有已知云版 = re-fetchable，对齐 WebPaint「有 etag」）
+//   exists ∧ !head.isDirty ∧ 在线 ∧ head.seenBase!=null（曾 synced = 有已知云版 = re-fetchable，对齐前身引擎「有 etag」）
 //   ∧ cloud.fetchMeta 存在（未登录会取不到 → cloud-gone）∧ meta.size>0（挡历史 0B 云端幻象）。
 //   cloudMoved（云端被别人推新版、etag≠seenBase）仍合法：clean 本地下次 open 会快进，重取拿更新版，不丢。
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）

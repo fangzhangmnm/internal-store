@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "PWA 家族云同步 store 引擎（离线优先 / 处处 If-Match / 删除=.trash / 冲突必 surface / dirty 永不驱逐）",
   "type": "module",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "files": [
     "dist",
     "src",

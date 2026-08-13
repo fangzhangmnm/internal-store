@@ -12,7 +12,7 @@
 // 关于「magic」：这里只保留 zip 格式**结构签名**（EOCD 0x06054b50 / CD 0x02014b50 / local header 0x04034b50）
 //   作解析定位与防错位守卫——那是 zip 格式内在的，不是内容/app 知识。定位「哪个 entry 是预览」纯靠文件名。
 //
-// 只支持 32-bit zip（无 zip64）——WebPaint ora / 加密外壳都在此范围。
+// 只支持 32-bit zip（无 zip64）——宿主文档 / 加密外壳都在此范围。
 
 const SIG_EOCD = 0x06054b50;
 const SIG_CD = 0x02014b50;

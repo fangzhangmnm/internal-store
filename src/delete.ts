@@ -63,7 +63,7 @@ export function createDelete(cfg: DeleteCfg) {
       const baseEtag = cloud.getETag(name);                 // 供重放时 If-Match 式守卫
       let trashKey: string | null = null;
       if (localPresent) trashKey = await local!.trash(name, deleteEventId);
-      // Finding 1（port 自 WebPaint store.ts，2026-06-21 静态论证）：仅当有已知云端 base(etag) 才排云删。
+      // Finding 1（port 自前身引擎 store.ts，2026-06-21 静态论证）：仅当有已知云端 base(etag) 才排云删。
       //   null base = 本地 only / 从未同步——云端没有可证明属己的版本；若仍排队，重连时 base-etag 守卫因 null
       //   短路，会盲删**同名的别设备新文件**（红线：不得静默删未证实属己的内容）。故 null base 不排队。
       const queuedCloudDelete = baseEtag != null;
@@ -103,7 +103,7 @@ export function createDelete(cfg: DeleteCfg) {
     let meta;
     try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { status: "deferred-offline" }; }
     if (!meta) return { status: "converged", reason: "already-gone" };
-    // Finding 1 防御纵深（port 自 WebPaint）：无 base 不得 trash——无法证明云端这份就是我们删的那份
+    // Finding 1 防御纵深（port 自前身引擎）：无 base 不得 trash——无法证明云端这份就是我们删的那份
     //   （可能是别设备同名新文件）。正常路径 del() 已不再为 null base 排队；这里再兜一层，保护 drainDeleteQueue 直调。终态。
     if (!baseEtag) return { status: "skipped-no-base" };
     if (meta.etag !== baseEtag) return { status: "conflict-edit-wins" };

@@ -1,9 +1,8 @@
-// MSAL.js 包了一层。模式 = JustReadBooks，几乎 1:1。
+// MSAL.js 包了一层（模式承自前身家族，几乎 1:1）。
 //
 // 关键决策：
-// - MSAL 整包 vendor 到 src/vendor/msal/。本地路径，无 CDN 依赖。
-//   早期兄弟项目（webxiaoheiwu / justreadpapers）走 CDN，新项目（RealHome / JustReadBooks）改 vendor，
-//   AtlasMaker 跟 vendor 路线（更稳，version 跟着 commit）。
+// - MSAL 整包由宿主 vendor（如 vendor/msal/）。本地路径，无 CDN 依赖。
+//   家族早期走过 CDN，后统一 vendor 路线（更稳，version 跟着 commit）。
 // - 懒加载：CLIENT_ID 是占位符就不去 load script，纯离线。
 // - 同 origin 多 app 会共用 localStorage 里的 account cache。silent probe 是过滤：
 //   有 account 不代表本 app 有 token（本 app 可能从没授权过）。
@@ -29,7 +28,7 @@ interface AuthConfig {
   msalUrl?: string | null;
 }
 
-// 配置注入（取代 WebPaint 的 config.js import，去 app 化）。app 调一次 configureOneDriveAuth。
+// 配置注入（取代前身宿主的 config.js import，去 app 化）。app 调一次 configureOneDriveAuth。
 let CLIENT_ID = "";
 let AUTHORITY = "https://login.microsoftonline.com/common";
 let SCOPES = ["Files.ReadWrite.AppFolder", "offline_access"];
@@ -73,7 +72,6 @@ export function getAuthState(): AuthState { return { signedIn: !!activeAccount, 
 function _emitAuth(): void {
   const st = getAuthState();
   for (const cb of _authSubs) { try { cb(st); } catch (_) {} }
-  try { if (typeof window !== "undefined") window.dispatchEvent(new Event("wp:auth-changed")); } catch (_) {}
 }
 
 // ⚠ **必须带超时**（v418）：`onerror` 只在请求明确失败时触发。请求**挂着**（半开连接 / 强制门户）
