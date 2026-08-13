@@ -9,7 +9,7 @@ import { asideStamp } from "./move-aside.ts";              // deleteEventId ç”Ÿæ
 import type { CloudSync, Kv, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
-type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+import type { Busy } from "./types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 
 export interface DeleteCfg {

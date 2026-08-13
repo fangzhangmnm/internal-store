@@ -15,7 +15,7 @@ import type { CloudSync, FetchMetaResult, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
 
-type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+import type { Busy } from "./types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 type Bytes = Uint8Array;
 type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;

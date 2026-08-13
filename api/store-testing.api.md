@@ -4,33 +4,169 @@
 
 ```ts
 
+// @public (undocumented)
+export type Bytes = Uint8Array;
+
+// @public (undocumented)
+export interface CloudItem {
+    "@microsoft.graph.downloadUrl"?: string;
+    // (undocumented)
+    contentType?: string;
+    // (undocumented)
+    downloadUrl?: string;
+    // (undocumented)
+    eTag: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    isFolder?: boolean;
+    // (undocumented)
+    lastModifiedDateTime: string | number;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    path: string;
+    // (undocumented)
+    size: number;
+}
+
+// @public (undocumented)
+export interface CloudProvider {
+    // (undocumented)
+    delete(id: string, eTag?: string): Promise<void>;
+    // (undocumented)
+    deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
+    // (undocumented)
+    download(id: string): Promise<Blob>;
+    // (undocumented)
+    downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    // (undocumented)
+    ensureFolder(path: string): Promise<string>;
+    // (undocumented)
+    getApprootId(): Promise<string>;
+    // (undocumented)
+    getItemByPath(path: string): Promise<CloudItem | null>;
+    // (undocumented)
+    list(folder?: string): Promise<CloudItem[]>;
+    // (undocumented)
+    move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+    // (undocumented)
+    rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    // (undocumented)
+    upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+}
+
 // @public
 export function createMockLocal(): MockLocal;
 
-// Warning: (ae-forgotten-export) The symbol "MockProviderOpts" needs to be exported by the entry point index.d.ts
-//
 // @public
 export function createMockProvider(opts?: MockProviderOpts): MockProvider;
 
-// Warning: (ae-forgotten-export) The symbol "LocalCache" needs to be exported by the entry point index.d.ts
-//
+// @public (undocumented)
+export interface Fault {
+    // (undocumented)
+    kind: "error" | "lostResponse";
+    // (undocumented)
+    message?: string;
+    // (undocumented)
+    op?: string;
+    // (undocumented)
+    status?: number;
+    // (undocumented)
+    times?: number;
+}
+
+// @public (undocumented)
+export interface FolderDeleteResult {
+    // (undocumented)
+    status: "deleted" | "already-gone" | "non-empty" | "list-failed";
+}
+
+// @public (undocumented)
+export interface LocalCache {
+    appKeys(): Promise<string[]>;
+    // (undocumented)
+    backup(name: string): Promise<string>;
+    // (undocumented)
+    exists(name: string): Promise<boolean>;
+    // (undocumented)
+    get(name: string): Promise<Blob | null>;
+    // (undocumented)
+    hardDelete(name: string): Promise<void>;
+    listBackup?(): Promise<TrashEntry[]>;
+    // (undocumented)
+    listTrash?(): Promise<TrashEntry[]>;
+    // (undocumented)
+    purgeTrash?(trashKey: string): Promise<void>;
+    // (undocumented)
+    restore(trashKey: string): Promise<string>;
+    save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+    stat(name: string): Promise<{
+        size: number;
+        updatedAt: number;
+    } | null>;
+    trash(name: string, deleteEventId: string): Promise<string>;
+    usage(): Promise<{
+        bytes: number;
+        count: number;
+    }>;
+}
+
 // @public
 export interface MockLocal extends LocalCache {
-    // Warning: (ae-forgotten-export) The symbol "Bytes" needs to be exported by the entry point index.d.ts
     _items: Map<string, Bytes>;
-    // Warning: (ae-forgotten-export) The symbol "TrashItem" needs to be exported by the entry point index.d.ts
     _trash: Map<string, TrashItem>;
 }
 
-// Warning: (ae-forgotten-export) The symbol "CloudProvider" needs to be exported by the entry point index.d.ts
-//
 // @public
 export interface MockProvider extends CloudProvider {
-    // Warning: (ae-forgotten-export) The symbol "CloudItem" needs to be exported by the entry point index.d.ts
     _dump(): CloudItem[];
-    // Warning: (ae-forgotten-export) The symbol "Fault" needs to be exported by the entry point index.d.ts
     injectFault(spec: Fault): MockProvider;
     _seed(path: string, bytes: Bytes | string): CloudItem;
+}
+
+// @public (undocumented)
+export interface MockProviderOpts {
+    // (undocumented)
+    hook?: (op: string, args: object) => Promise<void> | void;
+    // (undocumented)
+    now?: number;
+}
+
+// @public (undocumented)
+export interface MoveOpts {
+    // (undocumented)
+    conflictBehavior?: "fail" | "replace" | "rename";
+    // (undocumented)
+    eTag?: string | null;
+    // (undocumented)
+    newName?: string | null;
+}
+
+// @public (undocumented)
+export interface TrashEntry {
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    trashKey: string;
+}
+
+// @public (undocumented)
+export interface TrashItem {
+    // (undocumented)
+    bytes: Bytes;
+    // (undocumented)
+    name: string;
+}
+
+// @public (undocumented)
+export interface UploadOpts {
+    // (undocumented)
+    conflictBehavior?: "fail" | "replace" | "rename";
+    // (undocumented)
+    contentType?: string;
+    // (undocumented)
+    eTag?: string | null;
 }
 
 // (No @packageDocumentation comment for this package)

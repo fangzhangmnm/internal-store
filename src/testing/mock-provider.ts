@@ -34,7 +34,7 @@ interface MockNode {
 }
 
 // 故障注入规格（test-only）。
-interface Fault {
+export interface Fault {
   op?: string;
   kind: "error" | "lostResponse";
   status?: number;
@@ -43,7 +43,7 @@ interface Fault {
 }
 
 // createMockProvider 选项。
-interface MockProviderOpts {
+export interface MockProviderOpts {
   now?: number;
   hook?: (op: string, args: object) => Promise<void> | void;
 }

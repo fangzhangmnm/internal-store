@@ -152,3 +152,9 @@ export interface CloudSync {
 
 // ---- busy 注入（UI 锁；契约详见 store.ts createStore JSDoc）----
 export type BusyFn = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+
+/** busy 遮罩包装的函数形状（= StoreUI.busy；深模块 opts 里透传用）。 */
+export type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+
+/** 采纳验真回调（云字节覆盖本地前验明文；= StoreConfig.validateAdopt 的函数形状）。 */
+export type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;

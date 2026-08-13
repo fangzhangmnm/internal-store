@@ -4,9 +4,14 @@
 
 ```ts
 
+// @public (undocumented)
+export type Account = any;
+
+// @public
+export type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
+
 // @public
 export interface AuthState {
-    // Warning: (ae-forgotten-export) The symbol "Account" needs to be exported by the entry point index.d.ts
     account: Account;
     notConfigured?: boolean;
     probedAccount?: Account;
@@ -14,8 +19,134 @@ export interface AuthState {
     signedIn: boolean;
 }
 
+// @public
+export type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+
 // @public (undocumented)
 export type Bytes = Uint8Array;
+
+// @public (undocumented)
+export type ChangeCb = (changedIds: string[]) => void;
+
+// @public (undocumented)
+export interface CloudItem {
+    "@microsoft.graph.downloadUrl"?: string;
+    // (undocumented)
+    contentType?: string;
+    // (undocumented)
+    downloadUrl?: string;
+    // (undocumented)
+    eTag: string;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    isFolder?: boolean;
+    // (undocumented)
+    lastModifiedDateTime: string | number;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    path: string;
+    // (undocumented)
+    size: number;
+}
+
+// @public (undocumented)
+export interface CloudProvider {
+    // (undocumented)
+    delete(id: string, eTag?: string): Promise<void>;
+    // (undocumented)
+    deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
+    // (undocumented)
+    download(id: string): Promise<Blob>;
+    // (undocumented)
+    downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    // (undocumented)
+    ensureFolder(path: string): Promise<string>;
+    // (undocumented)
+    getApprootId(): Promise<string>;
+    // (undocumented)
+    getItemByPath(path: string): Promise<CloudItem | null>;
+    // (undocumented)
+    list(folder?: string): Promise<CloudItem[]>;
+    // (undocumented)
+    move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+    // (undocumented)
+    rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    // (undocumented)
+    upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+}
+
+// @public (undocumented)
+export interface CloudSync {
+    // (undocumented)
+    clearState(name: string): void;
+    // (undocumented)
+    deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
+    // (undocumented)
+    ensureFolder(path: string): Promise<void>;
+    // (undocumented)
+    fetchMeta(name: string): Promise<FetchMetaResult | null>;
+    // (undocumented)
+    getETag(name: string): string | null;
+    // (undocumented)
+    isDirty(name: string): boolean;
+    // (undocumented)
+    list(): Promise<CloudItem[]>;
+    // (undocumented)
+    listAll(): Promise<{
+        files: CloudItem[];
+        folders: string[];
+        complete: boolean;
+    }>;
+    // (undocumented)
+    listBackup(): Promise<CloudItem[]>;
+    listFolder(path: string): Promise<{
+        files: CloudItem[];
+        folders: string[];
+        complete: boolean;
+    }>;
+    // (undocumented)
+    listFolders(): Promise<string[]>;
+    // (undocumented)
+    listTrash(): Promise<CloudItem[]>;
+    // (undocumented)
+    pull(name: string): Promise<PullResult | null>;
+    pullRange(name: string, offset: number, length: number): Promise<{
+        bytes: Bytes;
+        item: CloudItem;
+    } | null>;
+    pullTail(name: string, n: number): Promise<{
+        bytes: Bytes;
+        item: CloudItem;
+    } | null>;
+    // (undocumented)
+    purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
+    // (undocumented)
+    push(name: string, bytes: Bytes | Blob, opts?: {
+        baseEtag?: string | null;
+        encrypted?: boolean;
+    }): Promise<PushResult>;
+    // (undocumented)
+    rename(oldName: string, newName: string, opts?: {
+        baseEtag?: string | null;
+    }): Promise<unknown>;
+    restore(cloudItemId: string, name: string, opts?: {
+        encrypted?: boolean;
+        eTag?: string | null;
+    }): Promise<unknown>;
+    // (undocumented)
+    setDirty(name: string, dirty: boolean): void;
+    // (undocumented)
+    setETag(name: string, etag: string | null): void;
+    trash(name: string, deleteEventId: string, opts?: {
+        baseEtag?: string | null;
+    }): Promise<unknown>;
+    // (undocumented)
+    weakOverride(name: string, bytes: Bytes, opts?: {
+        encrypted?: boolean;
+    }): Promise<WeakOverrideResult>;
+}
 
 // @public
 export interface Collection {
@@ -30,11 +161,32 @@ export interface Collection {
     init(): Promise<void>;
     isDirty(): boolean;
     keys(): string[];
-    // Warning: (ae-forgotten-export) The symbol "ChangeCb" needs to be exported by the entry point index.d.ts
     onChange(cb: ChangeCb): () => void;
     onChange(id: string, cb: () => void): () => void;
     reconcileWithRemote(): Promise<ReconcileResult>;
     setItem(id: string, value: unknown): void;
+}
+
+// @public (undocumented)
+export interface CollectionConfig {
+    // (undocumented)
+    cloud: CloudSync;
+    // (undocumented)
+    cloudless?: boolean;
+    getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
+    // (undocumented)
+    isOnline?: () => boolean;
+    local?: Pick<LocalCache, "save" | "get" | "exists">;
+    // (undocumented)
+    localWriteDelayMs?: number;
+    // (undocumented)
+    manual?: boolean;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    now?: () => number;
+    // (undocumented)
+    syncDelayMs?: number;
 }
 
 // @public
@@ -47,28 +199,21 @@ export interface CollectionEntry {
     value: unknown;
 }
 
-// Warning: (ae-forgotten-export) The symbol "LocalCache" needs to be exported by the entry point index.d.ts
-//
+// @public (undocumented)
+export interface CollectionInitItem {
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    value: unknown;
+}
+
 // @public
 export function createLocalCache(dbName: string): LocalCache;
 
-// Warning: (ae-forgotten-export) The symbol "OneDriveConfig" needs to be exported by the entry point index.d.ts
-//
 // @public
 export function createOneDriveProvider(config?: OneDriveConfig): {
     provider: CloudProvider;
-    auth: {
-        isAuthConfigured: typeof isAuthConfigured;
-        initAuth: typeof initAuth;
-        signIn: typeof signIn;
-        signOut: typeof signOut;
-        getToken: typeof getToken;
-        isSignedIn: typeof isSignedIn;
-        getActiveAccount: typeof getActiveAccount;
-        retrySilentSignIn: typeof retrySilentSignIn;
-        onAuthChanged: typeof onAuthChanged;
-        getAuthState: typeof getAuthState;
-    };
+    auth: OneDriveAuth;
 };
 
 // @public
@@ -122,15 +267,140 @@ export function createStore(config: StoreConfig): {
     };
 };
 
+// @public (undocumented)
+export interface CryptoCodec {
+    // (undocumented)
+    pack7z(entries: {
+        path: string;
+        data: Uint8Array | string;
+    }[], password: string): Promise<Uint8Array>;
+    // (undocumented)
+    unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
+    // (undocumented)
+    zipPack(entries: {
+        path: string;
+        data: Uint8Array | string;
+    }[]): Promise<Blob>;
+    // (undocumented)
+    zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
+}
+
+// @public (undocumented)
+export interface DelResult {
+    // (undocumented)
+    baseEtag?: string | null;
+    // (undocumented)
+    deferred?: number;
+    // (undocumented)
+    drained?: number;
+    // (undocumented)
+    queuedCloudDelete?: boolean;
+    // (undocumented)
+    reason?: string;
+    // (undocumented)
+    status: string;
+    // (undocumented)
+    trashed?: unknown;
+    // (undocumented)
+    trashKey?: string | null;
+    // (undocumented)
+    where?: string;
+}
+
+// @public (undocumented)
+export interface EmptyTrashOpts {
+    // (undocumented)
+    busy?: Busy;
+    // (undocumented)
+    concurrency?: number;
+    // (undocumented)
+    isOnline?: () => boolean;
+    // (undocumented)
+    scope?: "local" | "cloud" | "both";
+}
+
 // @public
 export type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
 };
 
-// Warning: (ae-forgotten-export) The symbol "GraphTransport" needs to be exported by the entry point index.d.ts
-//
+// @public (undocumented)
+export interface FetchMetaResult {
+    // (undocumented)
+    etag: string;
+    // (undocumented)
+    item: CloudItem;
+    // (undocumented)
+    lastModified: string | number;
+    // (undocumented)
+    size: number;
+}
+
+// @public (undocumented)
+export interface FolderDeleteResult {
+    // (undocumented)
+    status: "deleted" | "already-gone" | "non-empty" | "list-failed";
+}
+
+// @public (undocumented)
+export interface FolderSnapshot {
+    // (undocumented)
+    complete: boolean;
+    // (undocumented)
+    folders: string[];
+    // (undocumented)
+    items: Item[];
+    // (undocumented)
+    path: string;
+}
+
+// @public (undocumented)
+export interface FreshResult {
+    // (undocumented)
+    backupName?: string;
+    // (undocumented)
+    error?: unknown;
+    // (undocumented)
+    reason?: string;
+    // (undocumented)
+    source?: string;
+    // (undocumented)
+    status?: string;
+}
+
 // @public
 export function graphToCloudProvider(graph: GraphTransport): CloudProvider;
+
+// @public
+export interface GraphTransport {
+    // (undocumented)
+    deleteItem(itemId: string, eTag?: string | null): Promise<void>;
+    // (undocumented)
+    downloadItemBlob(itemId: string): Promise<Blob>;
+    // (undocumented)
+    downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+    // (undocumented)
+    ensureSubfolder(name: string): Promise<string>;
+    // (undocumented)
+    getApprootId(): Promise<string>;
+    // (undocumented)
+    getItemByPath(path: string): Promise<RawGraphItem | null>;
+    // (undocumented)
+    listChildren(subfolder?: string): Promise<RawGraphItem[]>;
+    // (undocumented)
+    moveItemToFolder(itemId: string, targetFolderId: string, opts?: {
+        eTag?: string | null;
+        newName?: string | null;
+        conflictBehavior?: "replace" | "fail" | "rename";
+    }): Promise<RawGraphItem>;
+    // (undocumented)
+    renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
+    // (undocumented)
+    uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
+        conflictBehavior?: "replace" | "fail" | "rename";
+        eTag?: string | null;
+    }): Promise<RawGraphItem | null>;
+}
 
 // @public
 export function isCached(s: SyncState): boolean;
@@ -146,12 +416,123 @@ export interface Item {
     syncState: SyncState;
 }
 
+// @public (undocumented)
+export interface Kv {
+    // (undocumented)
+    get(k: string): string | null;
+    // (undocumented)
+    remove(k: string): void;
+    // (undocumented)
+    set(k: string, v: string): void;
+}
+
 // @public
 export interface ListContext {
     // (undocumented)
     online: boolean;
     // (undocumented)
     signedIn: boolean;
+}
+
+// @public (undocumented)
+export interface LocalCache {
+    appKeys(): Promise<string[]>;
+    // (undocumented)
+    backup(name: string): Promise<string>;
+    // (undocumented)
+    exists(name: string): Promise<boolean>;
+    // (undocumented)
+    get(name: string): Promise<Blob | null>;
+    // (undocumented)
+    hardDelete(name: string): Promise<void>;
+    listBackup?(): Promise<TrashEntry[]>;
+    // (undocumented)
+    listTrash?(): Promise<TrashEntry[]>;
+    // (undocumented)
+    purgeTrash?(trashKey: string): Promise<void>;
+    // (undocumented)
+    restore(trashKey: string): Promise<string>;
+    save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+    stat(name: string): Promise<{
+        size: number;
+        updatedAt: number;
+    } | null>;
+    trash(name: string, deleteEventId: string): Promise<string>;
+    usage(): Promise<{
+        bytes: number;
+        count: number;
+    }>;
+}
+
+// @public (undocumented)
+export interface MoveOpts {
+    // (undocumented)
+    conflictBehavior?: "fail" | "replace" | "rename";
+    // (undocumented)
+    eTag?: string | null;
+    // (undocumented)
+    newName?: string | null;
+}
+
+// @public
+export interface OneDriveAuth {
+    // (undocumented)
+    getActiveAccount(): Account;
+    // (undocumented)
+    getAuthState(): AuthState;
+    getToken(): Promise<string>;
+    initAuth(): Promise<AuthState>;
+    isAuthConfigured(): boolean;
+    // (undocumented)
+    isSignedIn(): boolean;
+    onAuthChanged(cb: (st: AuthState) => void): () => void;
+    retrySilentSignIn(): Promise<boolean>;
+    signIn(): Promise<unknown>;
+    signOut(): Promise<void>;
+}
+
+// @public
+export interface OneDriveConfig {
+    // (undocumented)
+    authority?: string;
+    // (undocumented)
+    clientId?: string;
+    // (undocumented)
+    msalUrl?: string | null;
+    // (undocumented)
+    scopes?: string[];
+}
+
+// @public (undocumented)
+export interface PullResult {
+    // (undocumented)
+    blob: Blob;
+    // (undocumented)
+    item: CloudItem | null;
+    // (undocumented)
+    suggestedName: string;
+}
+
+// @public (undocumented)
+export interface PurgeOpts {
+    // (undocumented)
+    busy?: Busy;
+    // (undocumented)
+    cloudItemId?: string | null;
+    // (undocumented)
+    confirm?: (ctx: {
+        title: string;
+        body: string;
+        danger?: boolean;
+    }) => boolean | Promise<boolean>;
+    // (undocumented)
+    trashKey?: string | null;
+}
+
+// @public (undocumented)
+export interface PushResult {
+    // (undocumented)
+    item: CloudItem | null;
 }
 
 // @public
@@ -161,7 +542,6 @@ export interface RawFile {
     }): Promise<{
         status: string;
     }>;
-    // Warning: (ae-forgotten-export) The symbol "DelResult" needs to be exported by the entry point index.d.ts
     delete(): Promise<DelResult>;
     encrypt(opts?: {
         isOnline?: () => boolean;
@@ -173,20 +553,38 @@ export interface RawFile {
     keepOffline(): Promise<void>;
     offload(): Promise<void>;
     open(): Promise<Blob | null>;
-    // Warning: (ae-forgotten-export) The symbol "RefreshOpts" needs to be exported by the entry point index.d.ts
-    // Warning: (ae-forgotten-export) The symbol "FreshResult" needs to be exported by the entry point index.d.ts
     pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
     reupload(): Promise<{
         status: string;
     }>;
-    // Warning: (ae-forgotten-export) The symbol "SaveResult" needs to be exported by the entry point index.d.ts
     save(bytes: Bytes | Blob, opts?: {
         tryPush?: boolean;
         hint?: unknown;
     }): Promise<SaveResult>;
-    // Warning: (ae-forgotten-export) The symbol "TryMoveResult" needs to be exported by the entry point index.d.ts
     tryMove(to: string): Promise<TryMoveResult>;
     verifyPassword(pw: string): Promise<boolean>;
+}
+
+// @public
+export interface RawGraphItem {
+    // (undocumented)
+    "@microsoft.graph.downloadUrl"?: string;
+    // (undocumented)
+    downloadUrl?: string;
+    // (undocumented)
+    eTag?: string;
+    // (undocumented)
+    folder?: unknown;
+    // (undocumented)
+    id: string;
+    // (undocumented)
+    lastModifiedDateTime?: string | number;
+    // (undocumented)
+    name?: string;
+    // (undocumented)
+    path?: string;
+    // (undocumented)
+    size?: number;
 }
 
 // @public
@@ -198,6 +596,45 @@ export interface ReconcileResult {
     // (undocumented)
     status: string;
 }
+
+// @public (undocumented)
+export interface RefreshOpts {
+    // (undocumented)
+    adopt?: AdoptFn;
+    // (undocumented)
+    busy?: Busy;
+    // (undocumented)
+    isOnline?: () => boolean;
+    // (undocumented)
+    localDirty?: () => boolean;
+    // (undocumented)
+    onReplaceStart?: () => void;
+}
+
+// @public (undocumented)
+export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
+
+// @public (undocumented)
+export interface RestoreOpts {
+    // (undocumented)
+    busy?: Busy;
+    // (undocumented)
+    cloudItemId?: string | null;
+    // (undocumented)
+    encrypted?: boolean;
+    // (undocumented)
+    fromCloud?: boolean;
+    // (undocumented)
+    targetName?: string;
+    // (undocumented)
+    trashKey?: string | null;
+}
+
+// @public
+export type SaveResult = {
+    pushed: boolean;
+    reason?: string;
+};
 
 // @public
 export type Store = ReturnType<typeof createStore>;
@@ -213,7 +650,6 @@ export interface StoreConfig {
         makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
         getPassword?: (name: string) => string | null;
     };
-    // Warning: (ae-forgotten-export) The symbol "CryptoCodec" needs to be exported by the entry point index.d.ts
     crypto?: CryptoCodec;
     databaseId?: string;
     encFileName?: (name: string) => string;
@@ -221,10 +657,8 @@ export interface StoreConfig {
     fileName?: (name: string) => string;
     getPassword?: (name: string) => string | null;
     isOnline?: () => boolean;
-    // Warning: (ae-forgotten-export) The symbol "Kv" needs to be exported by the entry point index.d.ts
     kv?: Kv;
     local?: LocalCache;
-    // Warning: (ae-forgotten-export) The symbol "UploadReplayPolicy" needs to be exported by the entry point index.d.ts
     offlineUploadReplay?: UploadReplayPolicy;
     provider: CloudProvider;
     signedIn?: () => boolean;
@@ -232,6 +666,9 @@ export interface StoreConfig {
     ui: StoreUI;
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }
+
+// @public (undocumented)
+export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 // @public
 export interface StoreUI {
@@ -247,9 +684,7 @@ export interface StoreUI {
         done: number;
         total: number;
     }) => void;
-    // Warning: (ae-forgotten-export) The symbol "StoreErrorLevel" needs to be exported by the entry point index.d.ts
     reportError: (err: unknown, level?: StoreErrorLevel) => void;
-    // Warning: (ae-forgotten-export) The symbol "ResolveChoice" needs to be exported by the entry point index.d.ts
     resolveConflict: (ctx: {
         name: string;
         local: Blob | null;
@@ -260,6 +695,84 @@ export interface StoreUI {
 // @public
 export type SyncState = "cloud-only" | "synced" | "unpushed" | "newer-on-cloud" | "conflict" | "ghost" | "pendingGone" | "float" | "local-only";
 
+// @public (undocumented)
+export interface TrashEntry {
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    trashKey: string;
+}
+
+// @public (undocumented)
+export interface TrashItem {
+    // (undocumented)
+    cloudItemId: string | null;
+    // (undocumented)
+    conflictLive: boolean;
+    // (undocumented)
+    encrypted: boolean;
+    // (undocumented)
+    localKey: string | null;
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    side: "local" | "cloud" | "both";
+    // (undocumented)
+    ts: string | null;
+}
+
+// @public (undocumented)
+export interface TrashResult {
+    // (undocumented)
+    cloud?: boolean;
+    // (undocumented)
+    failed?: unknown[];
+    // (undocumented)
+    local?: boolean;
+    // (undocumented)
+    name?: string | null;
+    // (undocumented)
+    purged?: number;
+    // (undocumented)
+    status: string;
+}
+
+// @public
+export type TryMoveResult = {
+    ok: true;
+    where?: string;
+    oldName?: string;
+    oldKept?: boolean;
+    oldUnknown?: boolean;
+    oldCloudOrphan?: boolean;
+    cloudDeferred?: boolean;
+} | {
+    ok: false;
+    reason: "name-collision";
+    where: "local" | "cloud";
+};
+
+// @public (undocumented)
+export interface UploadOpts {
+    // (undocumented)
+    conflictBehavior?: "fail" | "replace" | "rename";
+    // (undocumented)
+    contentType?: string;
+    // (undocumented)
+    eTag?: string | null;
+}
+
+// @public (undocumented)
+export type UploadReplayPolicy = "auto" | "ask" | "manual";
+
+// @public (undocumented)
+export interface WeakOverrideResult {
+    // (undocumented)
+    backedUp: string | null;
+    // (undocumented)
+    item: CloudItem | null;
+}
+
 // @public
 export interface ZipFile extends RawFile {
     decryptPeek(encPeek: Blob): Promise<Blob | null>;
@@ -269,27 +782,6 @@ export interface ZipFile extends RawFile {
         zipEntry: string;
     }): Promise<Blob | null>;
 }
-
-// Warnings were encountered during analysis:
-//
-// dist/create-store.d.ts:221:9 - (ae-forgotten-export) The symbol "CollectionConfig" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:229:9 - (ae-forgotten-export) The symbol "FolderSnapshot" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:246:9 - (ae-forgotten-export) The symbol "TrashItem" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:250:9 - (ae-forgotten-export) The symbol "RestoreOpts" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:250:9 - (ae-forgotten-export) The symbol "TrashResult" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:252:9 - (ae-forgotten-export) The symbol "PurgeOpts" needs to be exported by the entry point index.d.ts
-// dist/create-store.d.ts:254:9 - (ae-forgotten-export) The symbol "EmptyTrashOpts" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:22:5 - (ae-forgotten-export) The symbol "CloudProvider" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:24:9 - (ae-forgotten-export) The symbol "isAuthConfigured" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:25:9 - (ae-forgotten-export) The symbol "initAuth" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:26:9 - (ae-forgotten-export) The symbol "signIn" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:27:9 - (ae-forgotten-export) The symbol "signOut" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:28:9 - (ae-forgotten-export) The symbol "getToken" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:29:9 - (ae-forgotten-export) The symbol "isSignedIn" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:30:9 - (ae-forgotten-export) The symbol "getActiveAccount" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:31:9 - (ae-forgotten-export) The symbol "retrySilentSignIn" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:32:9 - (ae-forgotten-export) The symbol "onAuthChanged" needs to be exported by the entry point index.d.ts
-// dist/providers/index.d.ts:33:9 - (ae-forgotten-export) The symbol "getAuthState" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

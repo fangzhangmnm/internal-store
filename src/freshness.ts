@@ -9,9 +9,9 @@ import type { CloudSync, FetchMetaResult } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
 
-type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+import type { Busy } from "./types.ts";
 const passBusy: Busy = (_l, fn) => fn();
-type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
+import type { AdoptFn } from "./types.ts";
 
 export interface FreshnessCfg {
   cloud: Pick<CloudSync, "fetchMeta">;

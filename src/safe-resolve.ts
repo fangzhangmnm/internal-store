@@ -16,7 +16,7 @@ export type SafePullResult =
   | { ok: true; backupName?: string }
   | { ok: false; reason: string; backupName?: string; error?: unknown };
 
-type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
+import type { AdoptFn } from "./types.ts";
 
 export interface SafeResolveCfg {
   cloud: Pick<CloudSync, "pull" | "weakOverride">;

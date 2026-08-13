@@ -8,7 +8,7 @@ import { reportStoreError } from "./error-handling.ts";   // 全接但分级：�
 import type { CloudItem, CloudSync, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
-type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+import type { Busy } from "./types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 
 export interface TrashCfg {

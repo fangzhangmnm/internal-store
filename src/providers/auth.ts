@@ -12,7 +12,7 @@
 // pca = PublicClientApplication 实例；account = AccountInfo。下面统一用 any 兜（见顶部注释）。
 type Msal = any;
 type Pca = any;
-type Account = any;
+export type Account = any;   // MSAL account 句柄（未类型化透传；导出仅为门牌可命名）
 
 // window.msal 由 vendored 脚本注入；用 any 桥接（DOM lib 的 Window 不含 msal）。
 declare global {

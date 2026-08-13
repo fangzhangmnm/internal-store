@@ -8,9 +8,32 @@ import {
   getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState,
 } from "./auth.ts";
 import { graphToCloudProvider } from "../onedrive-provider.ts";
+import type { CloudProvider } from "../types.ts";
+import type { AuthState, Account } from "./auth.ts";
+
+/** createOneDriveProvider 返回的 auth 面（契约显式化；订阅走 onAuthChanged 回调，无 window 事件）。 */
+export interface OneDriveAuth {
+  /** 是否已注入真实 clientId（占位符 = 未配置，纯离线不 load MSAL）。 */
+  isAuthConfigured(): boolean;
+  /** 初始化 auth（silent probe：有 account 不代表本 app 有 token）。 */
+  initAuth(): Promise<AuthState>;
+  /** 交互式登录（用户手势里调）。 */
+  signIn(): Promise<unknown>;
+  /** 登出：只清本 app cache（clearCache），不 logoutRedirect 踢掉用户整个微软会话。 */
+  signOut(): Promise<void>;
+  /** 拿 access token（silent）。 */
+  getToken(): Promise<string>;
+  isSignedIn(): boolean;
+  getActiveAccount(): Account;
+  /** 静默重试登录。 */
+  retrySilentSignIn(): Promise<boolean>;
+  /** auth 状态订阅（每个转变都回调）；返回退订函数。 */
+  onAuthChanged(cb: (st: AuthState) => void): () => void;
+  getAuthState(): AuthState;
+}
 
 /** createOneDriveProvider 的配置（clientId 必传；msalUrl = vendored MSAL 脚本路径；scopes/authority 有家族默认）。 */
-interface OneDriveConfig {
+export interface OneDriveConfig {
   clientId?: string;
   authority?: string;
   scopes?: string[];
@@ -28,7 +51,7 @@ interface OneDriveConfig {
  *  await auth.initAuth(); if (auth.isSignedIn()) { ...store 用 provider... }
  * ```
  */
-export function createOneDriveProvider(config: OneDriveConfig = {}) {
+export function createOneDriveProvider(config: OneDriveConfig = {}): { provider: CloudProvider; auth: OneDriveAuth } {
   configureOneDriveAuth(config);                  // { clientId, scopes?, authority?, msalUrl? }
   return {
     provider: graphToCloudProvider(graph),        // CloudProvider（喂 createCloudSync）

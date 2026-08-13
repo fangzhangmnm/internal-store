@@ -15,7 +15,8 @@
     "apiJsonFilePath": "<projectFolder>/node_modules/.api-tmp/store.api.json"
   },
   "dtsRollup": {
-    "enabled": false
+    "enabled": true,
+    "untrimmedFilePath": "<projectFolder>/api/store.d.ts"
   },
   "newlineKind": "lf",
   "messages": {

@@ -5,15 +5,26 @@
 // 完整的「config 驱动 OneDriveProvider」在 providers/index.js（wire auth+graph+本适配器）。
 
 import type { CloudItem, CloudProvider, UploadOpts, MoveOpts, Bytes } from "./types.ts";
-import type * as graphModule from "./providers/graph.ts";
 import { deleteEmptyFolderVia } from "./folder-delete.ts";
 
-// graph transport 模块的形状（providers/index 传真 graph，测试传 graphFromProvider(Mock)）。
-type GraphTransport = typeof graphModule;
+/** OneDrive Graph transport 契约（graphToCloudProvider 消费的最小面）。
+ *  providers/index 传真 graph.ts 模块、测试传 graphFromProvider(Mock)——结构满足即可（自定义 transport 同理）。 */
+export interface GraphTransport {
+  listChildren(subfolder?: string): Promise<RawGraphItem[]>;
+  getItemByPath(path: string): Promise<RawGraphItem | null>;
+  downloadItemBlob(itemId: string): Promise<Blob>;
+  downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+  uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null }): Promise<RawGraphItem | null>;
+  deleteItem(itemId: string, eTag?: string | null): Promise<void>;
+  moveItemToFolder(itemId: string, targetFolderId: string, opts?: { eTag?: string | null; newName?: string | null; conflictBehavior?: "replace" | "fail" | "rename" }): Promise<RawGraphItem>;
+  renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
+  getApprootId(): Promise<string>;
+  ensureSubfolder(name: string): Promise<string>;
+}
 
-// graph item 的原始形状（含 file/folder facet、path、downloadUrl 注解）。
-// graph.ts 的 GraphDriveItem 不导出且不含 path（测试 mock 带 path）→ 这里本地放宽。
-interface RawGraphItem {
+/** graph item 的原始形状（含 file/folder facet、path、downloadUrl 注解；transport 契约的条目面）。
+ *  比 graph.ts 内部形状放宽（测试 mock 带 path）。 */
+export interface RawGraphItem {
   id: string;
   name?: string;
   size?: number;

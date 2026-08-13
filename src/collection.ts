@@ -56,7 +56,7 @@ export interface CollectionConfig {
   local?: Pick<LocalCache, "save" | "get" | "exists">;
   localWriteDelayMs?: number;   // 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。
   cloudless?: boolean;          // local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。
-  /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 [{id,value}]。 */
+  /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
   getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
 }
 

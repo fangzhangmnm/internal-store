@@ -31,3 +31,30 @@ export { graphToCloudProvider } from "./onedrive-provider.ts";
 //   注：迁移（migration）不暴露——createStore 内部自跑（数据搬迁是同步细节，app 不该看见）。
 //   预设架走 store.collection、gallery 缩略图/文件夹走 file.getPeek / store.list——不再 deep import
 //   cloud-sync/folder-store/graph（接口尽可能瘦，见 ADR：迁移的意义=发现最少接口）。
+/** 云端传输契约与条目形状 + 本地缓存契约与 trash 条目（类型化装配/自写 provider·adapter 用）。 */
+export type { CloudProvider, CloudItem, LocalCache, TrashEntry } from "./types.ts";
+/** MSAL account 句柄（未类型化透传）。 */
+export type { Account } from "./providers/auth.ts";
+/** collection 批量变更回调签名（onChange 全量档）。 */
+export type { ChangeCb } from "./collection.ts";
+/** 文件/回收站/删除/刷新各面的收发形状（Result/Opts 类型群）。 */
+export type { TryMoveResult, SaveResult } from "./create-store.ts";
+export type { TrashResult, RestoreOpts, PurgeOpts, EmptyTrashOpts } from "./trash.ts";
+export type { RefreshOpts, FreshResult } from "./freshness.ts";
+export type { DelResult } from "./delete.ts";
+export type { FolderSnapshot } from "./listing.ts";
+export type { FolderDeleteResult, UploadOpts, MoveOpts, Kv } from "./types.ts";
+export type { UploadReplayPolicy } from "./upload-queue.ts";
+export type { ResolveChoice } from "./safe-resolve.ts";
+export type { StoreErrorLevel } from "./error-handling.ts";
+/** 加密 codec 注入契约 + collection 配置 + 回收站聚合条目。 */
+export type { CryptoCodec } from "./crypto-container.ts";
+export type { CollectionConfig } from "./collection.ts";
+export type { TrashItem } from "./trash-merge.ts";
+/** OneDrive provider 面：工厂配置 + auth 契约 + Graph transport 形状。 */
+export type { OneDriveAuth, OneDriveConfig } from "./providers/index.ts";
+export type { GraphTransport, RawGraphItem } from "./onedrive-provider.ts";
+/** 深模块透传形状：busy 包装、采纳验真回调、collection seed 条目。 */
+export type { Busy, CloudSync, FetchMetaResult, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
+export type { AdoptFn } from "./types.ts";
+export type { CollectionInitItem } from "./collection.ts";
