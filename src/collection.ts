@@ -64,7 +64,7 @@ export interface CollectionConfig {
  *  外加 unchanged（云端 etag 没变，压根没拉）和 error（意外抛）。 */
 export interface ReconcileResult { status: string; pushed?: boolean; error?: unknown }
 
-/** Collection —— 一份同步 JSON 装多个**原子** item 的 KV 面（信封 {id, uat, value}，per-item uat-LWW；
+/** Collection —— 一份同步 JSON 装多个**原子** item 的 KV 面（信封 id + uat + value，per-item uat-LWW；
  *  删除 = null 墓碑）。读写 = 同步内存；经 store.collection(name) 拿。 */
 export interface Collection {
   /** 先 hydrate 本地（快）→ 后台 reconcile 云端（不 await）+ 新库 seed。 */

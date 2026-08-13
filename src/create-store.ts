@@ -99,9 +99,9 @@ export interface StoreConfig {
   validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
   // ── 云端文件命名（app 域）。裸名宿主的 session name（"未命名"）云端存 `.dat` → 必须给 `fileName: n => n+".dat"`（+加密 `.zip`）。
   //   ⚠ 前身 cutover 一度漏传 → 老云端 `X.dat` 用裸名 `X` 取不到（0B/打开空白）。出处 = WebPaint ai-docs/20260712-store-per-app-namespace.md。
-  /** store name → 云端文件名（如 n => n + ".dat"）。**不给 = 恒等**（名字本身含扩展名的 app）。 */
+  /** store name → 云端文件名（如把 name 追加 ".dat"）。**不给 = 恒等**（名字本身含扩展名的 app）。 */
   fileName?: (name: string) => string;
-  /** 加密容器的云端文件名（如 n => n + ".zip"；ADR-0012）。 */
+  /** 加密容器的云端文件名（如把 name 追加 ".zip"；ADR-0012）。 */
   encFileName?: (name: string) => string;
   /** offload 离线守卫（默认 navigator.onLine）。 */
   isOnline?: () => boolean;
@@ -145,7 +145,7 @@ export interface RawFile {
   //  返回值史：以前这里是 Promise<void>，push 失败被 catch 成 banner 后 save() 照常 resolve，
   //  调用方无从分辨「已上云」和「只落了本地」→ 乐观清掉 push-pending → badge 画干净、退出不再重推
   //  （= 用户报的「远端文件不一样」而 UI 从没说过失败）。
-  /** 本地落盘 + best-effort 推云（默认 tryPush:true）；{tryPush:false} = 只落本地不推
+  /** 本地落盘 + best-effort 推云（默认 tryPush:true）；tryPush:false = 只落本地不推
    *  （autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）。
    *  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推。hint 透传缩略图（store content-blind）。
    *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
