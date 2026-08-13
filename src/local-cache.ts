@@ -21,7 +21,9 @@ function splitKey(k: string): { part: string; inner: string } {
   return slash < 0 ? { part: "trash", inner: k } : { part: k.slice(0, slash), inner: k.slice(slash + 1) };
 }
 
-// dbName 必须已带命名空间(createStore 传 `${appId}.${databaseId}`)——同 origin 兄弟 PWA / 多 store 实例隔离,见 idb-store.ts 头注释。
+/** LocalCache 工厂（prod=IDB）：files/trash/backup 三分区的本地持久层，内容无关、只存不透明 blob。
+ *  dbName 必须已带命名空间（createStore 传 `${appId}.${databaseId}`）——同 origin 兄弟 PWA /
+ *  多 store 实例隔离，见 idb-store.ts 头注释。 */
 export function createLocalCache(dbName: string): LocalCache {
   const bs = createPartitionedBlobStore(dbName);
   const files = bs.partition("files");

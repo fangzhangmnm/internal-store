@@ -14,8 +14,8 @@ import type { LocalHead } from "./local-head.ts";
 import { isHidden } from "./is-hidden.ts";   // 末段 dot = 隐藏（.trash/.backup/.<appId>/任意 dot 项不进列举）
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
-// syncState = residency(住哪) ⟂ sync-status(clean/dirty/conflict/gone) 两轴的 derived 投影。
 //   （单一 Residency 太薄——这是「sync state 更复杂」的落地。8 值对齐 PWAPatterns state-machine.md 的 badge。）
+/** syncState = residency(住哪) ⟂ sync-status(clean/dirty/conflict/gone) 两轴的 derived 投影（8-badge）。 */
 export type SyncState =
   | "cloud-only"        // 有云 etag、无本地副本（唯一「不在本地」态）
   | "synced"            // bound ∧ clean ∧ 云没动
@@ -27,18 +27,26 @@ export type SyncState =
   | "float"             // ¬bound ∧ dirty（纯本地、从没 synced、有编辑）
   | "local-only";       // 本地、从没 synced、clean（真本地文件）
 
+/** 统一列举的一项（local ∪ cloud 归并后）。 */
 export interface Item {
-  path: string;         // 身份 = approot 相对路径。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）
-  syncState: SyncState; // 按 ListContext 解析好的 badge —— Item 上就这一个状态字段（防下游 AI 重推导越狱）
+  /** 身份 = approot 相对路径。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）。 */
+  path: string;
+  /** 按 ListContext 解析好的 badge —— Item 上就这一个状态字段（防下游 AI 重推导越狱）。 */
+  syncState: SyncState;
+  /** 字节大小（云端 authoritative，否则本地缓存记录）。 */
   size?: number;
-  lastModified?: number;// sort-by-date 用（epoch ms）
+  /** sort-by-date 用（epoch ms）。 */
+  lastModified?: number;
 }
 
-export interface ListContext { signedIn: boolean; online: boolean; }   // syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）
+/** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
+export interface ListContext { signedIn: boolean; online: boolean; }
 
 // 便利判定：**单一来源=syncState**，纯函数，**别在 Item 上加 cached/dirty 字段**（多一个字段=多一条下游越狱路径）。
-export function isCached(s: SyncState): boolean { return s !== "cloud-only"; }   // 有本地副本 → 离线可读
-export function isDirty(s: SyncState): boolean {                                 // 有未推本地编辑 → 永不被驱逐
+/** 有本地副本 → 离线可读。 */
+export function isCached(s: SyncState): boolean { return s !== "cloud-only"; }
+/** 有未推本地编辑 → 永不被驱逐。 */
+export function isDirty(s: SyncState): boolean {
   return s === "unpushed" || s === "conflict" || s === "float" || s === "ghost";
 }
 

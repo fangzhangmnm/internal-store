@@ -29,12 +29,15 @@ async function toU8(x: Bytes | Blob | ArrayBuffer | string | null | undefined): 
   throw new Error("MockLocal: 无法识别的 bytes 类型");
 }
 
-// MockLocal = LocalCache 契约（类型层验证真 LocalCache 同契约）+ 测试辅助内省字段。
+/** MockLocal = LocalCache 契约（类型层验证真 LocalCache 同契约）+ 测试辅助内省字段。 */
 export interface MockLocal extends LocalCache {
+  /** 内省：name → 字节。 */
   _items: Map<string, Bytes>;
+  /** 内省：trashKey → { name, bytes }。 */
   _trash: Map<string, TrashItem>;
 }
 
+/** MockLocal 工厂：内存模拟本地持久层（IDB），实现 store.local 契约（测 Store 编排用）。 */
 export function createMockLocal(): MockLocal {
   const items = new Map<string, Bytes>();           // name → Uint8Array
   const trash = new Map<string, TrashItem>();        // trashKey → { name, bytes }

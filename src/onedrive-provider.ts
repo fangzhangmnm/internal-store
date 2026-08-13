@@ -39,6 +39,8 @@ function toItem(it: RawGraphItem | null | undefined): CloudItem | null {
   } as CloudItem;
 }
 
+/** 把 Graph transport（graph.ts）翻成库的 CloudProvider（原始 Graph item → CloudItem）。
+ *  纯：graph **必传**（测试传 graphFromProvider(MockCloudProvider)，与 graphToCloudProvider 复合 ≈ 恒等）。 */
 export function graphToCloudProvider(graph: GraphTransport): CloudProvider {
   if (!graph) throw new Error("graphToCloudProvider: graph transport 必传");
   const list = async (folder = ""): Promise<CloudItem[]> => (await graph.listChildren(folder)).map(toItem) as CloudItem[];

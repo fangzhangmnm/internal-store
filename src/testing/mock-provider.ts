@@ -75,19 +75,19 @@ function baseOf(path: string): string {
   return i === -1 ? path : path.slice(i + 1);
 }
 
-/**
- * @param {object} [opts]
- * @param {number} [opts.now] 固定时间戳（lastModifiedDateTime 用；测试可注入避免 Date.now()）
- * @param {(op:string, args:object)=>Promise<void>|void} [opts.hook] 每个 mutating 操作开头调用，
- *        可在测试里挂起以模拟并发 / race（slice C 的 race-serialize 测试用）。
- */
-// MockProvider = CloudProvider 契约（类型层验证真 provider 同契约）+ 测试辅助。
+/** MockProvider = CloudProvider 契约（类型层验证真 provider 同契约）+ 测试辅助。 */
 export interface MockProvider extends CloudProvider {
+  /** 注入一次性故障（kind="error"：操作前抛 httpError；kind="lostResponse"：先真写入再抛无 status 网络错）。 */
   injectFault(spec: Fault): MockProvider;
+  /** 内省：dump 全部云端节点。 */
   _dump(): CloudItem[];
+  /** 直接播种一个云端文件。 */
   _seed(path: string, bytes: Bytes | string): CloudItem;
 }
 
+/** MockCloudProvider 工厂：内存模拟 OneDrive-ish 云盘（不碰网络/MSAL，秒级 CI）。
+ *  opts.now = 固定时间戳（lastModifiedDateTime 用；测试可注入避免 Date.now()）；
+ *  opts.hook = 每个 mutating 操作开头调用，可在测试里挂起以模拟并发 / race（slice C 的 race-serialize 测试用）。 */
 export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
   let idSeq = 0;
   const nextId = () => `id-${++idSeq}`;

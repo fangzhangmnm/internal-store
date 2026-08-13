@@ -35,7 +35,7 @@ import { reportStoreError } from "./error-handling.ts";
 // collection 在本地缓存（IDB `blobs`）里的键名 = collections 分区（`collections/<name>`）。
 export function collectionLocalKey(name: string): string { return `collections/${name}`; }
 
-// 对外 entry：id + uat（只读盖戳）+ value（任意 JSON）。
+/** 对外 entry：id + uat（只读盖戳）+ value（任意 JSON）。 */
 export interface CollectionEntry { id: string; uat: number; value: unknown; }
 export type ChangeCb = (changedIds: string[]) => void;
 
@@ -60,22 +60,36 @@ export interface CollectionConfig {
   getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
 }
 
-// reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
-//   外加 unchanged（云端 etag 没变，压根没拉）和 error（意外抛）。
+/** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
+ *  外加 unchanged（云端 etag 没变，压根没拉）和 error（意外抛）。 */
 export interface ReconcileResult { status: string; pushed?: boolean; error?: unknown }
 
+/** Collection —— 一份同步 JSON 装多个**原子** item 的 KV 面（信封 {id, uat, value}，per-item uat-LWW；
+ *  删除 = null 墓碑）。读写 = 同步内存；经 store.collection(name) 拿。 */
 export interface Collection {
-  init(): Promise<void>;                              // 先 hydrate 本地（快）→ 后台 reconcile 云端（不 await）+ 新库 seed
-  reconcileWithRemote(): Promise<ReconcileResult>;    // 事件驱动重拉 + resolve。**读 status**：unchanged/synced/offline/invalid/dirty/error（别只 await 就报成功）
-  setItem(id: string, value: unknown): void;          // 同步写内存 + 防抖持久化（init 前抛错；value===undefined 报错）
-  deleteItem(id: string): void;                       // ≡ setItem(id, null)：null 墓碑，LWW
-  getItem<V = unknown>(id: string, def?: V | (() => V)): V | undefined;   // 同步读 value（无值 / 墓碑 → default）
-  getEntry(id: string): CollectionEntry | undefined;  // 带 uat 的完整 entry（墓碑 → undefined）
-  entries(): CollectionEntry[];                       // 全部 entry（过滤墓碑）
-  keys(): string[];                                   // 全部 id（过滤墓碑）
-  onChange(cb: ChangeCb): () => void;                 // 整库：**任何**值变（本地 setItem 同步 fire / 云端 reconcile）→ 通知 changedIds（返退订）
-  onChange(id: string, cb: () => void): () => void;   // 单 key：绑某个 key，其值变→通知（返退订）
-  flushLocal(): Promise<{ ok: boolean; error?: unknown }>;   // 立即写本地缓存（卸载兜底）。**ok=false 表示本地都没写进去**（配额/IDB 拒绝）——别忽略
+  /** 先 hydrate 本地（快）→ 后台 reconcile 云端（不 await）+ 新库 seed。 */
+  init(): Promise<void>;
+  /** 事件驱动重拉 + resolve。**读 status**：unchanged/synced/offline/invalid/dirty/error（别只 await 就报成功）。 */
+  reconcileWithRemote(): Promise<ReconcileResult>;
+  /** 同步写内存 + 防抖持久化（init 前抛错；value===undefined 报错）。 */
+  setItem(id: string, value: unknown): void;
+  /** ≡ setItem(id, null)：null 墓碑，LWW。 */
+  deleteItem(id: string): void;
+  /** 同步读 value（无值 / 墓碑 → default）。 */
+  getItem<V = unknown>(id: string, def?: V | (() => V)): V | undefined;
+  /** 带 uat 的完整 entry（墓碑 → undefined）。 */
+  getEntry(id: string): CollectionEntry | undefined;
+  /** 全部 entry（过滤墓碑）。 */
+  entries(): CollectionEntry[];
+  /** 全部 id（过滤墓碑）。 */
+  keys(): string[];
+  /** 整库：**任何**值变（本地 setItem 同步 fire / 云端 reconcile）→ 通知 changedIds（返退订）。 */
+  onChange(cb: ChangeCb): () => void;
+  /** 单 key：绑某个 key，其值变→通知（返退订）。 */
+  onChange(id: string, cb: () => void): () => void;
+  /** 立即写本地缓存（卸载兜底）。**ok=false 表示本地都没写进去**（配额/IDB 拒绝）——别忽略。 */
+  flushLocal(): Promise<{ ok: boolean; error?: unknown }>;
+  /** 云推脏标。 */
   isDirty(): boolean;
 }
 

@@ -28,11 +28,12 @@ interface AuthConfig {
   msalUrl?: string | null;
 }
 
-// 配置注入（取代前身宿主的 config.js import，去 app 化）。app 调一次 configureOneDriveAuth。
+// （取代前身宿主的 config.js import，去 app 化。）
 let CLIENT_ID = "";
 let AUTHORITY = "https://login.microsoftonline.com/common";
 let SCOPES = ["Files.ReadWrite.AppFolder", "offline_access"];
 let MSAL_URL: string | null = null;
+/** OneDrive auth 配置注入。app 调一次（clientId/authority/scopes/msalUrl；msalUrl = vendored MSAL 脚本相对路径）。 */
 export function configureOneDriveAuth({ clientId, authority, scopes, msalUrl }: AuthConfig = {}): void {
   if (clientId) CLIENT_ID = clientId;
   if (authority) AUTHORITY = authority;
@@ -53,12 +54,17 @@ let pca: Pca = null;
 let activeAccount: Account = null;
 let initPromise: Promise<AuthState> | null = null;
 
-// initAuth / getAuthState 返回的状态。
+/** initAuth / getAuthState 返回的 auth 状态。 */
 export interface AuthState {
+  /** 是否已登录（单一源 activeAccount 的派生读）。 */
   signedIn: boolean;
+  /** 当前 MSAL account（未登录 = null）。 */
   account: Account;
+  /** clientId 未配置（占位符）→ 纯离线，不 load MSAL。 */
   notConfigured?: boolean;
+  /** 后台 silent token 探测进行中（探测不阻塞 init）。 */
   probing?: boolean;
+  /** 正在探测的缓存 account。 */
   probedAccount?: Account;
 }
 

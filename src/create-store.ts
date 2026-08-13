@@ -31,133 +31,169 @@ import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
 import { setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts";
 
-// ── ui bundle（Model B，README.md §7）：store 在决策点回调进来 + await ──
+// ── ui bundle（Model B，README.md §7）──
+/** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
+ *  （offlineEscape 例外：缺它优雅退回 isOnline 守卫，非隐藏失败）。 */
 export interface StoreUI {
-  // **全部必填，禁 placeholder/noop**（offlineEscape 例外：缺它优雅退回 isOnline 守卫，非隐藏失败）。
+  /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
   busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
-  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null }) => Promise<ResolveChoice>;  // 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel
-  reportError: (err: unknown, level?: StoreErrorLevel) => void;                                                 // 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）
+  /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。 */
+  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null }) => Promise<ResolveChoice>;
+  /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
+  reportError: (err: unknown, level?: StoreErrorLevel) => void;
   // 加密密码**不走 ui**——非交互 crypt.getPassword（app 持内存密码 + 解锁循环在 busy 外，见 §5/§7）。故无 askPassword。
-  // 可选：云端检查（freshness gate）的「跳过到离线」逃生闸（对齐前身引擎：无硬超时，用户即超时）。
-  // store 在 open 的 freshness 检查前调，拿 probe 与 fetchMeta race；用户点「跳过到离线」→ probe resolve → 读本地
-  //   （iOS 登录态老 token acquireTokenSilent iframe 永不 resolve→fetchMeta 挂死时的唯一逃生）。
-  // 不实现 → 无逃生闸（退回纯 isOnline 守卫 + 裸 await）。settle() 在检查结束后清理 skip UI。
+  //   （iOS 登录态老 token acquireTokenSilent iframe 永不 resolve→fetchMeta 挂死时，offlineEscape 是唯一逃生。）
+  /** 可选：云端检查（freshness gate）的「跳过到离线」逃生闸（无硬超时，用户即超时）。
+   *  store 在 open 的 freshness 检查前调，拿 probe 与 fetchMeta race；用户点「跳过到离线」→ probe resolve → 读本地。
+   *  不实现 → 无逃生闸（退回纯 isOnline 守卫 + 裸 await）。settle() 在检查结束后清理 skip UI。 */
   offlineEscape?: () => { probe: Promise<unknown>; settle: () => void };
   // ── ADR-0018 离线「新上传」回线补推的 UI seam。**policy≠'manual' 时必填**（ctor 强校验，禁 noop/silent）──
-  onReplayStatus?: (evt: { phase: "start" | "pushed" | "collision" | "done"; name?: string; done: number; total: number }) => void;   // 进度/冲突 surface（非 busy，走状态行/toast）
-  confirmReplay?: (count: number) => Promise<boolean>;   // 'ask' 模式：回线/成功连接问一次「N 篇离线上传现在同步到云端？」
+  /** 补推进度/冲突 surface（非 busy，走状态行/toast）。 */
+  onReplayStatus?: (evt: { phase: "start" | "pushed" | "collision" | "done"; name?: string; done: number; total: number }) => void;
+  /** 'ask' 模式：回线/成功连接问一次「N 篇离线上传现在同步到云端？」。 */
+  confirmReplay?: (count: number) => Promise<boolean>;
 }
 
+/** createStore 的配置。 */
 export interface StoreConfig {
+  /** 云端低层 adapter（CloudProvider；如 createOneDriveProvider().provider）。 */
   provider: CloudProvider;
+  /** ui bundle（StoreUI）：store 在决策点回调进来。 */
   ui: StoreUI;
-  // ⚠ **必填** app 在本 origin 内的唯一命名空间（如 "app-a" / "app-b"）。与 databaseId 一起构成命名空间根
-  //   `${appId}.${databaseId}`：IndexedDB 库名 + 全部 localStorage 键前缀都据它隔离（namespacedKv 统一加）。
-  //   **同 origin 的兄弟 PWA 必须用不同 appId**：IndexedDB/localStorage 按 origin 隔离不按 path，GitHub Pages
-  //   的 /app-a/ 与 /app-b/ 同 origin，共用写死的库名会读写同一份存储 = 灾难。见 idb-store.ts 头注释。
+  // （IndexedDB/localStorage 按 origin 隔离不按 path，GitHub Pages 的 /app-a/ 与 /app-b/ 同 origin，
+  //   共用写死的库名会读写同一份存储 = 灾难。见 idb-store.ts 头注释。）
+  /** ⚠ **必填**：app 在本 origin 内的唯一命名空间（如 "app-a" / "app-b"）。与 databaseId 一起构成命名空间根
+   *  `${appId}.${databaseId}`：IndexedDB 库名 + 全部 localStorage 键前缀都据它隔离（namespacedKv 统一加）。
+   *  **同 origin 的兄弟 PWA 必须用不同 appId**。 */
   appId: string;
-  // 同一 app 内的 store 实例标识（默认 "defaultStore"）。想在一个 app 里开**多个互不打架的 store**（不同数据集）
-  //   → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。
+  /** 同一 app 内的 store 实例标识（默认 "defaultStore"）。想开**多个互不打架的 store**（不同数据集）
+   *  → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。 */
   databaseId?: string;
   // ── 加密（对齐前身引擎，出处 = WebPaint ai-docs/11；逻辑在库、重型 7z/zip codec 由 app 注入）──
   //   不注入 crypto → 加密 dormant（packContainer 抛「加密未配置」）；不加密的 app 就不注入，省 1.6MB。
-  crypto?: CryptoCodec;                            // app 注入的 zip/7z codec（参考实现见本仓 test/fixtures/）
+  /** app 注入的 zip/7z 加密 codec（参考实现见本仓 test/fixtures/）；不注入 → 加密 dormant。 */
+  crypto?: CryptoCodec;
+  /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
-    ext?: string;                                  // 真扩展名 → meta.bin（"ora"/"txt"…），还原真名
-    makePeek?: (plain: Blob) => Promise<Uint8Array | null>;   // 明文→不透明 peek 字节（app 域；store 不看内容）
-    getPassword?: (name: string) => string | null; // 同步、非交互、只读内存（唯一密码源）；app 持密码 + 解锁循环在 busy 外
+    /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
+    ext?: string;
+    /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
+    makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
+    /** 同步、非交互、只读内存（唯一密码源）；app 持密码 + 解锁循环在 busy 外。 */
+    getPassword?: (name: string) => string | null;
   };
-  encryptionSaltFileName?: string;   // ⚠ 未采用：README §5 的库统一密钥/salt 超集本版不实现（见 ai-docs/11，加密走 crypt.getPassword）
+  /** ⚠ 未采用：README §5 的库统一密钥/salt 超集本版不实现（见 ai-docs/11，加密走 crypt.getPassword）。 */
+  encryptionSaltFileName?: string;
   // ── 内部/测试 seam（prod 默认 idb + localStorage）──
+  /** 内部/测试 seam：KV 注入（prod 默认 localStorage）。 */
   kv?: Kv;
+  /** 内部/测试 seam：本地缓存注入（prod 默认 idb，createLocalCache）。 */
   local?: LocalCache;
-  getPassword?: (name: string) => string | null;   // 旧顶层密码源（向后兼容；优先用 crypt.getPassword）
-  // 采纳云端字节前的有效性闸（N2：clean 快进/pull 覆盖本地前调）——**所有 consumer 必传，禁 placeholder/noop**。
-  //   store 格式盲、自己验不了内容 → 逻辑 app 给（验是不是真文档字节）。否则损坏/captive-portal HTML 拿着
-  //   合法 etag 能覆盖唯一好的本地副本 = 丢内容（论文/画作都怕；只读消费者不上传不伤云，但机场网毁缓存照样难看）。
-  //   **库对加密透明**：验的是**解密后的明文**（验的是明文，不是密文容器）。
+  /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
+  getPassword?: (name: string) => string | null;
+  // （否则损坏/captive-portal HTML 拿着合法 etag 能覆盖唯一好的本地副本 = 丢内容——论文/画作都怕；
+  //   只读消费者不上传不伤云，但机场网毁缓存照样难看。）
+  /** 采纳云端字节前的有效性闸（N2：clean 快进/pull 覆盖本地前调）——**所有 consumer 必传，禁 placeholder/noop**。
+   *  store 格式盲、自己验不了内容 → 逻辑 app 给（验是不是真文档字节）。
+   *  **库对加密透明**：验的是**解密后的明文**，不是密文容器。 */
   validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
-  // ── 云端文件命名（app 域：store name → 云端文件名）。**不给 = 恒等**（名字本身含扩展名的 app）。
-  //   裸名宿主的 session name（"未命名"）云端存 `.dat` → 必须给 `fileName: n => n+".dat"`（+加密 `.zip`）。
+  // ── 云端文件命名（app 域）。裸名宿主的 session name（"未命名"）云端存 `.dat` → 必须给 `fileName: n => n+".dat"`（+加密 `.zip`）。
   //   ⚠ 前身 cutover 一度漏传 → 老云端 `X.dat` 用裸名 `X` 取不到（0B/打开空白）。出处 = WebPaint ai-docs/20260712-store-per-app-namespace.md。
-  fileName?: (name: string) => string;               // store name → 云端文件名（如 n => n + ".dat"）
-  encFileName?: (name: string) => string;            // 加密容器的云端文件名（如 n => n + ".zip"；ADR-0012）
-  isOnline?: () => boolean;                          // offload 离线守卫（默认 navigator.onLine）
-  signedIn?: () => boolean;                          // **连接态由 store 自持**（网盘模型：app 不再每次列举传 ctx）。ctor 注入一次；不给 → 恒 true（退回 provider 失败即降级）。watchFolder / 云列举据此决定「云轴可不可解析」。
-  autoCacheOpenedFile?: boolean;                              // 消费模式：true=开即自动留本地(读者/编辑器)；false=过路/流式(开整份拉云不落本地；range 按需取片是 ⚠TODO 优化)
-  offlineUploadReplay?: UploadReplayPolicy;           // ADR-0018：离线「新上传」回线补推策略 auto|ask|manual（默认 manual）
+  /** store name → 云端文件名（如 n => n + ".dat"）。**不给 = 恒等**（名字本身含扩展名的 app）。 */
+  fileName?: (name: string) => string;
+  /** 加密容器的云端文件名（如 n => n + ".zip"；ADR-0012）。 */
+  encFileName?: (name: string) => string;
+  /** offload 离线守卫（默认 navigator.onLine）。 */
+  isOnline?: () => boolean;
+  /** **连接态由 store 自持**（网盘模型：app 不再每次列举传 ctx）。ctor 注入一次；不给 → 恒 true
+   *  （退回 provider 失败即降级）。watchFolder / 云列举据此决定「云轴可不可解析」。 */
+  signedIn?: () => boolean;
+  /** 消费模式：true=开即自动留本地（读者/编辑器）；false=过路/流式（开整份拉云不落本地；range 按需取片是 ⚠TODO 优化）。 */
+  autoCacheOpenedFile?: boolean;
+  /** ADR-0018：离线「新上传」回线补推策略 auto|ask|manual（默认 manual）。 */
+  offlineUploadReplay?: UploadReplayPolicy;
   // ── 数据迁移框架（ADR-0019，createStore 内部自跑、隐形）──
   //   2026-07-13：无用户/无后向兼容 → 清空 MIGRATIONS（历史 V001/V002 tax 删除），库以最新标准出生。
   //   框架（版本戳 + 有序注册表 + 编排）留着——将来真有用户、真要改 kv/IDB 结构时加第一条迁移。
-  skipMigration?: boolean;                            // 测试/无 localStorage 环境跳过（prod 不传）
-  cloudGoneGraceMs?: number;                          // 云端防抖窗口覆盖（测试注入小值；prod 缺省 ~24h）
-  activeFileName?: () => string | null;                   // 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）
+  /** 测试/无 localStorage 环境跳过迁移（prod 不传）。 */
+  skipMigration?: boolean;
+  /** 云端防抖窗口覆盖（测试注入小值；prod 缺省 ~24h）。 */
+  cloudGoneGraceMs?: number;
+  /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
+  activeFileName?: () => string | null;
 }
 
-// tryMove 结果式返回（不抛，UI 渲染 where 标签）。移动/改身份的唯一入口 = file.tryMove(to)。
-// ok:true 时**仍可能有话要说**（别只看 ok 就报「已重命名（含云端）」）：
-//   oldKept       谱系不明 → 降级为 save-as，云端旧名原地留着 → 必须告诉用户「旧的还在，叫 <oldName>」
-//   oldUnknown    云端旧名状态取不到（离线/错误）→ 没碰它；「取不到」≠「没有」，别报「已含云端」
-//   oldCloudOrphan 旧名进 .trash 失败 → 云端遗留孤儿
-//   cloudDeferred  云端推失败 → 新名只在本地，待推
+/** tryMove 结果式返回（不抛，UI 渲染 where 标签）。ok:true 时**仍可能有话要说**（别只看 ok 就报「已重命名（含云端）」）：
+ *  oldKept=谱系不明降级 save-as、云端旧名原地留着；oldUnknown=云端旧名状态取不到（「取不到」≠「没有」）；
+ *  oldCloudOrphan=旧名进 .trash 失败成云端孤儿；cloudDeferred=云端推失败、新名只在本地待推。 */
 export type TryMoveResult =
   | { ok: true; where?: string; oldName?: string; oldKept?: boolean; oldUnknown?: boolean; oldCloudOrphan?: boolean; cloudDeferred?: boolean }
   | { ok: false; reason: "name-collision"; where: "local" | "cloud" };
 
-// save 的结果：本地一定落了（没落会抛），云端**不一定**上去了。
-//   pushed:true  = 云端已确认落地（拿到新 etag）
-//   pushed:false = 只落了本地。reason：not-attempted(tryPush:false) / offline-or-error / deferred(落地未确认)
-//                  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。
+/** save 的结果：本地一定落了（没落会抛），云端**不一定**上去了。pushed:true = 云端已确认落地（拿到新 etag）；
+ *  pushed:false = 只落了本地，reason：not-attempted(tryPush:false) / offline-or-error / deferred(落地未确认)
+ *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。 */
 export type SaveResult = { pushed: boolean; reason?: string };
 
 /** 加密容器的 at-rest 字节（branded）。唯一发牌方 = ZipFile.getEncryptedBlob()。
  *  只收密文的下游（导出 / 拷贝 / checkpoint）用它当形参类型 → 传明文 Blob 编译不过。 */
 export type EncryptedBlob = Blob & { readonly __encryptedAtRest: unique symbol };
 
-// ── 文件对象（README.md §2）。isZip 在编译期分出两种：RawFile 无 getPeek/setPeek ──
+// ── 文件对象（README.md §2）──
+/** 文件对象（非 zip）。isZip 在编译期分出两种：RawFile 无 getPeek/setPeek。 */
 export interface RawFile {
-  //  save(bytes)               = 本地落盘 + best-effort 推云（默认 tryPush:true）
-  //  save(bytes,{tryPush:false})= 只落本地不推（autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）
-  //  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推（不保证同步到云）。hint 透传缩略图（store content-blind）。
-  //  返回值：**别忽略 pushed**。以前这里是 Promise<void>，push 失败被 catch 成 banner 后 save() 照常 resolve，
+  //  返回值史：以前这里是 Promise<void>，push 失败被 catch 成 banner 后 save() 照常 resolve，
   //  调用方无从分辨「已上云」和「只落了本地」→ 乐观清掉 push-pending → badge 画干净、退出不再重推
-  //  （= 用户报的「远端文件不一样」而 UI 从没说过失败）。pushed:false 不是错误，是**事实**：离线/冲突/
-  //  用户在冲突面选了 cancel 都会走到这里，调用方据此保住 push-pending 即可。
+  //  （= 用户报的「远端文件不一样」而 UI 从没说过失败）。
+  /** 本地落盘 + best-effort 推云（默认 tryPush:true）；{tryPush:false} = 只落本地不推
+   *  （autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）。
+   *  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推。hint 透传缩略图（store content-blind）。
+   *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
   save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown }): Promise<SaveResult>;
+  /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
   open(): Promise<Blob | null>;
-  // 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op（绝不在事件里弹 sheet，
-  //   后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。（原 store.refresh(name)，2026-07 收上 file。）
+  // （原 store.refresh(name)，2026-07 收上 file。）
+  /** 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op
+   *  （绝不在事件里弹 sheet，后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。 */
   pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
-  // 改身份/移动**唯一入口 = file.tryMove(to)**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。
+  /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
   tryMove(to: string): Promise<TryMoveResult>;
-  //  返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少有三种不是成功：
-  //    cancelled（用户在脏文件警告里选了取消）· noop（本地云端都没有这个文件）
-  //    · queuedCloudDelete:false（离线且谱系不明 → 本地 move-aside 了，但云端那份还在）
+  /** 返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
+   *  cancelled（用户在脏文件警告里选了取消）· noop（本地云端都没有）
+   *  · queuedCloudDelete:false（离线且谱系不明 → 本地 move-aside 了，但云端那份还在）。 */
   delete(): Promise<DelResult>;
-  // 重新上传（candidate-gone 的「保留重传」动作）：本地 clean 字节推云到空 path。撞名(乌龙云端已有)→抛 CloudNameCollisionError
-  //   （app surface conflict）；成功→采纳新 etag 变 synced + 清 candidate。gallery 层没开文件 → 必须 store 内解决，不靠编辑器 save。
+  // gallery 层没开文件 → 必须 store 内解决，不靠编辑器 save。
+  /** 重新上传（candidate-gone 的「保留重传」动作）：本地 clean 字节推云到空 path。撞名(乌龙云端已有)→抛
+   *  CloudNameCollisionError（app surface conflict）；成功→采纳新 etag 变 synced + 清 candidate。 */
   reupload(): Promise<{ status: string }>;
   // 注：无 isDirty —— 「有没未推的改动」是 **sync 状态**，经 store.listAllItems 的 syncState 读（unpushed/conflict）。
   //   「是否 dirty 该推」= app 编辑逻辑（编辑器生命周期模块）的判断，不是库的事。
   // ── 离线副本（keepOffline/offload；无 LRU、无 pin flag：有本地副本 = kept offline）──
-  isKeptOffline(): Promise<boolean>;            // 本地有副本？（= 已留作离线）
-  keepOffline(): Promise<void>;                 // 留一份离线副本（未缓存则 acquire）。注：open 已含下载子过程，故名 keepOffline 非 download
-  offload(): Promise<void>;                     // 合法(clean∧在线∧曾synced∧云端有完整)→hardDelete；非法(唯一副本/不可重取)→抛 OffloadIllegalError（banner）
+  /** 本地有副本？（= 已留作离线）。 */
+  isKeptOffline(): Promise<boolean>;
+  /** 留一份离线副本（未缓存则 acquire）。注：open 已含下载子过程，故名 keepOffline 非 download。 */
+  keepOffline(): Promise<void>;
+  /** 合法(clean∧在线∧曾synced∧云端有完整)→hardDelete；非法(唯一副本/不可重取)→抛 OffloadIllegalError（banner）。 */
+  offload(): Promise<void>;
   // ── 加密（at-rest 透明；出处 = WebPaint ai-docs/11。不注入 codec → dormant）──
-  isEncrypted(): Promise<boolean>;                                       // 本地字节是否加密容器
-  encrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;   // 明文→密文（先本地后云 If-Match；离线 defer；错密码前置出局）
-  decrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;   // 密文→明文（同上红线）
-  verifyPassword(pw: string): Promise<boolean>;                         // app 解锁循环（busy 外）便宜验：解 peek，不碰 7z
+  /** 本地字节是否加密容器。 */
+  isEncrypted(): Promise<boolean>;
+  /** 明文→密文（先本地后云 If-Match；离线 defer；错密码前置出局）。 */
+  encrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;
+  /** 密文→明文（同 encrypt 红线）。 */
+  decrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;
+  /** app 解锁循环（busy 外）便宜验：解 peek，不碰 7z。 */
+  verifyPassword(pw: string): Promise<boolean>;
 }
+/** zip 容器文件对象：RawFile + 按 entry 名取字节的 peek 面（zip 解析在库内部，app 不碰 zip 布局）。 */
 export interface ZipFile extends RawFile {
-  // getPeek：从 zip 容器里**按文件名**抓 zipEntry 的字节（zip 解析在库内部，app 不碰 zip 布局）。
   //   取字节 schema：先拉尾片(bytesLength)→解 EOCD/CD→按名找 entry；CD/entry 溢出尾片则各一次额外 byte-range。
-  //   返回：**明文** zip → entry 原始字节 Blob(**无 type**，格式盲，app 自解释)；**加密**容器 → **密文** peek
-  //   Blob(type=ENC_PEEK_MIME，未解密)；找不到/不可达→null。
-  //   加密件只返密文（**绝不在这解密**）——让 app 的缓存层原样存密文，明文缩略图永不落 IDB（安全红线）。解密走 decryptPeek。
-  //   ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。
+  //   加密件只返密文（**绝不在这解密**）——让 app 的缓存层原样存密文，明文缩略图永不落 IDB（安全红线）。
+  /** 从 zip 容器里**按文件名**抓 zipEntry 的字节。**明文** zip → entry 原始字节 Blob(**无 type**，格式盲，app 自解释)；
+   *  **加密**容器 → **密文** peek Blob(type=ENC_PEEK_MIME，未解密，解密走 decryptPeek)；找不到/不可达→null。
+   *  ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。 */
   getPeek(opts: { bytesLength: number; zipEntry: string }): Promise<Blob | null>;
-  // 把 getPeek 返回的密文 peek blob 非交互解密成明文（内存密码；锁定/错密码→null）。已是明文(非 ENC_PEEK_MIME)→原样返。
+  /** 把 getPeek 返回的密文 peek blob 非交互解密成明文（内存密码；锁定/错密码→null）。已是明文(非 ENC_PEEK_MIME)→原样返。 */
   decryptPeek(encPeek: Blob): Promise<Blob | null>;
   /** 本地 at-rest 字节**原样**（内容盲，不解壳）——仅当这份是加密容器时给，否则 null。
    *
@@ -178,6 +214,9 @@ function localStorageKv(): KeyedKv {
   return { get: (k) => ls.getItem(k), set: (k, v) => ls.setItem(k, v), remove: (k) => ls.removeItem(k), keys: () => Object.keys(ls) };
 }
 
+/** 库的唯一入口 —— 薄组合根：provider → 库内造 cloud/local/kv/脊椎 → 装配深模块 →
+ *  暴露 README.md 的面（file / collection / files / encryption）。设置/状态**全走 collection**。
+ *  红线全在各深模块内 enforce；这里只接线 + 把 ui bundle 映射到各 flow 的回调。 */
 export function createStore(config: StoreConfig) {
   const { provider, ui, appId, databaseId = "defaultStore", kv: rawKv = localStorageKv(), validateAdopt, autoCacheOpenedFile = true } = config;
   if (!appId) throw new Error("createStore: appId 必填——同 origin 兄弟 PWA 隔离的红线（每个 app 建自己的 IDB 库）");
@@ -634,8 +673,9 @@ export function createStore(config: StoreConfig) {
     };
   }
 
-  // opts.mode（**显式必填**）：new=新建文档（撞名不覆盖，抛 collision）；existing=普通 open/编辑（大多数）。
-  //   逼调用方想清「这是新建还是打开已有」——省略/误用是调用方责任（TS 编译期必填）。路径护栏：拒保留根（.trash/.backup/.<appId>）。
+  //   逼调用方想清「这是新建还是打开已有」——省略/误用是调用方责任（TS 编译期必填）。
+  /** 文件对象工厂（isZip 编译期分流 RawFile/ZipFile）。opts.mode **显式必填**：new=新建文档（撞名不覆盖，
+   *  抛 collision）；existing=普通 open/编辑（大多数）。路径护栏：拒保留根（.trash/.backup/.<appId>）。 */
   function file(name: string, opts: { isZip: true; mode: "new" | "existing" }): ZipFile;
   function file(name: string, opts: { isZip: false; mode: "new" | "existing" }): RawFile;
   function file(name: string, opts: { isZip: boolean; mode: "new" | "existing" }): RawFile | ZipFile;
@@ -699,13 +739,12 @@ export function createStore(config: StoreConfig) {
   }
   function registerScaffold(name: string): void { _scaffoldNames.add(name); void ensureScaffold(); }
 
-  // collection(name, opts)：synced（默认）走 collections 实例 + 云端 scaffold；{local:true} = local-only 变体
-  //   （cloudless：只走 IDB 本地缓存、永不碰云、不 scaffold 云文件）——给设备本地设置/状态用。
-  //   opts.getInitData：仅当这份 collection 的 json 不存在（新库）时调，填初始值（uat=1）。store 内容无关——
-  //     app 域构造 [{id, value}]（如预设架把 builtin-presets.json 映射进来）。
-  //   **单例**：collection 是 app schema 的全局单例命名空间（非用户随建名字）——同名第二次返**同一对象**
-  //     （否则两个实例各持内存信封、同步同一云文件 → 写互相看不见、冲突）。opts 以首次为准（后续调忽略 opts 差异）。
+  //   （单例的为什么：否则两个实例各持内存信封、同步同一云文件 → 写互相看不见、冲突。）
   const _collections = new Map<string, Collection>();
+  /** collection 工厂：synced（默认）走 collections 实例 + 云端 scaffold；{local:true} = local-only 变体
+   *  （cloudless：只走 IDB 本地缓存、永不碰云、不 scaffold）——给设备本地设置/状态用。
+   *  opts.getInitData：仅当这份 collection 的 json 不存在（新库）时调，填初始值（uat=1；store 内容无关，app 域构造 [{id, value}]）。
+   *  **单例**：app schema 的全局单例命名空间——同名第二次返**同一对象**，opts 以首次为准（后续调忽略 opts 差异）。 */
   function collection(name: string, opts: { manual?: boolean; local?: boolean; getInitData?: CollectionConfig["getInitData"] } = {}): Collection {
     assertValidCollectionName(name);
     const cached = _collections.get(name);
@@ -717,25 +756,30 @@ export function createStore(config: StoreConfig) {
   }
 
   return {
-    // ── file（含 tryMove/pullIfClean/save/open/delete/reupload…）+ collection（单例）。改身份走 file.tryMove(to)。──
+    // ── file + collection。改身份走 file.tryMove(to)。──
+    /** 文件对象工厂（含 tryMove/pullIfClean/save/open/delete/reupload…）。 */
     file,
+    /** collection 工厂（app schema 全局单例；设置/状态全走它）。 */
     collection,
-    // ── files 命名空间：所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。──
-    //   **唯一列举面 = files.watchFolder（订阅当前夹）**：立即本地帧、云端到了同一 cb 再闪。不暴露 list/listAll/localKeys
-    //   （app 只放当前夹于内存；名字碰撞由 file.tryMove/mode:"new" 内化检测，不靠「先 list 目标夹」；全库 listAll 仅库内 reconcile 用）。
+    // ── files 命名空间。不暴露 list/listAll/localKeys（app 只放当前夹于内存；名字碰撞由 file.tryMove/mode:"new"
+    //   内化检测，不靠「先 list 目标夹」；全库 listAll 仅库内 reconcile 用）。──
+    /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
+     *  **唯一列举面 = files.watchFolder（订阅当前夹）**：立即本地帧、云端到了同一 cb 再闪。 */
     files: {
-      // 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。
+      /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
       nameOccupied: (name: string): Promise<boolean> => nameOccupied(name).then((o) => o != null),
+      /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
       watchFolder,
-      // 本地已缓存文件的总占用（字节 + 件数）。给 app 显示「本地存了多少」用。
-      //   **口径**：只量本库 files 分区；**不含** trash/backup/collections 分区、不含 app 自己别的 IDB 库
-      //   （如缩略图缓存）、不含纯云端未缓存的作品。
-      //   ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。
       //   一次本地 IDB cursor（无网络），但仍是全表走一遍 → app 只在图库打开/刷新时调，别挂每帧。
+      /** 本地已缓存文件的总占用（字节 + 件数），给 app 显示「本地存了多少」。**口径**：只量本库 files 分区，
+       *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
+       *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
       usage: () => local.usage(),
-      // 文件夹增删（gallery folder-tree）：空文件夹增删。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。删除「必须证实为空」库内强制（removeFolder 权威判空）。
+      /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
       ensureFolder: (path: string) => ensureFolderLocalFirst(path),
+      /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */
       newFolder: singleFlight("新建文件夹", (path: string) => ui.busy("新建文件夹…", async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); })),   // 子夹出现在父夹 → 重画父夹
+      /** 删除**空**文件夹——「必须证实为空」库内强制（两端判空；非空/无法确认 → 抛错拒删）。 */
       deleteFolder: singleFlight("删除文件夹", (path: string) => ui.busy("删除文件夹…", async (): Promise<void> => {
         assertValidFileName(path, appId);                            // 路径护栏
         // 判空**两端都查**：本地有该夹下的文件（含 local-only/未上云）→ 拒删（否则删掉云端夹、本地文件成孤儿）。
@@ -753,24 +797,30 @@ export function createStore(config: StoreConfig) {
         if (r.status === "list-failed") throw new Error(`无法确认文件夹是否为空（列举失败），已拒绝删除：${path}`);
         notifyFolderOf(path);                                        // deleted / already-gone：子夹从父夹消失 → 重画父夹
       })),
-      // 离线队列统一重放（app 在 focus/visibility/online/boot 调）：新文件夹补建 → 新上传补推 → 删文件重放（按序）。
+      /** 离线队列统一重放（app 在 focus/visibility/online/boot 调）：新文件夹补建 → 新上传补推 → 删文件 → 删文件夹（按序）。 */
       drainOfflineQueue,
-      // 回收站/备份箱列表：**本地↔云两端聚合**（mergeTrash）。只返元数据（trashKey/cloudItemId/原名/加密标志/conflictLive），绝不带 blob。
       //   conflictLive（离线删被 edit-wins 撤销→本地 trash 有、云端还活着）：仅当有本地 trash 项且能拿到**权威** live 列表时才判（离线/partial→空集→不误报）。
+      /** 回收站列表：**本地↔云两端聚合**（mergeTrash）。只返元数据（trashKey/cloudItemId/原名/加密标志/conflictLive），绝不带 blob。 */
       listTrash: () => aggregateBox("trash"),
+      /** 备份箱列表（同 listTrash 的两端聚合；备份箱是冲突 loser 留底，无 conflictLive 语义）。 */
       listBackup: () => aggregateBox("backup"),
+      /** 从回收站/备份箱恢复一项。 */
       restoreTrash: singleFlight("恢复", trashMod.restore),
+      /** 彻底删除回收站/备份箱一项。 */
       purgeTrash: singleFlight("彻底删除", trashMod.purge),
+      /** 清空回收站。 */
       emptyTrash: singleFlight("清空回收站", trashMod.emptyTrash),
+      /** 清空备份箱。 */
       emptyBackup: singleFlight("清空备份箱", trashMod.emptyBackup),
-      // **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），绝不自动/轮询——全树 listAll 是重活。
       //   日常开夹的惰性收敛已在 watchFolder 内走 reconcileFolder（看到夹才收敛，同一 converge SSOT）。
+      /** **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），
+       *  绝不自动/轮询——全树 listAll 是重活。 */
       reconcileAll: (opts?: { activeFileName?: string }) => reconcileMod.reconcile(opts),
     },
-    // ── store.encryption：**裸字节**级的加密面（文件还没进 store、无 name 可查时用）。──────────
-    //   有 name 的场景一律走 file.*（isEncrypted / encrypt / decrypt / verifyPassword /
-    //   getPeek / decryptPeek / getEncryptedBlob）——那些能用便宜的 peek 路径，别走这里。
     //   设计约束：① 不做重复的计算 ② 不做不必要的计算。
+    /** **裸字节**级的加密面（文件还没进 store、无 name 可查时用）。有 name 的场景一律走 file.*
+     *  （isEncrypted / encrypt / decrypt / verifyPassword / getPeek / decryptPeek / getEncryptedBlob）——
+     *  那些能用便宜的 peek 路径，别走这里。 */
     encryption: {
       /** 是不是加密容器。**只嗅魔数/尾窗**，不派生密钥、不解密（便宜，可用于分流）。 */
       isEncryptedBlob: (blob: Blob | Uint8Array): Promise<boolean> => looksEncryptedContainer(blob),
@@ -796,4 +846,5 @@ export function createStore(config: StoreConfig) {
   };
 }
 
+/** store 本体类型（createStore 的返回面：file / collection / files / encryption）。 */
 export type Store = ReturnType<typeof createStore>;

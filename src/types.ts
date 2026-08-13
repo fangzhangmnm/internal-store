@@ -3,6 +3,7 @@
 // 设计原则：把「字节边界」写死——谁吃 Bytes、谁吃/出 Blob，一眼可辨、错配即编译错。
 
 import type { Bytes } from "./substrate.ts";
+/** 落盘/上传的字节正规形态（= Uint8Array）；toU8 把任意来源收敛到它。 */
 export type { Bytes } from "./substrate.ts";
 
 // ---- 注入端口 ----
