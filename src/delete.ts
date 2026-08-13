@@ -25,7 +25,27 @@ export interface DelOpts {
   onDirtyWarn?: (ctx: { name: string }) => boolean | Promise<boolean>;
   busy?: Busy;
 }
-export interface DelResult { status: string; where?: string; trashed?: unknown; trashKey?: string | null; baseEtag?: string | null; queuedCloudDelete?: boolean; reason?: string; drained?: number; deferred?: number }
+/** 删除操作的终态。 */
+export interface DelResult {
+  /** 终态串。 */
+  status: string;
+  /** 位置串。 */
+  where?: string;
+  /** 移入 trash 的结果（不透明）。 */
+  trashed?: unknown;
+  /** 本地 trashKey。 */
+  trashKey?: string | null;
+  /** 删除时的 base etag。 */
+  baseEtag?: string | null;
+  /** 云删已进离线队列。 */
+  queuedCloudDelete?: boolean;
+  /** 原因串。 */
+  reason?: string;
+  /** drain 重放的条数。 */
+  drained?: number;
+  /** 留队 defer 的条数。 */
+  deferred?: number
+}
 
 // 相对键（namespacedKv 补 `${appId}.${databaseId}.` 根前缀 → `${ns}.internal.pending_deletions`）。
 const DELQ_KEY = "internal.pending_deletions";

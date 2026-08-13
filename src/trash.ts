@@ -17,10 +17,54 @@ export interface TrashCfg {
   head: Pick<LocalHead, "markSeen">;
   busy?: Busy;
 }
-export interface RestoreOpts { fromCloud?: boolean; cloudItemId?: string | null; targetName?: string; trashKey?: string | null; encrypted?: boolean; busy?: Busy }
-export interface PurgeOpts { trashKey?: string | null; cloudItemId?: string | null; confirm?: (ctx: { title: string; body: string; danger?: boolean }) => boolean | Promise<boolean>; busy?: Busy }
-export interface EmptyTrashOpts { isOnline?: () => boolean; busy?: Busy; concurrency?: number; scope?: "local" | "cloud" | "both" }
-export interface TrashResult { status: string; name?: string | null; local?: boolean; cloud?: boolean; purged?: number; failed?: unknown[] }
+/** restore（从回收站恢复）的选项。 */
+export interface RestoreOpts {
+  /** 走云端腿恢复。 */
+  fromCloud?: boolean;
+  /** 云端 trash item id（云端腿）。 */
+  cloudItemId?: string | null;
+  /** 恢复的目标名。 */
+  targetName?: string;
+  /** 本地 trashKey（本地腿）。 */
+  trashKey?: string | null;
+  /** trash 里的字节是加密容器 → 恢复落 encFileName。 */
+  encrypted?: boolean;
+  /** busy 遮罩注入。 */
+  busy?: Busy }
+/** purge（永久删，不可恢复）的选项。 */
+export interface PurgeOpts {
+  /** 本地 trashKey（本地腿）。 */
+  trashKey?: string | null;
+  /** 云端 trash item id（云端腿）。 */
+  cloudItemId?: string | null;
+  /** danger confirm 回调。 */
+  confirm?: (ctx: { title: string; body: string; danger?: boolean }) => boolean | Promise<boolean>;
+  /** busy 遮罩注入。 */
+  busy?: Busy }
+/** emptyTrash（批量彻底删）的选项。 */
+export interface EmptyTrashOpts {
+  /** 在线判定注入。 */
+  isOnline?: () => boolean;
+  /** busy 遮罩注入。 */
+  busy?: Busy;
+  /** 并发数。 */
+  concurrency?: number;
+  /** 清哪一端。 */
+  scope?: "local" | "cloud" | "both" }
+/** restore / purge / emptyTrash 的终态。 */
+export interface TrashResult {
+  /** 终态串。 */
+  status: string;
+  /** 涉及的文件名。 */
+  name?: string | null;
+  /** 本地腿标志。 */
+  local?: boolean;
+  /** 云端腿标志。 */
+  cloud?: boolean;
+  /** 彻底删的条数。 */
+  purged?: number;
+  /** 失败汇总（逐项独立 try、不静默）。 */
+  failed?: unknown[] }
 
 export function createTrash(cfg: TrashCfg) {
   const { cloud, local, head, busy: _busy = passBusy } = cfg;

@@ -6,7 +6,7 @@
 // TS 化（v223）：store 深模块被 Uint8Array/Blob 类型 bug 雷击两次 → 全面 .ts + tsc --noEmit strict。
 // 这里定义贯穿全 store 的字节类型 Bytes。
 
-// 落盘/上传的字节正规形态。toU8 把任意来源收敛到它。
+/** 落盘/上传的字节正规形态。toU8 把任意来源收敛到它。 */
 export type Bytes = Uint8Array;
 // toU8 可接受的来源（含 Blob —— 走 arrayBuffer 分支）。
 export type BytesSource = Bytes | ArrayBuffer | Blob | string | null | undefined;

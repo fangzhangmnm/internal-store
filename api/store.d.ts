@@ -1,3 +1,4 @@
+/** MSAL account 句柄（未类型化透传；导出仅为门牌可命名）。 */
 export declare type Account = any;
 
 /** 采纳验真回调（云字节覆盖本地前验明文；= StoreConfig.validateAdopt 的函数形状）。 */
@@ -20,44 +21,72 @@ export declare interface AuthState {
 /** busy 遮罩包装的函数形状（= StoreUI.busy；深模块 opts 里透传用）。 */
 export declare type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 
+/** 落盘/上传的字节正规形态。toU8 把任意来源收敛到它。 */
 export declare type Bytes = Uint8Array;
 
+/** 整库 onChange 回调（收本批变更的 id 列表）。 */
 export declare type ChangeCb = (changedIds: string[]) => void;
 
+/** 一个云端文件/文件夹的元信息（provider 各方法返回的统一形状）。 */
 export declare interface CloudItem {
+    /** 云端 item id。 */
     id: string;
+    /** 文件名。 */
     name: string;
+    /** 云端路径。 */
     path: string;
+    /** 字节大小。 */
     size: number;
+    /** 版本 etag。 */
     eTag: string;
+    /** 最后修改时间。 */
     lastModifiedDateTime: string | number;
+    /** 是否文件夹。 */
     isFolder?: boolean;
+    /** 内容 MIME 类型。 */
     contentType?: string;
+    /** 下载 URL。 */
     downloadUrl?: string;
     /** Graph 直传的下载 URL 字段（peek byte-range 用）。 */
     "@microsoft.graph.downloadUrl"?: string;
 }
 
+/** 低层云端传输契约。生产用 OneDriveProvider（包 Graph），测试用 MockProvider。 */
 export declare interface CloudProvider {
+    /** 列举文件夹的子项。 */
     list(folder?: string): Promise<CloudItem[]>;
+    /** 按路径取 item；缺 → null。 */
     getItemByPath(path: string): Promise<CloudItem | null>;
+    /** 取 approot 文件夹 id。 */
     getApprootId(): Promise<string>;
+    /** 下载文件内容。 */
     download(id: string): Promise<Blob>;
+    /** byte-range 下载。 */
     downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    /** 上传文件字节。 */
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+    /** 确保文件夹存在。 */
     ensureFolder(path: string): Promise<string>;
+    /** 文件硬删（trash purge）。eTag=If-Match（硬删不可逆，必带）。**文件夹删除不走它**——走 deleteEmptyFolder（护栏在 provider）。 */
     delete(id: string, eTag?: string): Promise<void>;
+    /** 删**空**文件夹（唯一文件夹删除面）：provider 内部证实空才删（Graph 无 native「删空夹」→ list-then-delete，带 If-Match folder etag best-effort）。 */
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
+    /** 移动到目标文件夹。 */
     move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+    /** 改名。 */
     rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
 }
 
+/** cloud-sync 暴露给 store/app 的面（dirty/etag 状态 + push/pull/list/trash 等）。 */
 export declare interface CloudSync {
+    /** 推字节上云。opts.encrypted：字节是加密容器（ADR-0012）→ 落 encFileName（.zip）路径；未配 encFileName 时忽略。 */
     push(name: string, bytes: Bytes | Blob, opts?: {
         baseEtag?: string | null;
         encrypted?: boolean;
     }): Promise<PushResult>;
+    /** 拉整份内容（字节 + 权威 item + 建议落地名）；无此件 → null。 */
     pull(name: string): Promise<PullResult | null>;
+    /** 只取轻量元信息（比对 etag 用），不下载内容。 */
     fetchMeta(name: string): Promise<FetchMetaResult | null>;
     /** 尾部 byte-range 纯读（peek 预览纯云端文件用；store.getTailBytes 的云端腿）。 */
     pullTail(name: string, n: number): Promise<{
@@ -69,6 +98,7 @@ export declare interface CloudSync {
         bytes: Bytes;
         item: CloudItem;
     } | null>;
+    /** 弱覆盖：覆盖云端 + 留底。 */
     weakOverride(name: string, bytes: Bytes, opts?: {
         encrypted?: boolean;
     }): Promise<WeakOverrideResult>;
@@ -81,8 +111,11 @@ export declare interface CloudSync {
         encrypted?: boolean;
         eTag?: string | null;
     }): Promise<unknown>;
+    /** 彻底删一条云端 trash。 */
     purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
+    /** 列举云端文件。 */
     list(): Promise<CloudItem[]>;
+    /** 全树列举；complete=false → 列表不完整、不权威（partial 守卫：绝不据此判 cloud-gone）。 */
     listAll(): Promise<{
         files: CloudItem[];
         folders: string[];
@@ -96,18 +129,29 @@ export declare interface CloudSync {
         folders: string[];
         complete: boolean;
     }>;
+    /** 列举全部云端文件夹路径。 */
     listFolders(): Promise<string[]>;
+    /** 列举云端 .trash。 */
     listTrash(): Promise<CloudItem[]>;
+    /** 列举云端备份分区。 */
     listBackup(): Promise<CloudItem[]>;
+    /** 云端改名。 */
     rename(oldName: string, newName: string, opts?: {
         baseEtag?: string | null;
     }): Promise<unknown>;
+    /** 确保云端文件夹存在。 */
     ensureFolder(path: string): Promise<void>;
+    /** 薄委托 provider.deleteEmptyFolder（护栏在 backend）。 */
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
+    /** 该名的 dirty 标志。 */
     isDirty(name: string): boolean;
+    /** 置/清该名的 dirty 标志。 */
     setDirty(name: string, dirty: boolean): void;
+    /** 读记录的 etag；无 → null。 */
     getETag(name: string): string | null;
+    /** 写记录的 etag。 */
     setETag(name: string, etag: string | null): void;
+    /** 清该名的同步状态（dirty/etag）。 */
     clearState(name: string): void;
 }
 
@@ -143,16 +187,25 @@ export declare interface Collection {
     isDirty(): boolean;
 }
 
+/** Collection 的配置（cloud + name 必传）。 */
 export declare interface CollectionConfig {
+    /** 云同步面。 */
     cloud: CloudSync;
+    /** 同步键 = 云端文件名（如 "synced-user-preference.json"）。 */
     name: string;
+    /** 在线判定注入。 */
     isOnline?: () => boolean;
+    /** 编辑后防抖自动同步（collection 无冲突、union 安全，频繁推也行）。 */
     syncDelayMs?: number;
+    /** uat 盖戳（默认 Date.now；测试可注入确定时钟）。 */
     now?: () => number;
+    /** true=setItem/delete 只标脏不自动调度云推，由 reconcileWithRemote 驱动 commit。 */
     manual?: boolean;
     /** 本地缓存（IDB）：透明缓存内存 env → 离线可读 + 强杀存活 + 旧设备旧缓存靠 uat-LWW 不盖新。不传 = 纯内存+云。 */
     local?: Pick<LocalCache, "save" | "get" | "exists">;
+    /** 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。 */
     localWriteDelayMs?: number;
+    /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。 */
     cloudless?: boolean;
     /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
@@ -160,13 +213,19 @@ export declare interface CollectionConfig {
 
 /** 对外 entry：id + uat（只读盖戳）+ value（任意 JSON）。 */
 export declare interface CollectionEntry {
+    /** item id。 */
     id: string;
+    /** 更新时间戳（内部盖戳，只读）。 */
     uat: number;
+    /** 任意 JSON 值。 */
     value: unknown;
 }
 
+/** getInitData 的初始项：id + value（value 不可为 undefined）。 */
 export declare interface CollectionInitItem {
+    /** item id。 */
     id: string;
+    /** 初始值（不可为 undefined）。 */
     value: unknown;
 }
 
@@ -279,35 +338,55 @@ export declare function createStore(config: StoreConfig): {
     };
 };
 
+/** 宿主注入的 zip/7z codec（createStore config 注入；不提供 = 加密不可用）。 */
 export declare interface CryptoCodec {
+    /** 打包明文 zip（外层容器）。 */
     zipPack(entries: {
         path: string;
         data: Uint8Array | string;
     }[]): Promise<Blob>;
+    /** 解开明文 zip（path 到字节的记录）。 */
     zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
+    /** 打包加密 .7z（AES-256 + 强 KDF + 加密头）。 */
     pack7z(entries: {
         path: string;
         data: Uint8Array | string;
     }[], password: string): Promise<Uint8Array>;
+    /** 解开加密 .7z（也认老 WinZip-AES zip）。 */
     unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
 }
 
+/** 删除操作的终态。 */
 export declare interface DelResult {
+    /** 终态串。 */
     status: string;
+    /** 位置串。 */
     where?: string;
+    /** 移入 trash 的结果（不透明）。 */
     trashed?: unknown;
+    /** 本地 trashKey。 */
     trashKey?: string | null;
+    /** 删除时的 base etag。 */
     baseEtag?: string | null;
+    /** 云删已进离线队列。 */
     queuedCloudDelete?: boolean;
+    /** 原因串。 */
     reason?: string;
+    /** drain 重放的条数。 */
     drained?: number;
+    /** 留队 defer 的条数。 */
     deferred?: number;
 }
 
+/** emptyTrash（批量彻底删）的选项。 */
 export declare interface EmptyTrashOpts {
+    /** 在线判定注入。 */
     isOnline?: () => boolean;
+    /** busy 遮罩注入。 */
     busy?: Busy;
+    /** 并发数。 */
     concurrency?: number;
+    /** 清哪一端。 */
     scope?: "local" | "cloud" | "both";
 }
 
@@ -317,29 +396,47 @@ export declare type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
 };
 
+/** fetchMeta 的结果：只轻量元信息（store open/refresh 比对 etag 用），不下载内容。 */
 export declare interface FetchMetaResult {
+    /** 云端当前 etag。 */
     etag: string;
+    /** 最后修改时间。 */
     lastModified: string | number;
+    /** 字节大小。 */
     size: number;
+    /** 完整云端 item。 */
     item: CloudItem;
 }
 
+/** 删空夹的判别式结果（backend 侧唯一的文件夹删除面；绝不 throw 非空/列举失败，用 status 表达）。 */
 export declare interface FolderDeleteResult {
+    /** 四态：deleted/already-gone=终态成功；non-empty=有内容；list-failed=列举失败确认不了空。 */
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
 }
 
+/** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
 export declare interface FolderSnapshot {
+    /** 本夹路径（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。 */
     path: string;
+    /** 直属文件项。 */
     items: Item[];
+    /** immediate 子夹全路径。 */
     folders: string[];
+    /** false → 该夹列举失败、不权威。 */
     complete: boolean;
 }
 
+/** open / refresh 的终态。 */
 export declare interface FreshResult {
+    /** 内容来源串。 */
     source?: string;
+    /** 终态串。 */
     status?: string;
+    /** 原因串。 */
     reason?: string;
+    /** 覆盖前留底的备份名。 */
     backupName?: string;
+    /** 原始异常。 */
     error?: unknown;
 }
 
@@ -350,22 +447,32 @@ export declare function graphToCloudProvider(graph: GraphTransport): CloudProvid
 /** OneDrive Graph transport 契约（graphToCloudProvider 消费的最小面）。
  *  providers/index 传真 graph.ts 模块、测试传 graphFromProvider(Mock)——结构满足即可（自定义 transport 同理）。 */
 export declare interface GraphTransport {
+    /** 列举子夹的直属子项（原始 Graph item）。 */
     listChildren(subfolder?: string): Promise<RawGraphItem[]>;
+    /** 按路径取 item；缺 → null。 */
     getItemByPath(path: string): Promise<RawGraphItem | null>;
+    /** 下载文件内容。 */
     downloadItemBlob(itemId: string): Promise<Blob>;
+    /** byte-range 下载；offset=null 取末尾 length 字节。 */
     downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+    /** 上传到 approot 相对路径。 */
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
     }): Promise<RawGraphItem | null>;
+    /** 硬删 item。 */
     deleteItem(itemId: string, eTag?: string | null): Promise<void>;
+    /** 移动到目标文件夹。 */
     moveItemToFolder(itemId: string, targetFolderId: string, opts?: {
         eTag?: string | null;
         newName?: string | null;
         conflictBehavior?: "replace" | "fail" | "rename";
     }): Promise<RawGraphItem>;
+    /** 改名。 */
     renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
+    /** 取 approot 文件夹 id。 */
     getApprootId(): Promise<string>;
+    /** 确保子夹存在，返其 id。 */
     ensureSubfolder(name: string): Promise<string>;
 }
 
@@ -387,22 +494,31 @@ export declare interface Item {
     lastModified?: number;
 }
 
+/** localStorage / IDB / 内存 都能实现的极简 KV（store 不直碰 localStorage，红线 #7）。 */
 export declare interface Kv {
+    /** 读键；缺 → null。 */
     get(k: string): string | null;
+    /** 写键。 */
     set(k: string, v: string): void;
+    /** 删键。 */
     remove(k: string): void;
 }
 
 /** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
 export declare interface ListContext {
+    /** 登录与否。 */
     signedIn: boolean;
+    /** 在线与否。 */
     online: boolean;
 }
 
+/** 本地持久层（store.local 契约）：**内容无关**，存任意 binary blob。 */
 export declare interface LocalCache {
     /** hint：save 透传的 app 旁路（store 不解释、不看内容；app 可经 hint.peek 供不透明 sidecar 字节）。 */
     save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+    /** 读缓存 blob；缺 → null。 */
     get(name: string): Promise<Blob | null>;
+    /** 是否已缓存。 */
     exists(name: string): Promise<boolean>;
     /** 已缓存的**应用文件名**集合（排除 trash/backup/collection 内部命名空间）——gallery 批量判 cached 用。 */
     appKeys(): Promise<string[]>;
@@ -417,20 +533,29 @@ export declare interface LocalCache {
         bytes: number;
         count: number;
     }>;
+    /** 复制一份备份（原件留着；pull 前的安全网），返备份名。 */
     backup(name: string): Promise<string>;
     /** 移进本地 .trash。deleteEventId 由 delete.ts 生成、与云端腿**共用**（trash-merge 据此精确配对）。返 trashKey。 */
     trash(name: string, deleteEventId: string): Promise<string>;
+    /** 真删（仅用于「云端已进 trash、不留双份」的本地侧）。 */
     hardDelete(name: string): Promise<void>;
+    /** 从本地 trash 恢复。 */
     restore(trashKey: string): Promise<string>;
+    /** 彻底删一条本地 trash。 */
     purgeTrash?(trashKey: string): Promise<void>;
+    /** 本地 trash 列举。 */
     listTrash?(): Promise<TrashEntry[]>;
     /** 备份分区列举（weakOverride/keepMine loser 的本地 stash）——回收站/备份视图两端聚合用。restore/purgeTrash 已认 `backup/` 前缀 key。 */
     listBackup?(): Promise<TrashEntry[]>;
 }
 
+/** provider.move 的选项。 */
 export declare interface MoveOpts {
+    /** 移动同时改名。 */
     newName?: string | null;
+    /** If-Match etag。 */
     eTag?: string | null;
+    /** 撞名行为。 */
     conflictBehavior?: "fail" | "replace" | "rename";
 }
 
@@ -446,41 +571,59 @@ export declare interface OneDriveAuth {
     signOut(): Promise<void>;
     /** 拿 access token（silent）。 */
     getToken(): Promise<string>;
+    /** 是否已登录。 */
     isSignedIn(): boolean;
+    /** 当前活跃 account（MSAL 句柄）。 */
     getActiveAccount(): Account;
     /** 静默重试登录。 */
     retrySilentSignIn(): Promise<boolean>;
     /** auth 状态订阅（每个转变都回调）；返回退订函数。 */
     onAuthChanged(cb: (st: AuthState) => void): () => void;
+    /** 当前 auth 状态快照。 */
     getAuthState(): AuthState;
 }
 
 /** createOneDriveProvider 的配置（clientId 必传；msalUrl = vendored MSAL 脚本路径；scopes/authority 有家族默认）。 */
 export declare interface OneDriveConfig {
+    /** app 注册的 clientId（必传）。 */
     clientId?: string;
+    /** MSAL authority（有家族默认）。 */
     authority?: string;
+    /** OAuth scopes（有家族默认）。 */
     scopes?: string[];
+    /** vendored MSAL 脚本路径。 */
     msalUrl?: string | null;
 }
 
+/** pull 的结果：拉到的字节 + 权威 item（H7：分片末响应无 item 时拉权威 etag）+ 建议落地名（撞名 caller 用）。 */
 export declare interface PullResult {
+    /** 拉到的字节。 */
     blob: Blob;
+    /** 权威 item。 */
     item: CloudItem | null;
+    /** 建议落地名（撞名时 caller 用）。 */
     suggestedName: string;
 }
 
+/** purge（永久删，不可恢复）的选项。 */
 export declare interface PurgeOpts {
+    /** 本地 trashKey（本地腿）。 */
     trashKey?: string | null;
+    /** 云端 trash item id（云端腿）。 */
     cloudItemId?: string | null;
+    /** danger confirm 回调。 */
     confirm?: (ctx: {
         title: string;
         body: string;
         danger?: boolean;
     }) => boolean | Promise<boolean>;
+    /** busy 遮罩注入。 */
     busy?: Busy;
 }
 
+/** push 的结果。 */
 export declare interface PushResult {
+    /** 上传后的云端 item。 */
     item: CloudItem | null;
 }
 
@@ -537,41 +680,67 @@ export declare interface RawFile {
 /** graph item 的原始形状（含 file/folder facet、path、downloadUrl 注解；transport 契约的条目面）。
  *  比 graph.ts 内部形状放宽（测试 mock 带 path）。 */
 export declare interface RawGraphItem {
+    /** 云端 item id。 */
     id: string;
+    /** 文件名。 */
     name?: string;
+    /** 字节大小。 */
     size?: number;
+    /** 版本 etag。 */
     eTag?: string;
+    /** 最后修改时间。 */
     lastModifiedDateTime?: string | number;
+    /** folder facet（Graph: file facet vs folder facet）；有 = 文件夹。 */
     folder?: unknown;
+    /** 云端路径。 */
     path?: string;
+    /** 下载 URL。 */
     downloadUrl?: string;
+    /** Graph 直传的下载 URL 注解。 */
     "@microsoft.graph.downloadUrl"?: string;
 }
 
 /** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
  *  外加 unchanged（云端 etag 没变，压根没拉）和 error（意外抛）。 */
 export declare interface ReconcileResult {
+    /** 终态串（synced/offline/invalid/dirty/unchanged/error）。 */
     status: string;
+    /** 是否一并推了本地更新。 */
     pushed?: boolean;
+    /** error 态的原始异常。 */
     error?: unknown;
 }
 
+/** refresh（事件驱动的纯干净快进）的选项。 */
 export declare interface RefreshOpts {
+    /** 在线判定注入。 */
     isOnline?: () => boolean;
+    /** 采纳验真回调。 */
     adopt?: AdoptFn;
+    /** 本地 dirty 判定注入。 */
     localDirty?: () => boolean;
+    /** N10：真要拉内容（动过+clean）才触发，app 给非阻塞 status。 */
     onReplaceStart?: () => void;
+    /** busy 遮罩注入。 */
     busy?: Busy;
 }
 
+/** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
 export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
+/** restore（从回收站恢复）的选项。 */
 export declare interface RestoreOpts {
+    /** 走云端腿恢复。 */
     fromCloud?: boolean;
+    /** 云端 trash item id（云端腿）。 */
     cloudItemId?: string | null;
+    /** 恢复的目标名。 */
     targetName?: string;
+    /** 本地 trashKey（本地腿）。 */
     trashKey?: string | null;
+    /** trash 里的字节是加密容器 → 恢复落 encFileName。 */
     encrypted?: boolean;
+    /** busy 遮罩注入。 */
     busy?: Busy;
 }
 
@@ -643,6 +812,7 @@ export declare interface StoreConfig {
     activeFileName?: () => string | null;
 }
 
+/** 错误上报分级：error=非预期失败；warning=可疑但非致命；info=值得让用户知道的瞬态；log=良性 offline/fallback。 */
 export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 /** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
@@ -679,27 +849,45 @@ export declare interface StoreUI {
 /** syncState = residency(住哪) ⟂ sync-status(clean/dirty/conflict/gone) 两轴的 derived 投影（8-badge）。 */
 export declare type SyncState = "cloud-only" | "synced" | "unpushed" | "newer-on-cloud" | "conflict" | "ghost" | "pendingGone" | "float" | "local-only";
 
+/** 本地 trash/backup 列举的一项（trashKey + 原名）。 */
 export declare interface TrashEntry {
+    /** 本地回收站键（restore/purgeTrash 用）。 */
     trashKey: string;
+    /** 原名。 */
     name: string;
 }
 
+/** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
 export declare interface TrashItem {
+    /** 展示/恢复原名（local 行 = 全路径身份；cloud-only 行 = basename，folder context 在云端 trash 已丢）。 */
     name: string;
+    /** yyyymmddhhmmss（展示/排序；解析不出 → null）。 */
     ts: string | null;
+    /** 痕迹所在端。 */
     side: "local" | "cloud" | "both";
+    /** 云端字节是加密容器（从 stamped `.zip` 尾推断）→ restore 落 encFileName。 */
     encrypted: boolean;
+    /** local 行原名仍活在权威云端列表（离线删被 edit-wins 撤销）→ 两存，别丢。 */
     conflictLive: boolean;
+    /** 本地 trashKey（本地腿 restore/purge）。 */
     localKey: string | null;
+    /** 云端 item id（云端腿 restore/purge）。 */
     cloudItemId: string | null;
 }
 
+/** restore / purge / emptyTrash 的终态。 */
 export declare interface TrashResult {
+    /** 终态串。 */
     status: string;
+    /** 涉及的文件名。 */
     name?: string | null;
+    /** 本地腿标志。 */
     local?: boolean;
+    /** 云端腿标志。 */
     cloud?: boolean;
+    /** 彻底删的条数。 */
     purged?: number;
+    /** 失败汇总（逐项独立 try、不静默）。 */
     failed?: unknown[];
 }
 
@@ -720,16 +908,24 @@ export declare type TryMoveResult = {
     where: "local" | "cloud";
 };
 
+/** provider.upload 的选项。 */
 export declare interface UploadOpts {
+    /** 内容 MIME 类型。 */
     contentType?: string;
+    /** If-Match etag。 */
     eTag?: string | null;
+    /** 撞名行为。 */
     conflictBehavior?: "fail" | "replace" | "rename";
 }
 
+/** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export declare type UploadReplayPolicy = "auto" | "ask" | "manual";
 
+/** 弱覆盖（冲突解决 weak-override 分支）的结果：覆盖云端 + 留底。 */
 export declare interface WeakOverrideResult {
+    /** 覆盖后的新云端 item。 */
     item: CloudItem | null;
+    /** 留底的备份名。 */
     backedUp: string | null;
 }
 

@@ -36,33 +36,61 @@ import { reportStoreError } from "./error-handling.ts";
 export function collectionLocalKey(name: string): string { return `collections/${name}`; }
 
 /** 对外 entry：id + uat（只读盖戳）+ value（任意 JSON）。 */
-export interface CollectionEntry { id: string; uat: number; value: unknown; }
+export interface CollectionEntry {
+  /** item id。 */
+  id: string;
+  /** 更新时间戳（内部盖戳，只读）。 */
+  uat: number;
+  /** 任意 JSON 值。 */
+  value: unknown;
+}
+/** 整库 onChange 回调（收本批变更的 id 列表）。 */
 export type ChangeCb = (changedIds: string[]) => void;
 
-// getInitData 的初始项：id + value（value 不可为 undefined）。app 域构造（如预设架把 builtin-presets.json
-//   映射成 [{id, value}]），store 内容无关——不知道装的是笔。
-export interface CollectionInitItem { id: string; value: unknown; }
+// app 域构造（如预设架把 builtin-presets.json 映射成 id+value 数组），store 内容无关——不知道装的是笔。
+/** getInitData 的初始项：id + value（value 不可为 undefined）。 */
+export interface CollectionInitItem {
+  /** item id。 */
+  id: string;
+  /** 初始值（不可为 undefined）。 */
+  value: unknown;
+}
 
 const SEED_UAT = 1;   // 初始值 uat：最低戳，任何真实编辑（Date.now）/ 别设备真数据必胜。
 
+/** Collection 的配置（cloud + name 必传）。 */
 export interface CollectionConfig {
+  /** 云同步面。 */
   cloud: CloudSync;
-  name: string;                 // 同步键 = 云端文件名（如 "synced-user-preference.json"）
+  /** 同步键 = 云端文件名（如 "synced-user-preference.json"）。 */
+  name: string;
+  /** 在线判定注入。 */
   isOnline?: () => boolean;
-  syncDelayMs?: number;         // 编辑后防抖自动同步（collection 无冲突、union 安全，频繁推也行）
-  now?: () => number;           // uat 盖戳（默认 Date.now；测试可注入确定时钟）
-  manual?: boolean;             // true=setItem/delete 只标脏不自动调度云推，由 reconcileWithRemote 驱动 commit
+  /** 编辑后防抖自动同步（collection 无冲突、union 安全，频繁推也行）。 */
+  syncDelayMs?: number;
+  /** uat 盖戳（默认 Date.now；测试可注入确定时钟）。 */
+  now?: () => number;
+  /** true=setItem/delete 只标脏不自动调度云推，由 reconcileWithRemote 驱动 commit。 */
+  manual?: boolean;
   /** 本地缓存（IDB）：透明缓存内存 env → 离线可读 + 强杀存活 + 旧设备旧缓存靠 uat-LWW 不盖新。不传 = 纯内存+云。 */
   local?: Pick<LocalCache, "save" | "get" | "exists">;
-  localWriteDelayMs?: number;   // 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。
-  cloudless?: boolean;          // local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。
+  /** 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。 */
+  localWriteDelayMs?: number;
+  /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。 */
+  cloudless?: boolean;
   /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
   getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
 }
 
 /** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
  *  外加 unchanged（云端 etag 没变，压根没拉）和 error（意外抛）。 */
-export interface ReconcileResult { status: string; pushed?: boolean; error?: unknown }
+export interface ReconcileResult {
+  /** 终态串（synced/offline/invalid/dirty/unchanged/error）。 */
+  status: string;
+  /** 是否一并推了本地更新。 */
+  pushed?: boolean;
+  /** error 态的原始异常。 */
+  error?: unknown }
 
 /** Collection —— 一份同步 JSON 装多个**原子** item 的 KV 面（信封 id + uat + value，per-item uat-LWW；
  *  删除 = null 墓碑）。读写 = 同步内存；经 store.collection(name) 拿。 */

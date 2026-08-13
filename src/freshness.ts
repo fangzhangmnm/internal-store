@@ -28,14 +28,31 @@ export interface OpenOpts {
   localDirty?: () => boolean;
   busy?: Busy;
 }
+/** refresh（事件驱动的纯干净快进）的选项。 */
 export interface RefreshOpts {
+  /** 在线判定注入。 */
   isOnline?: () => boolean;
+  /** 采纳验真回调。 */
   adopt?: AdoptFn;
+  /** 本地 dirty 判定注入。 */
   localDirty?: () => boolean;
-  onReplaceStart?: () => void;                   // N10：真要拉内容（动过+clean）才触发，app 给非阻塞 status
+  /** N10：真要拉内容（动过+clean）才触发，app 给非阻塞 status。 */
+  onReplaceStart?: () => void;
+  /** busy 遮罩注入。 */
   busy?: Busy;
 }
-export interface FreshResult { source?: string; status?: string; reason?: string; backupName?: string; error?: unknown }
+/** open / refresh 的终态。 */
+export interface FreshResult {
+  /** 内容来源串。 */
+  source?: string;
+  /** 终态串。 */
+  status?: string;
+  /** 原因串。 */
+  reason?: string;
+  /** 覆盖前留底的备份名。 */
+  backupName?: string;
+  /** 原始异常。 */
+  error?: unknown }
 
 export function createFreshness(cfg: FreshnessCfg) {
   const { cloud, head, safeResolve, busy: _busy = passBusy } = cfg;

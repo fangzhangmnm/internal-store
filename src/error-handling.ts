@@ -8,6 +8,7 @@
 //     "info"    值得让用户知道的瞬态 → app 状态栏
 //     "log"     良性 offline/fallback（funnel 但不打扰用户）→ app 仅 console
 //   ⚠ 单例 reporter：一个进程里多 store 实例（多 appId）会后者覆盖前者——它们都汇到同一个 app 级 report，可接受。
+/** 错误上报分级：error=非预期失败；warning=可疑但非致命；info=值得让用户知道的瞬态；log=良性 offline/fallback。 */
 export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 type Reporter = (err: unknown, level: StoreErrorLevel) => void;

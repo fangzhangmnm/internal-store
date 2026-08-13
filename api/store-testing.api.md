@@ -4,55 +4,35 @@
 
 ```ts
 
-// @public (undocumented)
+// @public
 export type Bytes = Uint8Array;
 
-// @public (undocumented)
+// @public
 export interface CloudItem {
     "@microsoft.graph.downloadUrl"?: string;
-    // (undocumented)
     contentType?: string;
-    // (undocumented)
     downloadUrl?: string;
-    // (undocumented)
     eTag: string;
-    // (undocumented)
     id: string;
-    // (undocumented)
     isFolder?: boolean;
-    // (undocumented)
     lastModifiedDateTime: string | number;
-    // (undocumented)
     name: string;
-    // (undocumented)
     path: string;
-    // (undocumented)
     size: number;
 }
 
-// @public (undocumented)
+// @public
 export interface CloudProvider {
-    // (undocumented)
     delete(id: string, eTag?: string): Promise<void>;
-    // (undocumented)
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
-    // (undocumented)
     download(id: string): Promise<Blob>;
-    // (undocumented)
     downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
-    // (undocumented)
     ensureFolder(path: string): Promise<string>;
-    // (undocumented)
     getApprootId(): Promise<string>;
-    // (undocumented)
     getItemByPath(path: string): Promise<CloudItem | null>;
-    // (undocumented)
     list(folder?: string): Promise<CloudItem[]>;
-    // (undocumented)
     move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
-    // (undocumented)
     rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
-    // (undocumented)
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
 
@@ -62,43 +42,30 @@ export function createMockLocal(): MockLocal;
 // @public
 export function createMockProvider(opts?: MockProviderOpts): MockProvider;
 
-// @public (undocumented)
+// @public
 export interface Fault {
-    // (undocumented)
     kind: "error" | "lostResponse";
-    // (undocumented)
     message?: string;
-    // (undocumented)
     op?: string;
-    // (undocumented)
     status?: number;
-    // (undocumented)
     times?: number;
 }
 
-// @public (undocumented)
+// @public
 export interface FolderDeleteResult {
-    // (undocumented)
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
 }
 
-// @public (undocumented)
+// @public
 export interface LocalCache {
     appKeys(): Promise<string[]>;
-    // (undocumented)
     backup(name: string): Promise<string>;
-    // (undocumented)
     exists(name: string): Promise<boolean>;
-    // (undocumented)
     get(name: string): Promise<Blob | null>;
-    // (undocumented)
     hardDelete(name: string): Promise<void>;
     listBackup?(): Promise<TrashEntry[]>;
-    // (undocumented)
     listTrash?(): Promise<TrashEntry[]>;
-    // (undocumented)
     purgeTrash?(trashKey: string): Promise<void>;
-    // (undocumented)
     restore(trashKey: string): Promise<string>;
     save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
     stat(name: string): Promise<{
@@ -125,47 +92,35 @@ export interface MockProvider extends CloudProvider {
     _seed(path: string, bytes: Bytes | string): CloudItem;
 }
 
-// @public (undocumented)
+// @public
 export interface MockProviderOpts {
-    // (undocumented)
     hook?: (op: string, args: object) => Promise<void> | void;
-    // (undocumented)
     now?: number;
 }
 
-// @public (undocumented)
+// @public
 export interface MoveOpts {
-    // (undocumented)
     conflictBehavior?: "fail" | "replace" | "rename";
-    // (undocumented)
     eTag?: string | null;
-    // (undocumented)
     newName?: string | null;
 }
 
-// @public (undocumented)
+// @public
 export interface TrashEntry {
-    // (undocumented)
     name: string;
-    // (undocumented)
     trashKey: string;
 }
 
-// @public (undocumented)
+// @public
 export interface TrashItem {
-    // (undocumented)
     bytes: Bytes;
-    // (undocumented)
     name: string;
 }
 
-// @public (undocumented)
+// @public
 export interface UploadOpts {
-    // (undocumented)
     conflictBehavior?: "fail" | "replace" | "rename";
-    // (undocumented)
     contentType?: string;
-    // (undocumented)
     eTag?: string | null;
 }
 

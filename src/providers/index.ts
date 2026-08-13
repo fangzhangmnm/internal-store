@@ -23,20 +23,27 @@ export interface OneDriveAuth {
   signOut(): Promise<void>;
   /** 拿 access token（silent）。 */
   getToken(): Promise<string>;
+  /** 是否已登录。 */
   isSignedIn(): boolean;
+  /** 当前活跃 account（MSAL 句柄）。 */
   getActiveAccount(): Account;
   /** 静默重试登录。 */
   retrySilentSignIn(): Promise<boolean>;
   /** auth 状态订阅（每个转变都回调）；返回退订函数。 */
   onAuthChanged(cb: (st: AuthState) => void): () => void;
+  /** 当前 auth 状态快照。 */
   getAuthState(): AuthState;
 }
 
 /** createOneDriveProvider 的配置（clientId 必传；msalUrl = vendored MSAL 脚本路径；scopes/authority 有家族默认）。 */
 export interface OneDriveConfig {
+  /** app 注册的 clientId（必传）。 */
   clientId?: string;
+  /** MSAL authority（有家族默认）。 */
   authority?: string;
+  /** OAuth scopes（有家族默认）。 */
   scopes?: string[];
+  /** vendored MSAL 脚本路径。 */
   msalUrl?: string | null;
 }
 /** config 驱动的完整 OneDrive CloudProvider（MSAL + Graph + 适配器）。**浏览器专属**；auth 流程只能真机验。

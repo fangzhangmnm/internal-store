@@ -33,18 +33,25 @@ interface MockNode {
   lastModifiedDateTime: string;
 }
 
-// 故障注入规格（test-only）。
+/** 故障注入规格（test-only）。 */
 export interface Fault {
+  /** 目标 op 名。 */
   op?: string;
+  /** 故障种类。 */
   kind: "error" | "lostResponse";
+  /** HTTP status 码。 */
   status?: number;
+  /** 错误消息。 */
   message?: string;
+  /** 生效次数。 */
   times?: number;
 }
 
-// createMockProvider 选项。
+/** createMockProvider 选项。 */
 export interface MockProviderOpts {
+  /** 起始时钟。 */
   now?: number;
+  /** op 调用钩子（收 op 名 + 参数）。 */
   hook?: (op: string, args: object) => Promise<void> | void;
 }
 

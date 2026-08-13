@@ -34,10 +34,15 @@
 // 不提供 codec = 加密不可用(packContainer/unpackContainer 抛),探测类(looksEncryptedContainer 等)不受影响。
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
+/** 宿主注入的 zip/7z codec（createStore config 注入；不提供 = 加密不可用）。 */
 export interface CryptoCodec {
+  /** 打包明文 zip（外层容器）。 */
   zipPack(entries: { path: string; data: Uint8Array | string }[]): Promise<Blob>;
+  /** 解开明文 zip（path 到字节的记录）。 */
   zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
+  /** 打包加密 .7z（AES-256 + 强 KDF + 加密头）。 */
   pack7z(entries: { path: string; data: Uint8Array | string }[], password: string): Promise<Uint8Array>;
+  /** 解开加密 .7z（也认老 WinZip-AES zip）。 */
   unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
 }
 let _codec: CryptoCodec | null = null;

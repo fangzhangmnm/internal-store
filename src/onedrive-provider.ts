@@ -10,29 +10,48 @@ import { deleteEmptyFolderVia } from "./folder-delete.ts";
 /** OneDrive Graph transport 契约（graphToCloudProvider 消费的最小面）。
  *  providers/index 传真 graph.ts 模块、测试传 graphFromProvider(Mock)——结构满足即可（自定义 transport 同理）。 */
 export interface GraphTransport {
+  /** 列举子夹的直属子项（原始 Graph item）。 */
   listChildren(subfolder?: string): Promise<RawGraphItem[]>;
+  /** 按路径取 item；缺 → null。 */
   getItemByPath(path: string): Promise<RawGraphItem | null>;
+  /** 下载文件内容。 */
   downloadItemBlob(itemId: string): Promise<Blob>;
+  /** byte-range 下载；offset=null 取末尾 length 字节。 */
   downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+  /** 上传到 approot 相对路径。 */
   uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null }): Promise<RawGraphItem | null>;
+  /** 硬删 item。 */
   deleteItem(itemId: string, eTag?: string | null): Promise<void>;
+  /** 移动到目标文件夹。 */
   moveItemToFolder(itemId: string, targetFolderId: string, opts?: { eTag?: string | null; newName?: string | null; conflictBehavior?: "replace" | "fail" | "rename" }): Promise<RawGraphItem>;
+  /** 改名。 */
   renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
+  /** 取 approot 文件夹 id。 */
   getApprootId(): Promise<string>;
+  /** 确保子夹存在，返其 id。 */
   ensureSubfolder(name: string): Promise<string>;
 }
 
 /** graph item 的原始形状（含 file/folder facet、path、downloadUrl 注解；transport 契约的条目面）。
  *  比 graph.ts 内部形状放宽（测试 mock 带 path）。 */
 export interface RawGraphItem {
+  /** 云端 item id。 */
   id: string;
+  /** 文件名。 */
   name?: string;
+  /** 字节大小。 */
   size?: number;
+  /** 版本 etag。 */
   eTag?: string;
+  /** 最后修改时间。 */
   lastModifiedDateTime?: string | number;
+  /** folder facet（Graph: file facet vs folder facet）；有 = 文件夹。 */
   folder?: unknown;
+  /** 云端路径。 */
   path?: string;
+  /** 下载 URL。 */
   downloadUrl?: string;
+  /** Graph 直传的下载 URL 注解。 */
   "@microsoft.graph.downloadUrl"?: string;
 }
 

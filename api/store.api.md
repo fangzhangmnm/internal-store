@@ -4,7 +4,7 @@
 
 ```ts
 
-// @public (undocumented)
+// @public
 export type Account = any;
 
 // @public
@@ -22,95 +22,63 @@ export interface AuthState {
 // @public
 export type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 
-// @public (undocumented)
+// @public
 export type Bytes = Uint8Array;
 
-// @public (undocumented)
+// @public
 export type ChangeCb = (changedIds: string[]) => void;
 
-// @public (undocumented)
+// @public
 export interface CloudItem {
     "@microsoft.graph.downloadUrl"?: string;
-    // (undocumented)
     contentType?: string;
-    // (undocumented)
     downloadUrl?: string;
-    // (undocumented)
     eTag: string;
-    // (undocumented)
     id: string;
-    // (undocumented)
     isFolder?: boolean;
-    // (undocumented)
     lastModifiedDateTime: string | number;
-    // (undocumented)
     name: string;
-    // (undocumented)
     path: string;
-    // (undocumented)
     size: number;
 }
 
-// @public (undocumented)
+// @public
 export interface CloudProvider {
-    // (undocumented)
     delete(id: string, eTag?: string): Promise<void>;
-    // (undocumented)
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
-    // (undocumented)
     download(id: string): Promise<Blob>;
-    // (undocumented)
     downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
-    // (undocumented)
     ensureFolder(path: string): Promise<string>;
-    // (undocumented)
     getApprootId(): Promise<string>;
-    // (undocumented)
     getItemByPath(path: string): Promise<CloudItem | null>;
-    // (undocumented)
     list(folder?: string): Promise<CloudItem[]>;
-    // (undocumented)
     move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
-    // (undocumented)
     rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
-    // (undocumented)
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
 
-// @public (undocumented)
+// @public
 export interface CloudSync {
-    // (undocumented)
     clearState(name: string): void;
-    // (undocumented)
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
-    // (undocumented)
     ensureFolder(path: string): Promise<void>;
-    // (undocumented)
     fetchMeta(name: string): Promise<FetchMetaResult | null>;
-    // (undocumented)
     getETag(name: string): string | null;
-    // (undocumented)
     isDirty(name: string): boolean;
-    // (undocumented)
     list(): Promise<CloudItem[]>;
-    // (undocumented)
     listAll(): Promise<{
         files: CloudItem[];
         folders: string[];
         complete: boolean;
     }>;
-    // (undocumented)
     listBackup(): Promise<CloudItem[]>;
     listFolder(path: string): Promise<{
         files: CloudItem[];
         folders: string[];
         complete: boolean;
     }>;
-    // (undocumented)
     listFolders(): Promise<string[]>;
-    // (undocumented)
     listTrash(): Promise<CloudItem[]>;
-    // (undocumented)
     pull(name: string): Promise<PullResult | null>;
     pullRange(name: string, offset: number, length: number): Promise<{
         bytes: Bytes;
@@ -120,14 +88,11 @@ export interface CloudSync {
         bytes: Bytes;
         item: CloudItem;
     } | null>;
-    // (undocumented)
     purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
-    // (undocumented)
     push(name: string, bytes: Bytes | Blob, opts?: {
         baseEtag?: string | null;
         encrypted?: boolean;
     }): Promise<PushResult>;
-    // (undocumented)
     rename(oldName: string, newName: string, opts?: {
         baseEtag?: string | null;
     }): Promise<unknown>;
@@ -135,14 +100,11 @@ export interface CloudSync {
         encrypted?: boolean;
         eTag?: string | null;
     }): Promise<unknown>;
-    // (undocumented)
     setDirty(name: string, dirty: boolean): void;
-    // (undocumented)
     setETag(name: string, etag: string | null): void;
     trash(name: string, deleteEventId: string, opts?: {
         baseEtag?: string | null;
     }): Promise<unknown>;
-    // (undocumented)
     weakOverride(name: string, bytes: Bytes, opts?: {
         encrypted?: boolean;
     }): Promise<WeakOverrideResult>;
@@ -167,43 +129,30 @@ export interface Collection {
     setItem(id: string, value: unknown): void;
 }
 
-// @public (undocumented)
+// @public
 export interface CollectionConfig {
-    // (undocumented)
     cloud: CloudSync;
-    // (undocumented)
     cloudless?: boolean;
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
-    // (undocumented)
     isOnline?: () => boolean;
     local?: Pick<LocalCache, "save" | "get" | "exists">;
-    // (undocumented)
     localWriteDelayMs?: number;
-    // (undocumented)
     manual?: boolean;
-    // (undocumented)
     name: string;
-    // (undocumented)
     now?: () => number;
-    // (undocumented)
     syncDelayMs?: number;
 }
 
 // @public
 export interface CollectionEntry {
-    // (undocumented)
     id: string;
-    // (undocumented)
     uat: number;
-    // (undocumented)
     value: unknown;
 }
 
-// @public (undocumented)
+// @public
 export interface CollectionInitItem {
-    // (undocumented)
     id: string;
-    // (undocumented)
     value: unknown;
 }
 
@@ -267,55 +216,38 @@ export function createStore(config: StoreConfig): {
     };
 };
 
-// @public (undocumented)
+// @public
 export interface CryptoCodec {
-    // (undocumented)
     pack7z(entries: {
         path: string;
         data: Uint8Array | string;
     }[], password: string): Promise<Uint8Array>;
-    // (undocumented)
     unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
-    // (undocumented)
     zipPack(entries: {
         path: string;
         data: Uint8Array | string;
     }[]): Promise<Blob>;
-    // (undocumented)
     zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
 }
 
-// @public (undocumented)
+// @public
 export interface DelResult {
-    // (undocumented)
     baseEtag?: string | null;
-    // (undocumented)
     deferred?: number;
-    // (undocumented)
     drained?: number;
-    // (undocumented)
     queuedCloudDelete?: boolean;
-    // (undocumented)
     reason?: string;
-    // (undocumented)
     status: string;
-    // (undocumented)
     trashed?: unknown;
-    // (undocumented)
     trashKey?: string | null;
-    // (undocumented)
     where?: string;
 }
 
-// @public (undocumented)
+// @public
 export interface EmptyTrashOpts {
-    // (undocumented)
     busy?: Busy;
-    // (undocumented)
     concurrency?: number;
-    // (undocumented)
     isOnline?: () => boolean;
-    // (undocumented)
     scope?: "local" | "cloud" | "both";
 }
 
@@ -324,47 +256,33 @@ export type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
 };
 
-// @public (undocumented)
+// @public
 export interface FetchMetaResult {
-    // (undocumented)
     etag: string;
-    // (undocumented)
     item: CloudItem;
-    // (undocumented)
     lastModified: string | number;
-    // (undocumented)
     size: number;
 }
 
-// @public (undocumented)
+// @public
 export interface FolderDeleteResult {
-    // (undocumented)
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
 }
 
-// @public (undocumented)
+// @public
 export interface FolderSnapshot {
-    // (undocumented)
     complete: boolean;
-    // (undocumented)
     folders: string[];
-    // (undocumented)
     items: Item[];
-    // (undocumented)
     path: string;
 }
 
-// @public (undocumented)
+// @public
 export interface FreshResult {
-    // (undocumented)
     backupName?: string;
-    // (undocumented)
     error?: unknown;
-    // (undocumented)
     reason?: string;
-    // (undocumented)
     source?: string;
-    // (undocumented)
     status?: string;
 }
 
@@ -373,29 +291,19 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider;
 
 // @public
 export interface GraphTransport {
-    // (undocumented)
     deleteItem(itemId: string, eTag?: string | null): Promise<void>;
-    // (undocumented)
     downloadItemBlob(itemId: string): Promise<Blob>;
-    // (undocumented)
     downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
-    // (undocumented)
     ensureSubfolder(name: string): Promise<string>;
-    // (undocumented)
     getApprootId(): Promise<string>;
-    // (undocumented)
     getItemByPath(path: string): Promise<RawGraphItem | null>;
-    // (undocumented)
     listChildren(subfolder?: string): Promise<RawGraphItem[]>;
-    // (undocumented)
     moveItemToFolder(itemId: string, targetFolderId: string, opts?: {
         eTag?: string | null;
         newName?: string | null;
         conflictBehavior?: "replace" | "fail" | "rename";
     }): Promise<RawGraphItem>;
-    // (undocumented)
     renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
-    // (undocumented)
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
@@ -416,41 +324,29 @@ export interface Item {
     syncState: SyncState;
 }
 
-// @public (undocumented)
+// @public
 export interface Kv {
-    // (undocumented)
     get(k: string): string | null;
-    // (undocumented)
     remove(k: string): void;
-    // (undocumented)
     set(k: string, v: string): void;
 }
 
 // @public
 export interface ListContext {
-    // (undocumented)
     online: boolean;
-    // (undocumented)
     signedIn: boolean;
 }
 
-// @public (undocumented)
+// @public
 export interface LocalCache {
     appKeys(): Promise<string[]>;
-    // (undocumented)
     backup(name: string): Promise<string>;
-    // (undocumented)
     exists(name: string): Promise<boolean>;
-    // (undocumented)
     get(name: string): Promise<Blob | null>;
-    // (undocumented)
     hardDelete(name: string): Promise<void>;
     listBackup?(): Promise<TrashEntry[]>;
-    // (undocumented)
     listTrash?(): Promise<TrashEntry[]>;
-    // (undocumented)
     purgeTrash?(trashKey: string): Promise<void>;
-    // (undocumented)
     restore(trashKey: string): Promise<string>;
     save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
     stat(name: string): Promise<{
@@ -464,26 +360,20 @@ export interface LocalCache {
     }>;
 }
 
-// @public (undocumented)
+// @public
 export interface MoveOpts {
-    // (undocumented)
     conflictBehavior?: "fail" | "replace" | "rename";
-    // (undocumented)
     eTag?: string | null;
-    // (undocumented)
     newName?: string | null;
 }
 
 // @public
 export interface OneDriveAuth {
-    // (undocumented)
     getActiveAccount(): Account;
-    // (undocumented)
     getAuthState(): AuthState;
     getToken(): Promise<string>;
     initAuth(): Promise<AuthState>;
     isAuthConfigured(): boolean;
-    // (undocumented)
     isSignedIn(): boolean;
     onAuthChanged(cb: (st: AuthState) => void): () => void;
     retrySilentSignIn(): Promise<boolean>;
@@ -493,45 +383,33 @@ export interface OneDriveAuth {
 
 // @public
 export interface OneDriveConfig {
-    // (undocumented)
     authority?: string;
-    // (undocumented)
     clientId?: string;
-    // (undocumented)
     msalUrl?: string | null;
-    // (undocumented)
     scopes?: string[];
 }
 
-// @public (undocumented)
+// @public
 export interface PullResult {
-    // (undocumented)
     blob: Blob;
-    // (undocumented)
     item: CloudItem | null;
-    // (undocumented)
     suggestedName: string;
 }
 
-// @public (undocumented)
+// @public
 export interface PurgeOpts {
-    // (undocumented)
     busy?: Busy;
-    // (undocumented)
     cloudItemId?: string | null;
-    // (undocumented)
     confirm?: (ctx: {
         title: string;
         body: string;
         danger?: boolean;
     }) => boolean | Promise<boolean>;
-    // (undocumented)
     trashKey?: string | null;
 }
 
-// @public (undocumented)
+// @public
 export interface PushResult {
-    // (undocumented)
     item: CloudItem | null;
 }
 
@@ -567,66 +445,43 @@ export interface RawFile {
 
 // @public
 export interface RawGraphItem {
-    // (undocumented)
     "@microsoft.graph.downloadUrl"?: string;
-    // (undocumented)
     downloadUrl?: string;
-    // (undocumented)
     eTag?: string;
-    // (undocumented)
     folder?: unknown;
-    // (undocumented)
     id: string;
-    // (undocumented)
     lastModifiedDateTime?: string | number;
-    // (undocumented)
     name?: string;
-    // (undocumented)
     path?: string;
-    // (undocumented)
     size?: number;
 }
 
 // @public
 export interface ReconcileResult {
-    // (undocumented)
     error?: unknown;
-    // (undocumented)
     pushed?: boolean;
-    // (undocumented)
     status: string;
 }
 
-// @public (undocumented)
+// @public
 export interface RefreshOpts {
-    // (undocumented)
     adopt?: AdoptFn;
-    // (undocumented)
     busy?: Busy;
-    // (undocumented)
     isOnline?: () => boolean;
-    // (undocumented)
     localDirty?: () => boolean;
-    // (undocumented)
     onReplaceStart?: () => void;
 }
 
-// @public (undocumented)
+// @public
 export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
-// @public (undocumented)
+// @public
 export interface RestoreOpts {
-    // (undocumented)
     busy?: Busy;
-    // (undocumented)
     cloudItemId?: string | null;
-    // (undocumented)
     encrypted?: boolean;
-    // (undocumented)
     fromCloud?: boolean;
-    // (undocumented)
     targetName?: string;
-    // (undocumented)
     trashKey?: string | null;
 }
 
@@ -667,7 +522,7 @@ export interface StoreConfig {
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }
 
-// @public (undocumented)
+// @public
 export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 // @public
@@ -695,45 +550,30 @@ export interface StoreUI {
 // @public
 export type SyncState = "cloud-only" | "synced" | "unpushed" | "newer-on-cloud" | "conflict" | "ghost" | "pendingGone" | "float" | "local-only";
 
-// @public (undocumented)
+// @public
 export interface TrashEntry {
-    // (undocumented)
     name: string;
-    // (undocumented)
     trashKey: string;
 }
 
-// @public (undocumented)
+// @public
 export interface TrashItem {
-    // (undocumented)
     cloudItemId: string | null;
-    // (undocumented)
     conflictLive: boolean;
-    // (undocumented)
     encrypted: boolean;
-    // (undocumented)
     localKey: string | null;
-    // (undocumented)
     name: string;
-    // (undocumented)
     side: "local" | "cloud" | "both";
-    // (undocumented)
     ts: string | null;
 }
 
-// @public (undocumented)
+// @public
 export interface TrashResult {
-    // (undocumented)
     cloud?: boolean;
-    // (undocumented)
     failed?: unknown[];
-    // (undocumented)
     local?: boolean;
-    // (undocumented)
     name?: string | null;
-    // (undocumented)
     purged?: number;
-    // (undocumented)
     status: string;
 }
 
@@ -752,24 +592,19 @@ export type TryMoveResult = {
     where: "local" | "cloud";
 };
 
-// @public (undocumented)
+// @public
 export interface UploadOpts {
-    // (undocumented)
     conflictBehavior?: "fail" | "replace" | "rename";
-    // (undocumented)
     contentType?: string;
-    // (undocumented)
     eTag?: string | null;
 }
 
-// @public (undocumented)
+// @public
 export type UploadReplayPolicy = "auto" | "ask" | "manual";
 
-// @public (undocumented)
+// @public
 export interface WeakOverrideResult {
-    // (undocumented)
     backedUp: string | null;
-    // (undocumented)
     item: CloudItem | null;
 }
 

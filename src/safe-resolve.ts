@@ -10,6 +10,7 @@ import { reportStoreError } from "./error-handling.ts";   // 全接但分级：�
 import type { CloudSync, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
+/** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
 export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
 export type SafePullResult =

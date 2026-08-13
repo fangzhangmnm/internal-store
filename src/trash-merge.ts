@@ -11,14 +11,22 @@
 
 import type { CloudItem, TrashEntry } from "./types.ts";
 
+/** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
 export interface TrashItem {
-  name: string;               // 展示/恢复原名（local 行 = 全路径身份；cloud-only 行 = basename，folder context 在云端 trash 已丢）
-  ts: string | null;          // yyyymmddhhmmss（展示/排序；解析不出 → null）
+  /** 展示/恢复原名（local 行 = 全路径身份；cloud-only 行 = basename，folder context 在云端 trash 已丢）。 */
+  name: string;
+  /** yyyymmddhhmmss（展示/排序；解析不出 → null）。 */
+  ts: string | null;
+  /** 痕迹所在端。 */
   side: "local" | "cloud" | "both";
-  encrypted: boolean;         // 云端字节是加密容器（从 stamped `.zip` 尾推断）→ restore 落 encFileName
-  conflictLive: boolean;      // local 行原名仍活在权威云端列表（离线删被 edit-wins 撤销）→ 两存，别丢
-  localKey: string | null;    // 本地 trashKey（本地腿 restore/purge）
-  cloudItemId: string | null; // 云端 item id（云端腿 restore/purge）
+  /** 云端字节是加密容器（从 stamped `.zip` 尾推断）→ restore 落 encFileName。 */
+  encrypted: boolean;
+  /** local 行原名仍活在权威云端列表（离线删被 edit-wins 撤销）→ 两存，别丢。 */
+  conflictLive: boolean;
+  /** 本地 trashKey（本地腿 restore/purge）。 */
+  localKey: string | null;
+  /** 云端 item id（云端腿 restore/purge）。 */
+  cloudItemId: string | null;
 }
 
 // stamped 名 = `<base> [<deleteEventId>]`（明文）或同名尾接 `.zip`（加密容器，encFileName 追加）。

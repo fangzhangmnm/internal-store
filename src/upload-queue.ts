@@ -12,6 +12,7 @@ import { reportStoreError } from "./error-handling.ts";   // 全接但分级：�
 import type { Kv, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
+/** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export type UploadReplayPolicy = "auto" | "ask" | "manual";
 
 export interface ReplayStatus { phase: "start" | "pushed" | "collision" | "done"; name?: string; done: number; total: number; }

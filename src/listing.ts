@@ -40,7 +40,12 @@ export interface Item {
 }
 
 /** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
-export interface ListContext { signedIn: boolean; online: boolean; }
+export interface ListContext {
+  /** 登录与否。 */
+  signedIn: boolean;
+  /** 在线与否。 */
+  online: boolean;
+}
 
 // 便利判定：**单一来源=syncState**，纯函数，**别在 Item 上加 cached/dirty 字段**（多一个字段=多一条下游越狱路径）。
 /** 有本地副本 → 离线可读。 */
@@ -94,9 +99,17 @@ export interface ListingCfg {
   pendingFolderDeletions?: () => string[];   // 离线排队待删的已上云空夹（全路径）→ **从 folders 减去**（回线 drain 前先隐藏，不再 list）
 }
 
-// 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。
-//   path 带回来给订阅方 sanity-check（emit 错乱把别夹推来时可断言丢弃）。folders = immediate 子夹全路径。
-export interface FolderSnapshot { path: string; items: Item[]; folders: string[]; complete: boolean; }
+/** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
+export interface FolderSnapshot {
+  /** 本夹路径（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。 */
+  path: string;
+  /** 直属文件项。 */
+  items: Item[];
+  /** immediate 子夹全路径。 */
+  folders: string[];
+  /** false → 该夹列举失败、不权威。 */
+  complete: boolean;
+}
 
 const toMs = (v: string | number | undefined): number | undefined => {
   if (v == null) return undefined;

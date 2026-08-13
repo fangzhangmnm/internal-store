@@ -14,9 +14,11 @@
 import type { Bytes } from "../substrate.ts";
 import type { LocalCache, TrashEntry } from "../types.ts";
 
-// 本地 trash 条目内部形状。
+/** 本地 trash 条目内部形状。 */
 export interface TrashItem {
+  /** 原名。 */
   name: string;
+  /** 字节内容。 */
   bytes: Bytes;
 }
 
