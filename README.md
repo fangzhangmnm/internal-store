@@ -17,7 +17,7 @@
 
 ## 门牌（exports）
 
-- `@internal/store` —— 唯一主入口（`createStore` 等；权威清单 = 构建产物 `dist/index.d.ts`）
+- `@internal/store` —— 唯一主入口（`createStore` 等；机器权威 = 构建产物 `dist/index.d.ts`，**人读的 API doc = `src/README.md`**，分工见 ADR-0023 条 7）
 - `@internal/store/testing` —— mock provider / mock local（消费方 app 测试用）
 - 其余一律无门牌，deep import 在 resolver 层拒绝。
 

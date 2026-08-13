@@ -12,4 +12,5 @@ fi
 bash scripts/build.sh
 node test/run.mjs
 pnpm pack
-echo "[release] internal-store-$ver.tgz 就绪（下一步：tgz 拷进消费方仓 vendor-pkgs/ 并 commit）"
+tgz="internal-store-$ver.tgz"
+echo "[release] $tgz 就绪：$(du -h "$tgz" | cut -f1)（下一步：tgz 拷进消费方仓 vendor-pkgs/ 并 commit）"
