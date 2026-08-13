@@ -33,7 +33,7 @@ async function toU8(x: Bytes | Blob | ArrayBuffer | string | null | undefined): 
 export interface MockLocal extends LocalCache {
   /** 内省：name → 字节。 */
   _items: Map<string, Bytes>;
-  /** 内省：trashKey → { name, bytes }。 */
+  /** 内省：trashKey → TrashItem（name + bytes）。 */
   _trash: Map<string, TrashItem>;
 }
 

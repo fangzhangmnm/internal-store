@@ -26,6 +26,7 @@
     "release": "bash scripts/release.sh"
   },
   "devDependencies": {
+    "@microsoft/api-extractor": "^7.58.12",
     "typescript": "5.7.3"
   }
 }

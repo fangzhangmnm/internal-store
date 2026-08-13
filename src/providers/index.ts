@@ -18,15 +18,16 @@ interface OneDriveConfig {
 }
 /** config 驱动的完整 OneDrive CloudProvider（MSAL + Graph + 适配器）。**浏览器专属**；auth 流程只能真机验。
  *
- *  用法（app 传的就这些：clientId + 浏览器相关 msalUrl）：
- *  ```ts
+ * 用法（app 传的就这些：clientId + 浏览器相关 msalUrl）：
+ * ```ts
  *  const { provider, auth } = createOneDriveProvider({
  *    clientId: "....",                                  // 必传
  *    msalUrl: "./vendor/msal/msal-browser.min.js",      // vendored 脚本
  *    scopes?, authority?,                               // 有家族默认
  *  });
  *  await auth.initAuth(); if (auth.isSignedIn()) { ...store 用 provider... }
- *  ``` */
+ * ```
+ */
 export function createOneDriveProvider(config: OneDriveConfig = {}) {
   configureOneDriveAuth(config);                  // { clientId, scopes?, authority?, msalUrl? }
   return {

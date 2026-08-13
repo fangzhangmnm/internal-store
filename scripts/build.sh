@@ -10,3 +10,7 @@ echo "[build] done: $(find dist -name '*.js' | wc -l) js / $(find dist -name '*.
 js_total=$(find dist -name '*.js' -exec du -cb {} + | tail -1 | cut -f1)
 echo "[体重] dist js 合计 $((js_total / 1024)) KB；最胖3件："
 find dist -name '*.js' -exec du -b {} + | sort -rn | head -3 | awk '{printf "  %5.1f KB  %s\n", $1/1024, $2}'
+# 户口刷新（api-extractor --local：公共面变了就重写 api/*.api.md，git diff 即审核面）
+npx api-extractor run --local -c api-extractor.json
+npx api-extractor run --local -c api-extractor-testing.json
+echo "[户口] api/store.api.md + api/store-testing.api.md 已刷新"
