@@ -1,0 +1,31 @@
+{
+  "name": "@internal/store",
+  "version": "0.0.0",
+  "description": "PWA 家族云同步 store 引擎（离线优先 / 处处 If-Match / 删除=.trash / 冲突必 surface / dirty 永不驱逐）",
+  "type": "module",
+  "license": "UNLICENSED",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bash scripts/build.sh",
+    "test": "node test/run.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "release": "bash scripts/release.sh"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

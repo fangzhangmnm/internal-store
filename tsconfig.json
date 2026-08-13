@@ -1,0 +1,21 @@
+{
+  // @internal/store 构建配置——与 WebPaint 家规对齐（strict + verbatimModuleSyntax + .ts 扩展名 import），
+  // 差异：本仓 tsc 是**发射器**（dist/ = .js + .d.ts），不是纯类型检查。
+  // rewriteRelativeImportExtensions（TS 5.7）：源里 "./x.ts" 发射成 "./x.js" —— node 直跑源、消费方吃 dist 两不误。
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "declaration": true,
+    "outDir": "dist",
+    "skipLibCheck": true,
+    "types": [],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts"]
+}

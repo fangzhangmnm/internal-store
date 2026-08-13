@@ -1,0 +1,6 @@
+journal/
+journals/
+.claude/
+node_modules/
+dist/
+*.tgz
