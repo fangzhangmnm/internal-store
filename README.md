@@ -3,11 +3,11 @@
 > 一个内容无关、安全的云同步存储库。你的 app 只跟**一个入口**打交道，碰不到底层。
 > 行为以本文为准（本文 = 这份引擎的 SSoT）。标 ⚠TODO 的是已定、待实现。
 >
-> **复用规则**：本引擎在各 app 间**互相拷代码**（没有 canonical 中央仓，别去找/改 MyPWAPatterns）。本 README.md 随引擎一起拷，是唯一权威。
+> **复用规则（2026-08-13 包化，取代旧「互拷」制）**：本仓 = 引擎户口本体（@internal/store）；消费方 pin 版本化 tgz（见下节），不再互相拷代码。兄弟仓里的旧 baked copy 是待 cutover 的过渡态。
 
 ---
 
-## 0. 包与消费（@internal/store）
+## 包与消费（@internal/store）
 
 - 消费：库仓 `npm run release` 出 `internal-store-<ver>.tgz` → 拷进消费方仓 `vendor-pkgs/` **并 commit** → `"@internal/store": "file:./vendor-pkgs/internal-store-<ver>.tgz"`。升级=显式换 tgz。永不 workspace:* 跨仓、永不 git 依赖（自包含不变量：克隆任一 app 仓断网能构建）。
 - 门牌：`@internal/store`（主入口）+ `@internal/store/testing`（mock 替身）。其余 deep import resolver 层拒绝。
