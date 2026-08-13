@@ -2,7 +2,8 @@
 
 > as-of 2026-08-13 · version 0.0.0（第一版未发：等人类过目真实 exports）
 > 种子 = WebPaint `src/store/` @ `01ad115`（溯源见 `src/FORK-BASE.md`）。
-> 引擎文档本体随源走：`src/README.md`（API SSoT）· `src/CONTEXT.md`（术语）· `src/DATA SAFETY GUIDELINE.md`（红线）。
+> **人类程序员从这份开始：`src/README.md`**（怎么用 + 例子 + 铁律，API SSoT，随 tgz 出货）
+> 其余随源文档：`src/CONTEXT.md`（术语）· `src/DATA SAFETY GUIDELINE.md`（红线）· `dist/index.d.ts`（机器参考，人机分工见 ADR-0023 条 7）。
 
 ## 定位
 
@@ -20,6 +21,12 @@
 - `@internal/store` —— 唯一主入口（`createStore` 等；机器权威 = 构建产物 `dist/index.d.ts`，**人读的 API doc = `src/README.md`**，分工见 ADR-0023 条 7）
 - `@internal/store/testing` —— mock provider / mock local（消费方 app 测试用）
 - 其余一律无门牌，deep import 在 resolver 层拒绝。
+
+## 体重参考（2026-08-13 实测）
+
+- **进 app bundle：69 KB minified / 24 KB gzip**（`esbuild --bundle --minify dist/index.js`，消费方真实背重；tree-shake 后只会更轻）
+- tgz 运输重：271 KB（dist 80 件 + src 46 件随源参考 + 文档）
+- `build.sh` / `release.sh` 每次自动报重（dist js 合计+最胖 3 件 / tgz 尺寸），涨重看得见。
 
 ## 宿主注入契约（库内零 import 的另一面）
 

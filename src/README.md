@@ -12,7 +12,7 @@
 1. **禁止**直接碰 `localStorage`、`IndexedDB`、任何 cloud vendor（Microsoft Graph / MSAL / 裸 `fetch` 云端）。全部走本库。
 2. 本库**零内容格式知识**——你的文件是 `.png`/`.glb`/`.pdf`/`.txt` 都一样，对库只是**不透明 binary blob**。库永不解码你的内容。（唯一例外：库懂 **zip 这种通用容器**，见 §2 `isZip`——那是容器机制，不是内容知识。）
 3. **缺接口、库没实现你要的行为 → escalate to human 改库 API。绝不在 app 端绕过库自己实现。**
-4. **不要 deep import 库内部文件**。只从 `index.ts` 拿 `createStore` + 一个 provider。内部文件顶部有 WARNING，`scripts/build.sh` 的 deep-import lint 会挡（v415 起真的有这道 lint；在那之前这句只是约定）。
+4. **不要 deep import 库内部文件**。只从主入口拿 `createStore` + 一个 provider（测试替身走 `@internal/store/testing`）。包时代这不再是约定而是物理事实：`exports` 门牌让 deep import 在 resolver 层直接 resolve 不到。
 5. **API 难用是故意的**（§7）。觉得别扭、想绕——**停下 escalate**，别绕。
 6. 对本库的修改，重构，API修改前，需要阅读`DATA SAFETY GUIDELINE.md`
 
@@ -38,7 +38,7 @@
 ## 1. 唯一入口
 
 ```ts
-import { createStore, createOneDriveProvider } from "./store/index.ts";
+import { createStore, createOneDriveProvider } from "@internal/store";
 
 const { provider } = createOneDriveProvider({ clientId, msalUrl: "./vendor/msal/msal-browser.min.js" });
 
