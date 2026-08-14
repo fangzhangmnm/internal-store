@@ -26,9 +26,9 @@
 
 - [ ] ★ 过目关卡：真实 `dist/index.d.ts` + `pnpm pack --dry-run` 清单 + resolve 冒烟 → user 拍板残留与 exports → 才写 0.1.0 + tag + 建 gh public 仓。
 - [ ] license 字段现为 UNLICENSED——public 仓要不要挂正式 license，user 拍板。
-- [ ] WebPaint cutover（下一批）：删 `src/store/` → `file:./vendor-pkgs/*.tgz`；build lint 正则改 bare-specifier；tsconfig include 清理；重复测试收敛。
+- [x] WebPaint cutover：**完成（WebPaint v0.9.1，2026-08-14 已推 dev）**——src/store/ 删除、file:vendor-pkgs tgz、lint 改 bare-specifier、28 件重复测试随库走（961+297=1258 对账绿）；wp:auth-changed 由接缝 app-store.ts 派发。
 - [ ] JRP 副本收敛（分叉 32 文件 + JRP 独有 `settings.ts`，另案）。
-- [ ] Changesets / pull-package 脚本：等第一个真消费者接上再立。
+- [x] pull-package 脚本：**已立（2026-08-14）**——`scripts/pull-package.sh`（消费方仓根运行；只认已 tag 版本，gh release 正货优先；WebPaint 实测幂等 + 拒收未发版/拒在库仓跑）。Changesets 暂不引（单人单库，release.sh 够用）。
 
 ## 拍板落地记录（2026-08-13 过目第一轮后）
 

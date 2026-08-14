@@ -10,6 +10,7 @@
 ## 包与消费（@internal/store）
 
 - 消费：库仓 `npm run release` 出 `internal-store-<ver>.tgz` → 拷进消费方仓 `vendor-pkgs/` **并 commit** → `"@internal/store": "file:./vendor-pkgs/internal-store-<ver>.tgz"`。升级=显式换 tgz。永不 workspace:* 跨仓、永不 git 依赖（自包含不变量：克隆任一 app 仓断网能构建）。
+- **收货入口 = `scripts/pull-package.sh`**（2026-08-14 立，首个消费者 WebPaint cutover 后）：在**消费方仓根**跑 `bash "../20260813 internal-store/scripts/pull-package.sh" [版本]`——已发版 tgz（gh release 正货优先，离线 fallback 库仓根产物）落 vendor-pkgs/、package.json 指针换新、清旧 tgz、npm install。只认已 tag 版本；测试/commit 仍是宿主的活（脚本会打印清单）。
 - 门牌：`@internal/store`（主入口）+ `@internal/store/testing`（mock 替身）。其余 deep import resolver 层拒绝。
 - 宿主注入：MSAL（vendored 路径经 `configureOneDriveAuth({msalUrl})`）、加密 codec（`{zipPack,zipUnpack,pack7z,unpack7z}`，不注入=dormant，参考实现 `test/fixtures/`）、`StoreUI`（busy/resolveConflict/reportError/offlineEscape）。细节见下文各节。
 - 体重（2026-08-13 实测）：进 app bundle **69 KB min / 24 KB gzip**；tgz 271 KB。build/release 自动报重。
