@@ -92,22 +92,27 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
   const inflight = new Map<string, Promise<Uint8Array>>();   // `${name}:${i}` → 同分片去重（播放/预拉/pin 撞同片只拉一次）
   const activeSessions = new Set<string>();               // cap 清理绝不动在用会话的组
 
-  // ── staging 记账 ────────────────────────────────────────────────────────────────
+  // ── staging 记账（**全部 best-effort**：staging 是加速器不是正确性依赖——IDB 坏了/配额满，
+  //   会话照样直连云端流字节，promote 组装缺片直接重拉补）─────────────────────────────────
+  const sGet = async (k: string): Promise<Blob | null> => { try { return await staging.get(k); } catch (e) { reportStoreError(e, "log"); return null; } };
+  const sPut = async (k: string, b: Blob): Promise<void> => { try { await staging.put(k, b); } catch (e) { reportStoreError(e, "log"); } };
   async function readMeta(name: string): Promise<StagingMeta | null> {
     try {
-      const b = await staging.get(mKey(name));
+      const b = await sGet(mKey(name));
       if (!b) return null;
       const p = JSON.parse(await b.text()) as StagingMeta;
       return p?.v === 1 && typeof p.eTag === "string" && Array.isArray(p.got) ? p : null;
     } catch (e) { reportStoreError(e, "log"); return null; }
   }
   async function writeMeta(name: string, m: StagingMeta): Promise<void> {
-    await staging.put(mKey(name), new Blob([JSON.stringify(m)], { type: "application/json" }));
+    await sPut(mKey(name), new Blob([JSON.stringify(m)], { type: "application/json" }));
   }
   /** 清某 name 的整组 staging（meta + 全部分片）。 */
   async function purgeName(name: string): Promise<void> {
-    const prefix = `c:${name}:`;
-    for (const k of await staging.keys()) if (k === mKey(name) || k.startsWith(prefix)) await staging.del(k);
+    try {
+      const prefix = `c:${name}:`;
+      for (const k of await staging.keys()) if (k === mKey(name) || k.startsWith(prefix)) await staging.del(k);
+    } catch (e) { reportStoreError(e, "log"); }   // 清理 best-effort（staging 坏了不拦主流程）
   }
   // 全局 cap 兜底：估算占用（got.length×chunk），超限清 touched 最旧的整组（scratch FIFO；跳过在用会话）。
   async function enforceCap(): Promise<void> {
@@ -154,18 +159,16 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
       const existing = inflight.get(key);
       if (existing) return existing;
       const job = (async (): Promise<Uint8Array> => {
-        const cached = await staging.get(cKey(name, i));
+        const cached = await sGet(cKey(name, i));
         if (cached) return new Uint8Array(await cached.arrayBuffer());
         if (prio === "pin") await playbackIdle();          // 播放有活 → pin 分片不开工（分片粒度让路）
         const off = i * chunkSize;
         const len = Math.min(chunkSize, size - off);
         const bytes = await range(item, off, len);
         // tee：落 staging + 记账（失败只 log——staging 是加速器不是正确性依赖，read 仍返回字节）
-        try {
-          await staging.put(cKey(name, i), new Blob([bytes as BlobPart]));
-          if (!got.has(i)) { got.add(i); meta.got = [...got]; meta.touched = now(); await writeMeta(name, meta); }
-          void enforceCap();
-        } catch (e) { reportStoreError(e, "log"); }
+        await sPut(cKey(name, i), new Blob([bytes as BlobPart]));
+        if (!got.has(i)) { got.add(i); meta.got = [...got]; meta.touched = now(); await writeMeta(name, meta); }
+        void enforceCap();
         return bytes;
       })();
       inflight.set(key, job);
@@ -229,9 +232,8 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
         // 组装 → 落正式本地副本（adoptLocal 内：serialize 锁 + 已有副本/dirty 不覆盖 + markSynced，对齐 acquire）
         const parts: BlobPart[] = [];
         for (let i = 0; i < nChunks; i++) {
-          const c = await staging.get(cKey(name, i));
-          if (!c) throw new Error(`staging 分片缺失（${name}:${i}）`);   // 不该发生（上面刚补齐）；宁抛不落半截
-          parts.push(c);
+          const c = await sGet(cKey(name, i));
+          parts.push(c ?? new Blob([await pinChunk(i) as BlobPart]));   // staging 缺/坏 → 直接重拉这一片补上（正确性不依赖 staging）
         }
         const asmSize = parts.reduce((s, p) => s + (p as Blob).size, 0);
         if (asmSize !== size) { await purgeName(name); throw new Error(`staging 组装尺寸不符（${name}：${asmSize}≠${size}），已清重下`); }

@@ -128,6 +128,16 @@ export interface StoreConfig {
   cloudGoneGraceMs?: number;
   /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
   activeFileName?: () => string | null;
+  /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
+   *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
+   *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
+   *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
+  readOnlyFiles?: boolean;
+}
+
+/** files 面只读镜像（readOnlyFiles:true）下调用写路径 → 抛此错（app surface；这不是失败，是契约）。 */
+export class ReadOnlyFilesError extends Error {
+  constructor(op: string) { super(`只读镜像：files 面不可写（${op}）`); this.name = "ReadOnlyFilesError"; }
 }
 
 /** tryMove 结果式返回（不抛，UI 渲染 where 标签）。ok:true 时**仍可能有话要说**（别只看 ok 就报「已重命名（含云端）」）：
@@ -245,6 +255,8 @@ function localStorageKv(): KeyedKv {
  *  红线全在各深模块内 enforce；这里只接线 + 把 ui bundle 映射到各 flow 的回调。 */
 export function createStore(config: StoreConfig) {
   const { provider, ui, appId, databaseId = "defaultStore", kv: rawKv = localStorageKv(), validateAdopt, autoCacheOpenedFile = true } = config;
+  // A4 只读镜像：files 写路径统一门（读/离线副本面不走这道门）。
+  const roGuard = (op: string): void => { if (config.readOnlyFiles) throw new ReadOnlyFilesError(op); };
   if (!appId) throw new Error("createStore: appId 必填——同 origin 兄弟 PWA 隔离的红线（每个 app 建自己的 IDB 库）");
   // 深模块统一错误上报接上 ui.reportError（深模块 import reportStoreError 直接调，不必线穿 ui）。store 侧不 log。
   setStoreErrorReporter((err, level) => ui.reportError(err, level));
@@ -376,7 +388,7 @@ export function createStore(config: StoreConfig) {
 
   // ── folder-snapshots（A3，2026-08-15 user 批）：每夹「上次**完整**云帧」持久化 → 冷首帧即显 cloud-only 缺项。──
   //   schema v1（JSON 串落 folder-snapshots 分区，key=夹路径，""=根）：
-  //     { v:1, savedAt:ms, files:[{name,eTag,size,lastModified?ms}], folders:[全路径] }
+  //     { v:1, savedAt:ms, files:[{name,eTag,size,lastModified?ms,id?}], folders:[全路径] }
   //   纪律：① 只在现场云帧 complete:true 时覆盖写（partial 不落底）；② 只喂本地帧的 cloud-only 追加显示，
   //   **绝不喂 reconcile/gone 判定**（红线）；③ savedAt 仅显示/排障，不做任何内容决策（no-timestamps 红线）；
   //   ④ 快照不绑账号——同 app 换云账号时首帧可能短暂显示前账号的文件名，云端帧到达即纠偏+覆盖（家族单用户，已知局限）。
@@ -393,7 +405,7 @@ export function createStore(config: StoreConfig) {
   }
   function writeFolderSnapshot(folder: string, live: CloudFolderPrefetch): void {
     if (!local.putFolderSnapshot || !live.complete) return;
-    const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }));
+    const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), id: c.id }));   // id：将来 SW 网关按名解析 item 免 Graph 往返
     const folders = live.folders.filter((f) => !isHidden(f));
     // fire-and-forget：快照写失败只 log，绝不影响帧交付。
     void local.putFolderSnapshot(folder, JSON.stringify({ v: SNAP_V, savedAt: Date.now(), files, folders })).catch((e) => ui.reportError(e, "log"));
@@ -674,6 +686,7 @@ export function createStore(config: StoreConfig) {
     };
     return {
       async save(bytes, opts) {
+        roGuard("save");
         await migrationReady;
         if (!_createChecked) {                                   // mode="new" 首存护栏：撞名不覆盖（本地/在线云端任一占用即抛）
           _createChecked = true;
@@ -731,9 +744,10 @@ export function createStore(config: StoreConfig) {
         return pulled ? await seal.unsealForRead(name, pulled.blob) : null;   // range/streaming（按需取片）是 ⚠TODO 优化
       },
       pullIfClean(opts) { return fresh.refresh(name, { isOnline, ...opts }); },   // 事件驱动干净快进（clean→FF、dirty→no-op）；默认注入 store 的 isOnline（离线早退，不空跑 fetchMeta）
-      tryMove(to) { return tryMoveSF(name, to); },
-      async delete() { const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
+      tryMove(to) { roGuard("tryMove"); return tryMoveSF(name, to); },
+      async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
+        roGuard("reupload");
         return ui.busy("重新上传…", async () => {
           if (!(await local.exists(name))) return { status: "no-local" };
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
@@ -781,8 +795,8 @@ export function createStore(config: StoreConfig) {
       },
       offload() { return offloadMod.offload(name); },
       isEncrypted() { return encIsEncrypted(name); },
-      encrypt(opts) { return encEncrypt(name, opts?.isOnline ?? isOnline); },
-      decrypt(opts) { return encDecrypt(name, opts?.isOnline ?? isOnline); },
+      encrypt(opts) { roGuard("encrypt"); return encEncrypt(name, opts?.isOnline ?? isOnline); },
+      decrypt(opts) { roGuard("decrypt"); return encDecrypt(name, opts?.isOnline ?? isOnline); },
       verifyPassword(pw) { return encVerify(name, pw); },
     };
   }
@@ -890,11 +904,11 @@ export function createStore(config: StoreConfig) {
        *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
       usage: () => local.usage(),
       /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
-      ensureFolder: (path: string) => ensureFolderLocalFirst(path),
+      ensureFolder: (path: string) => { roGuard("ensureFolder"); return ensureFolderLocalFirst(path); },
       /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */
-      newFolder: singleFlight("新建文件夹", (path: string) => ui.busy("新建文件夹…", async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); })),   // 子夹出现在父夹 → 重画父夹
+      newFolder: singleFlight("新建文件夹", (path: string) => { roGuard("newFolder"); return ui.busy("新建文件夹…", async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); }); }),   // 子夹出现在父夹 → 重画父夹
       /** 删除**空**文件夹——「必须证实为空」库内强制（两端判空；非空/无法确认 → 抛错拒删）。 */
-      deleteFolder: singleFlight("删除文件夹", (path: string) => ui.busy("删除文件夹…", async (): Promise<void> => {
+      deleteFolder: singleFlight("删除文件夹", (path: string) => { roGuard("deleteFolder"); return ui.busy("删除文件夹…", async (): Promise<void> => {
         assertValidFileName(path, appId);                            // 路径护栏
         // 判空**两端都查**：本地有该夹下的文件（含 local-only/未上云）→ 拒删（否则删掉云端夹、本地文件成孤儿）。
         const prefix = `${path}/`;
@@ -910,7 +924,7 @@ export function createStore(config: StoreConfig) {
         if (r.status === "non-empty") throw new Error(`文件夹非空，拒绝删除：${path}`);
         if (r.status === "list-failed") throw new Error(`无法确认文件夹是否为空（列举失败），已拒绝删除：${path}`);
         notifyFolderOf(path);                                        // deleted / already-gone：子夹从父夹消失 → 重画父夹
-      })),
+      }); }),
       /** 离线队列统一重放（app 在 focus/visibility/online/boot 调）：新文件夹补建 → 新上传补推 → 删文件 → 删文件夹（按序）。 */
       drainOfflineQueue,
       //   conflictLive（离线删被 edit-wins 撤销→本地 trash 有、云端还活着）：仅当有本地 trash 项且能拿到**权威** live 列表时才判（离线/partial→空集→不误报）。
@@ -919,13 +933,13 @@ export function createStore(config: StoreConfig) {
       /** 备份箱列表（同 listTrash 的两端聚合；备份箱是冲突 loser 留底，无 conflictLive 语义）。 */
       listBackup: () => aggregateBox("backup"),
       /** 从回收站/备份箱恢复一项。 */
-      restoreTrash: singleFlight("恢复", trashMod.restore),
+      restoreTrash: singleFlight("恢复", (...a: Parameters<typeof trashMod.restore>) => { roGuard("restoreTrash"); return trashMod.restore(...a); }),
       /** 彻底删除回收站/备份箱一项。 */
-      purgeTrash: singleFlight("彻底删除", trashMod.purge),
+      purgeTrash: singleFlight("彻底删除", (...a: Parameters<typeof trashMod.purge>) => { roGuard("purgeTrash"); return trashMod.purge(...a); }),
       /** 清空回收站。 */
-      emptyTrash: singleFlight("清空回收站", trashMod.emptyTrash),
+      emptyTrash: singleFlight("清空回收站", (...a: Parameters<typeof trashMod.emptyTrash>) => { roGuard("emptyTrash"); return trashMod.emptyTrash(...a); }),
       /** 清空备份箱。 */
-      emptyBackup: singleFlight("清空备份箱", trashMod.emptyBackup),
+      emptyBackup: singleFlight("清空备份箱", (...a: Parameters<typeof trashMod.emptyBackup>) => { roGuard("emptyBackup"); return trashMod.emptyBackup(...a); }),
       //   日常开夹的惰性收敛已在 watchFolder 内走 reconcileFolder（看到夹才收敛，同一 converge SSOT）。
       /** **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），
        *  绝不自动/轮询——全树 listAll 是重活。 */

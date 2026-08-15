@@ -107,7 +107,8 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 - **新建文件 = 对一个新 name `file(name,{mode:"new"}).save`**（没有单独的 create）。云端已有同名但内容不同 → 抛 collision，绝不覆盖。
 - **delete vs offload**：offload 只丢「可重取的 shadow」、云端不动；delete 是**销毁**。delete 内部按原子态分流——本地若是 offloadable shadow → 硬删本地（云端 .trash 已救着，不留双份）；本地若是唯一副本（dirty/local-only）→ 先变 local-only 再进**本地** .trash（未推字节可恢复，绝不硬删）。云端副本进**云端** .trash。两套 trash 各管各、不跨网（ADR-0015）。
 - **`open` 自动把字节缓存本地**（离线可读，你不碰 IndexedDB）。
-- **`autoCacheOpenedFile:false`（流式消费 app：3D 模型/电台类）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。⚠TODO **range / streaming 优化**：大媒体按需取片（`provider.downloadRange` 已具备）、不整块下载——`open` 路由 cache-or-remote 取片，形状以后慢慢设计。
+- **`autoCacheOpenedFile:false`（流式消费 app：3D 模型/电台类）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。
+- **`file.openStream()` 流式面（A1/A2，2026-08-15）**：大媒体按需取片——本地有副本走本地切片；无则开**分片下载会话**（2MiB 分片，按 eTag 钉版，拉到即落 `staging/` 暂存区 = tee）。句柄 `{ totalSize, read(off,len), prefetch(off,len), keep(), close() }`：`read`=播放优先级；`prefetch`=低优先（下一曲头部预拉）；`keep()`=升格正式本地副本（≡ keepOffline：**复用已流分片只补缺口，先播后 pin 不重下**）。调度全局一域：播放分片在飞时 **pin 严格串行且让路**（不 spike）。at-rest 字节面（加密件给密文；流式消费请只用于明文文件）。staging 是加速器不是正确性依赖（受全局 cap FIFO 兜底、坏了照样直连流）。
 - **列举唯一面 = `store.files.watchFolder(folder, cb)`**（订阅一夹→本地帧+云端帧同一 cb；无 `list`/`listAll`/`localKeys` 公开面）。snapshot `{ path, items, folders, complete, stale? }`，`complete:false` **别据此删缓存**。
 - **冷首帧快照（A3，2026-08-15）**：每夹「上次完整云帧」持久化在 `folder-snapshots/` 分区 → 本地帧自动追加**上次所见的 cloud-only 缺项**（首帧不再近空、无需等网络）。掺了快照的帧带 `stale:true`（可能过时，云端帧到达即纠偏）。纪律：快照**只作显示**——绝不喂 reconcile/cloud-gone 判定、绝不改写本地项的 badge；登出视角不掺快照。同批修复：一次订阅只打**一遍** Graph（此前 reconcile+listing 各拉一次）。
 - `store.files.reconcileAll({activeFileName?})` — **全库** cloud-gone 收敛（仅用户显式指令）：曾 synced 的 clean 孤儿 → **去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈；`activeFileName` 跳过当前打开的 doc）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT）。dirty/从没同步/partial-or-空列表 一律不动。详见 CONTEXT.md。
@@ -115,14 +116,15 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 ### 离线副本 —— keepOffline / offload（无 LRU、无 pin）
 
 ```ts
-await f.keepOffline();    // 留一份离线副本（未缓存则下载）。注：open 已含下载子过程，故名 keepOffline 非 download
+await f.keepOffline({ onProgress });   // 留一份离线副本（未缓存则**分片会话**下载：复用 staging 已流分片只补缺口 + 字节进度回调）
 await f.offload();        // 移除本地副本（只删本地，云端不动）。**非法时抛错**，见下
 await f.isKeptOffline();  // 本地有副本？（= 已留作离线；无 localKeys 批量面——离线可读性经 watchFolder 的 item.syncState 判）
 ```
 - **心智模型**：有本地副本 = "kept offline"。无 LRU、无 pin、无 unpin、无 force——只有「留一份」(`keepOffline`) 和「移除」(`offload`)；中间「可被自动驱逐的 cache」态**不存在**（开了 / 下载了就留着，直到显式 `offload`）。
 - **offload 只对 shadow 合法**：本地副本是「云端某完整版的可重取镜像」时，offload = hardDelete（**不进本地 trash**，可重下）。合法 = `clean ∧ 在线 ∧ 已登录 ∧ 曾 synced ∧ 云端仍有完整副本(size>0)`。cloudMoved（云端被别人推了新版）**仍合法**（clean 本地下次 open 会快进）。
 - **非法 offload = 内部错误（banner），不是软保留**：本地是**世界唯一副本**（local-only / 未上传 / dirty / forked / cloud-gone / 离线）时，它不是谁的 shadow，offload **不适用** → 抛 `OffloadIllegalError`，经 ui.reportError 出 banner。UX 不该暴露非法 offload；要清掉唯一副本走的是 **delete** 语义，不是 offload。
-- `autoCacheOpenedFile:true`（默认，见 §1）下 `open` 即自动留本地；`autoCacheOpenedFile:false` 流式消费则 `open` 过路不留（整份拉云不落本地；range 取片是 ⚠TODO 优化），只有显式 `keepOffline` 才落地。
+- `autoCacheOpenedFile:true`（默认，见 §1）下 `open` 即自动留本地；`autoCacheOpenedFile:false` 流式消费则 `open` 过路不留（整份拉云不落本地；按需取片走 `openStream()`），只有显式 `keepOffline` / `openStream().keep()` 才落地。
+- **`readOnlyFiles:true` 只读镜像变体（A4，ADR-0022 预排）**：BR 类消费者（内容由用户经 OneDrive 客户端投放，app 永不写）。files 一切写路径（save/tryMove/delete/reupload/encrypt/decrypt、建删夹、回收站恢复/清空）抛 `ReadOnlyFilesError`；**collections 照写**（阅读/播放位置）；读与离线副本面（open/openStream/keepOffline/offload/watchFolder/reconcileAll）照常。
 
 ### 回收站 / 备份
 

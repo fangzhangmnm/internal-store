@@ -116,7 +116,7 @@ export interface FolderSnapshot {
 
 // ── listFolder 的可选预取/快照注入（A3）─────────────────────────────────────────────
 /** 现场云帧预取（修双拉）：调用方已拉好 cloud.listFolder 结果 → 传进来复用，undefined=listing 自取，null=云不可达。 */
-export interface CloudFolderPrefetch { files: { name: string; eTag: string; size: number; lastModifiedDateTime?: string | number }[]; folders: string[]; complete: boolean }
+export interface CloudFolderPrefetch { files: { name: string; eTag: string; size: number; lastModifiedDateTime?: string | number; id?: string }[]; folders: string[]; complete: boolean }
 /** 「上次云帧」快照（folder-snapshots 分区解析后）：**只用于给本地帧追加 cloud-only 缺项**，
  *  绝不参与本地项的 badge 分类（否则保存后旧 eTag 会闪假 newer-on-cloud）、绝不喂 reconcile（红线）。 */
 export interface StaleCloudView { files: { name: string; size?: number; lastModified?: number }[]; folders: string[] }
