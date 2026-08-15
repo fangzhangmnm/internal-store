@@ -29,6 +29,7 @@ export function createLocalCache(dbName: string): LocalCache {
   const files = bs.partition("files");
   const trashP = bs.partition("trash");
   const backupP = bs.partition("backup");
+  const snapsP = bs.partition("folder-snapshots");   // 每夹「上次云帧」快照（A3）；逻辑分区=同 object store 键前缀，零 IDB schema 变更
   return {
     // 覆盖写。bytes 归一化成 Blob(契约落 Blob)。
     // ⚠ 曾把 hint.peek 一并写进记录的 .peek 字段——**零 reader**（活的图库缩略图走密文 getPeek），
@@ -77,6 +78,9 @@ export function createLocalCache(dbName: string): LocalCache {
     async listBackup(): Promise<TrashEntry[]> {
       return (await backupP.keys()).map((inner) => ({ trashKey: `backup/${inner}`, name: stripStamp(inner) }));
     },
+    // folder-snapshots：key=夹路径（""=根 → IDB 全键 "folder-snapshots/"），值=JSON 串装 Blob（store 自产自销，本层不解释）。
+    async getFolderSnapshot(folder: string) { const r = await snapsP.get(folder); return r ? await r.blob.text() : null; },
+    async putFolderSnapshot(folder: string, json: string) { await snapsP.put(folder, { blob: new Blob([json], { type: "application/json" }), updatedAt: Date.now() }); },
   };
 }
 

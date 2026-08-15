@@ -18,9 +18,9 @@ import { createTrash } from "./trash.ts";
 import { createOffload } from "./offload.ts";
 import { createReconcile } from "./reconcile.ts";
 import { createPendingGone } from "./pending-gone.ts";
-import { assertValidFileName, assertValidCollectionName } from "./is-hidden.ts";
+import { assertValidFileName, assertValidCollectionName, isHidden } from "./is-hidden.ts";
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./collection.ts";
-import { createListing, type ListContext, type FolderSnapshot } from "./listing.ts";
+import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView } from "./listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError } from "./cloud-sync.ts";
@@ -326,6 +326,31 @@ export function createStore(config: StoreConfig) {
   const LOCAL_CTX: ListContext = { signedIn: false, online: false };   // 强制本地视角（首帧/写后重画：云不可达 → 纯本地 union）
   const folderWatchers = new Map<string, Set<(s: FolderSnapshot) => void>>();
 
+  // ── folder-snapshots（A3，2026-08-15 user 批）：每夹「上次**完整**云帧」持久化 → 冷首帧即显 cloud-only 缺项。──
+  //   schema v1（JSON 串落 folder-snapshots 分区，key=夹路径，""=根）：
+  //     { v:1, savedAt:ms, files:[{name,eTag,size,lastModified?ms}], folders:[全路径] }
+  //   纪律：① 只在现场云帧 complete:true 时覆盖写（partial 不落底）；② 只喂本地帧的 cloud-only 追加显示，
+  //   **绝不喂 reconcile/gone 判定**（红线）；③ savedAt 仅显示/排障，不做任何内容决策（no-timestamps 红线）；
+  //   ④ 快照不绑账号——同 app 换云账号时首帧可能短暂显示前账号的文件名，云端帧到达即纠偏+覆盖（家族单用户，已知局限）。
+  const SNAP_V = 1;
+  async function readFolderSnapshot(folder: string): Promise<StaleCloudView | null> {
+    if (!local.getFolderSnapshot) return null;   // 注入的 LocalCache 不支持 → 特性静默关闭
+    try {
+      const raw = await local.getFolderSnapshot(folder);
+      if (!raw) return null;
+      const p = JSON.parse(raw) as { v?: number; files?: unknown; folders?: unknown };
+      if (p?.v !== SNAP_V || !Array.isArray(p.files) || !Array.isArray(p.folders)) return null;   // 版本/形状不认 → 当没有（下次完整云帧重写）
+      return p as unknown as StaleCloudView;
+    } catch (e) { ui.reportError(e, "log"); return null; }
+  }
+  function writeFolderSnapshot(folder: string, live: CloudFolderPrefetch): void {
+    if (!local.putFolderSnapshot || !live.complete) return;
+    const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }));
+    const folders = live.folders.filter((f) => !isHidden(f));
+    // fire-and-forget：快照写失败只 log，绝不影响帧交付。
+    void local.putFolderSnapshot(folder, JSON.stringify({ v: SNAP_V, savedAt: Date.now(), files, folders })).catch((e) => ui.reportError(e, "log"));
+  }
+
   // 推一帧给某夹的所有 watcher。**sanity-check**：snapshot.path 必须 === 订阅 path——orchestration 错乱把别夹推来就丢弃（红线：绝不把别夹内容塞给这个 watcher）。
   function emitFolder(folder: string, snap: FolderSnapshot): void {
     if (snap.path !== folder) { ui.reportError(new Error(`watchFolder 路径错乱：订阅「${folder}」收到「${snap.path}」，已丢弃`)); return; }
@@ -333,15 +358,25 @@ export function createStore(config: StoreConfig) {
     if (!set) return;
     for (const cb of set) { try { cb(snap); } catch (e) { ui.reportError(e); } }
   }
+  // 本地帧 = 纯本地 union + stale 快照追加（signedIn 才掺快照；登出 → 纯本地，别显示云端名单）。
+  //   stale 只补 cloud-only 缺项，本地项 badge 仍塌到本地视角（listing 内保证）——写后重画也走这，cloud-only 项不闪没。
+  async function localFrameSnap(folder: string): Promise<FolderSnapshot> {
+    const stale = signedIn() ? await readFolderSnapshot(folder) : null;
+    return listing.listFolder(folder, LOCAL_CTX, stale ? { staleCloud: stale } : undefined);
+  }
   async function pushLocalFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
-    try { emitFolder(folder, await listing.listFolder(folder, LOCAL_CTX)); } catch (e) { ui.reportError(e); }
+    try { emitFolder(folder, await localFrameSnap(folder)); } catch (e) { ui.reportError(e); }
   }
   async function pushRemoteFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
     void ensureScaffold();   // store 自管 scaffold 的首次云成功点：开库时 auth 未就绪跳过的，这里（app 订阅、auth 就绪后）补建
-    await reconcileMod.reconcileFolder(folder).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹
-    try { emitFolder(folder, await listing.listFolder(folder, ctxNow())); } catch (e) { ui.reportError(e); }
+    // **单次**现场云列举，reconcile 与 listing 共享（A3 修双拉：一次订阅只打一遍 Graph）。失败 → null（云不可达，各自优雅降级）。
+    const ctx = ctxNow();
+    const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { ui.reportError(e, "log"); return null; }) : null;
+    await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
+    try { emitFolder(folder, await listing.listFolder(folder, ctx, { cloudPrefetched: live })); } catch (e) { ui.reportError(e); }
+    if (live?.complete) writeFolderSnapshot(folder, live);   // 完整云帧 → 覆盖快照（下次冷首帧的底）
   }
   // 写路径变动 → 通知受影响夹（name 的父夹）的 watcher 即时重画本地帧。
   function notifyFolderOf(name: string): void {
@@ -354,7 +389,7 @@ export function createStore(config: StoreConfig) {
     set.add(cb);
     void (async () => {
       await migrationReady;
-      try { cb(await listing.listFolder(folder, LOCAL_CTX)); } catch (e) { ui.reportError(e); }   // ① 本地帧（该新订阅者）
+      try { cb(await localFrameSnap(folder)); } catch (e) { ui.reportError(e); }   // ① 本地帧（该新订阅者；含 stale 快照追加 → 冷首帧即显云端缺项）
       await pushRemoteFrame(folder);                                                              // ② 云端帧（全体 watcher）
     })();
     return (): void => { const s = folderWatchers.get(folder); if (s) { s.delete(cb); if (!s.size) folderWatchers.delete(folder); } };

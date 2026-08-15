@@ -37,12 +37,15 @@ export interface MockLocal extends LocalCache {
   _items: Map<string, Bytes>;
   /** 内省：trashKey → TrashItem（name + bytes）。 */
   _trash: Map<string, TrashItem>;
+  /** 内省：folder → 快照 JSON 串（folder-snapshots 分区替身）。 */
+  _snapshots: Map<string, string>;
 }
 
 /** MockLocal 工厂：内存模拟本地持久层（IDB），实现 store.local 契约（测 Store 编排用）。 */
 export function createMockLocal(): MockLocal {
   const items = new Map<string, Bytes>();           // name → Uint8Array
   const trash = new Map<string, TrashItem>();        // trashKey → { name, bytes }
+  const snapshots = new Map<string, string>();       // folder → 快照 JSON 串
   let bk = 0;
   // 注：本测试替身内部以 Uint8Array 存取（测试断言 .length / u8txt），而真 LocalCache
   // 契约「内部落 Blob、get 出 Blob」。二者在「字节 vs Blob」上有意背离 —— 测试只关心字节内容。
@@ -97,11 +100,15 @@ export function createMockLocal(): MockLocal {
     async listBackup(): Promise<TrashEntry[]> {
       return [...items.keys()].filter((k) => k.startsWith(".backup-local/")).map((k) => ({ trashKey: k, name: k.replace(/^\.backup-local\/\d+:/, "") }));
     },
+    // folder-snapshots 分区替身（A3）：内存 map，契约同真实现（JSON 串，store 自产自销）。
+    async getFolderSnapshot(folder: string) { return snapshots.get(folder) ?? null; },
+    async putFolderSnapshot(folder: string, json: string) { snapshots.set(folder, json); },
   };
   return {
     ...adapter,
     // 测试辅助
     _items: items,
     _trash: trash,
+    _snapshots: snapshots,
   };
 }

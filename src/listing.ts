@@ -109,9 +109,19 @@ export interface FolderSnapshot {
   folders: string[];
   /** false → 该夹列举失败、不权威。 */
   complete: boolean;
+  /** true → 本帧掺了 folder-snapshots 的「上次云端所见」（A3 冷首帧）：cloud-only 项可能已过时，
+   *  等云端帧纠偏。stale 帧恒 complete:false（不权威，别据此做任何删/收敛判断）。 */
+  stale?: true;
 }
 
-const toMs = (v: string | number | undefined): number | undefined => {
+// ── listFolder 的可选预取/快照注入（A3）─────────────────────────────────────────────
+/** 现场云帧预取（修双拉）：调用方已拉好 cloud.listFolder 结果 → 传进来复用，undefined=listing 自取，null=云不可达。 */
+export interface CloudFolderPrefetch { files: { name: string; eTag: string; size: number; lastModifiedDateTime?: string | number }[]; folders: string[]; complete: boolean }
+/** 「上次云帧」快照（folder-snapshots 分区解析后）：**只用于给本地帧追加 cloud-only 缺项**，
+ *  绝不参与本地项的 badge 分类（否则保存后旧 eTag 会闪假 newer-on-cloud）、绝不喂 reconcile（红线）。 */
+export interface StaleCloudView { files: { name: string; size?: number; lastModified?: number }[]; folders: string[] }
+
+export const toMs = (v: string | number | undefined): number | undefined => {
   if (v == null) return undefined;
   if (typeof v === "number") return v;
   const t = Date.parse(v);
@@ -155,8 +165,12 @@ export function createListing(cfg: ListingCfg) {
   // 单夹列举（**非递归**）——watchFolder 的每次快照。**per-folder 权威**：只列该夹直属子项、只判该夹内 path。
   //   guardrail（红线）：绝不据本夹的 listing 判**别夹**文件 cloud-gone——因为压根不看别夹的 local key（下面 startsWith(prefix) 门）。
   //   absenceAuthoritative = 这一夹 list() 没抛错（cloudRes.complete）；离线/登出 → cloudReachable=false → 塌到本地视角。
-  async function listFolder(folder: string, ctx: ListContext): Promise<FolderSnapshot> {
-    const cloudRes = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { reportStoreError(e, "log"); return null; }) : null;
+  //   opts（A3）：cloudPrefetched=复用调用方已拉的现场云帧（修「一次订阅打两遍 Graph」）；
+  //   staleCloud=folder-snapshots 的上次云帧——**只追加 cloud-only 缺项 + 子夹**，不碰既有项的分类。
+  async function listFolder(folder: string, ctx: ListContext, opts?: { cloudPrefetched?: CloudFolderPrefetch | null; staleCloud?: StaleCloudView | null }): Promise<FolderSnapshot> {
+    const cloudRes = opts?.cloudPrefetched !== undefined
+      ? opts.cloudPrefetched
+      : (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { reportStoreError(e, "log"); return null; }) : null;
     const cloudReachable = cloudRes != null;
     const absenceAuthoritative = cloudReachable && cloudRes!.complete === true;
 
@@ -185,15 +199,31 @@ export function createListing(cfg: ListingCfg) {
       const seg = rest.includes("/") ? rest.slice(0, rest.indexOf("/")) : rest;
       if (seg && !isHidden(seg)) subfolders.add(prefix + seg);
     }
-    // **post-union 减去**离线排队待删的空夹（否则 remote frame 每次把它从云端 folders 闪回）。
-    for (const d of pendingFolderDeletions?.() ?? []) subfolders.delete(d);
-
     const paths = new Set<string>([...cloudMap.keys(), ...localDirect]);
     const localStats = await statLocal(localDirect);
     const items: Item[] = [];
     for (const path of paths) items.push(classifyPath(path, cloudMap.get(path), localDirect.has(path), cloudReachable, absenceAuthoritative, localStats.get(path)));
 
-    return { path: folder, items, folders: [...subfolders], complete: absenceAuthoritative };
+    // ── stale 快照追加（A3，本地帧专用）：只补「两轴都没见过」的 cloud-only 缺项 + 子夹。────────
+    //   既有项（本地有/现场云帧有）**绝不被 stale 数据改写分类**——保存后快照里的旧 eTag 若参与分类，
+    //   会闪假 newer-on-cloud badge。追加项 badge 恒 cloud-only（上次所见如此；过时由云端帧纠偏）。
+    //   直属 scope 守卫与 localDirect 同纪律（快照损坏/串夹也进不来别夹的项）。
+    const stale = opts?.staleCloud != null;
+    if (opts?.staleCloud) {
+      for (const f of opts.staleCloud.files) {
+        if (paths.has(f.name) || isHidden(f.name)) continue;
+        const rest = folder ? (f.name.startsWith(prefix) ? f.name.slice(prefix.length) : "") : f.name;
+        if (!rest || rest.includes("/")) continue;   // 越界/非直属 → 丢
+        items.push({ path: f.name, syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
+      }
+      for (const sf of opts.staleCloud.folders) if (!isHidden(sf)) subfolders.add(sf);
+    }
+    // **post-union 减去**离线排队待删的空夹（否则 remote frame / stale 快照每次把它从 folders 闪回）。
+    for (const d of pendingFolderDeletions?.() ?? []) subfolders.delete(d);
+
+    const snap: FolderSnapshot = { path: folder, items, folders: [...subfolders], complete: absenceAuthoritative };
+    if (stale) snap.stale = true;
+    return snap;
   }
 
   async function listAllItems(ctx: ListContext): Promise<{ items: Item[]; folders: string[]; complete: boolean }> {

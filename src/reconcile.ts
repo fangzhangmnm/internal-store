@@ -109,9 +109,14 @@ export function createReconcile(cfg: ReconcileCfg) {
   //   → 有界、可恢复、单用户下极难触发。与其加测试假装防住了，不如等真复现（或查 Graph 已知 bug）。
   //   （同理 removeFolder 的分页 TOCTOU：判空与删除之间的窗口无法在客户端消除，同样承担。）
   //   只判**该夹直属**本地文件（startsWith(prefix) ∧ 无更深 slash）——身份=path、不跨夹追踪：别夹的 clean 文件永不被本次降级。
-  async function reconcileFolder(folder: string, opts: { activeFileName?: string } = {}): Promise<{ demoted: string[] }> {
+  //   opts.cloudPrefetched（A3 修双拉）：调用方（watchFolder remote pass）已拉好的**现场**云帧 → 复用，
+  //   本夹不再第二次打 Graph。undefined=自取；null=云不可达（→ 不权威 no-op）。
+  //   ⚠ 红线：prefetched 必须是现场列举——**绝不喂 folder-snapshots 快照**（gone 判定只认活云帧，快照只配画首帧）。
+  async function reconcileFolder(folder: string, opts: { activeFileName?: string; cloudPrefetched?: { files: { name: string; path?: string }[]; complete: boolean } | null } = {}): Promise<{ demoted: string[] }> {
     if (isOnline && !isOnline()) return { demoted: [] };
-    const res = await cloud.listFolder(folder).catch((e) => { reportStoreError(e, "log"); return null; });
+    const res = opts.cloudPrefetched !== undefined
+      ? opts.cloudPrefetched
+      : await cloud.listFolder(folder).catch((e) => { reportStoreError(e, "log"); return null; });
     if (!res || !res.complete) return { demoted: [] };                   // 这一夹没列全 → 不权威 → no-op（绝不据此判 gone）
     const cloudNames = new Set(res.files.map((f) => f.name ?? f.path));
     const prefix = folder ? `${folder}/` : "";
