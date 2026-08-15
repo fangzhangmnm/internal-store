@@ -84,6 +84,18 @@ export function createLocalCache(dbName: string): LocalCache {
   };
 }
 
+// staging 分区（A1 分片下载会话的暂存区；download-session 模块用）。逻辑分区=键前缀，零 IDB schema 变更。
+//   只装云端拉来的 re-fetchable 字节（分片+记账 JSON），永远不装用户唯一副本——清了绝不丢数据。
+export function createStagingStore(dbName: string): { get(key: string): Promise<Blob | null>; put(key: string, blob: Blob): Promise<void>; del(key: string): Promise<void>; keys(): Promise<string[]> } {
+  const p = createPartitionedBlobStore(dbName).partition("staging");
+  return {
+    async get(key) { const r = await p.get(key); return r ? r.blob : null; },
+    async put(key, blob) { await p.put(key, { blob, updatedAt: Date.now() }); },
+    async del(key) { await p.del(key); },
+    async keys() { return p.keys(); },
+  };
+}
+
 // collections 分区的极简 cache（collection 模块用；collection 经 collectionLocalKey 自带 `collections/` 前缀 → 直接落 blobs 裸键）。
 //   与 files 分区键前缀不同、天然隔离，同一 `blobs` object store 共存。只需 collection 用到的三面。
 export function createCollectionCache(dbName: string): Pick<LocalCache, "save" | "get" | "exists"> {

@@ -12,6 +12,7 @@ import "./folder-flow.test.mjs";
 import "./collection.test.mjs";
 import "./store-folder-listing.test.mjs";
 import "./folder-snapshots.test.mjs";
+import "./download-session.test.mjs";
 import "./store-cloud-naming.test.ts";
 import "./zip-peek.test.mjs";
 // 红线对抗 battery（If-Match/parentBase/conflict→backup/move-aside/…）

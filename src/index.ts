@@ -8,7 +8,7 @@
 /** 创建 store 的唯一入口（薄组合根：provider → 装配深模块 → 暴露 file / collection / files 面）。 */
 export { createStore } from "./create-store.ts";
 /** 主门牌类型：配置（StoreConfig）、UI bundle（StoreUI）、文件对象（RawFile/ZipFile）、store 本体（Store）、at-rest 密文（EncryptedBlob）。 */
-export type { StoreConfig, StoreUI, RawFile, ZipFile, Store, EncryptedBlob } from "./create-store.ts";
+export type { StoreConfig, StoreUI, RawFile, ZipFile, Store, EncryptedBlob, FileStream } from "./create-store.ts";
 /** 统一列举面（README §2）的类型：列举项（Item）、8-badge 同步状态（SyncState）、列举上下文（ListContext）。 */
 export type { Item, SyncState, ListContext } from "./listing.ts";
 /** syncState 便利判定：isCached（有本地副本）/ isDirty（有未推本地编辑）。 */

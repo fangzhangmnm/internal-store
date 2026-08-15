@@ -25,7 +25,8 @@ import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
-import { createLocalCache, createCollectionCache } from "./local-cache.ts";
+import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
+import { createDownloadSessions, EtagChangedError, type StagingStore } from "./download-session.ts";
 import { runStoreMigrations, storeNamespace } from "./migration.ts";
 import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
@@ -89,6 +90,12 @@ export interface StoreConfig {
   kv?: Kv;
   /** 内部/测试 seam：本地缓存注入（prod 默认 idb，createLocalCache）。 */
   local?: LocalCache;
+  /** 内部/测试 seam：staging 暂存区注入（prod 默认 idb 的 `staging/` 分区）。 */
+  staging?: StagingStore;
+  /** 分片下载会话的分片大小（默认 2MiB；= pin 给播放让路的粒度）。 */
+  stagingChunkBytes?: number;
+  /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
+  stagingCapBytes?: number;
   /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
   getPassword?: (name: string) => string | null;
   // （否则损坏/captive-portal HTML 拿着合法 etag 能覆盖唯一好的本地副本 = 丢内容——论文/画作都怕；
@@ -135,6 +142,20 @@ export type TryMoveResult =
  *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。 */
 export type SaveResult = { pushed: boolean; reason?: string };
 
+/** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
+export interface FileStream {
+  /** 总字节数。 */
+  totalSize: number;
+  /** 读一段（播放优先级；staging/本地命中则不打网络）。越界自动钳。 */
+  read(offset: number, length: number): Promise<Uint8Array>;
+  /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。 */
+  prefetch(offset: number, length: number): Promise<void>;
+  /** 升格正式本地副本（= keepOffline：只补缺口 + 进度）。本地面 no-op。升格后请重开 openStream。 */
+  keep(opts?: { onProgress?: (doneBytes: number, totalBytes: number) => void }): Promise<void>;
+  /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
+  close(): void;
+}
+
 /** 加密容器的 at-rest 字节（branded）。唯一发牌方 = ZipFile.getEncryptedBlob()。
  *  只收密文的下游（导出 / 拷贝 / checkpoint）用它当形参类型 → 传明文 Blob 编译不过。 */
 export type EncryptedBlob = Blob & { readonly __encryptedAtRest: unique symbol };
@@ -171,8 +192,13 @@ export interface RawFile {
   // ── 离线副本（keepOffline/offload；无 LRU、无 pin flag：有本地副本 = kept offline）──
   /** 本地有副本？（= 已留作离线）。 */
   isKeptOffline(): Promise<boolean>;
-  /** 留一份离线副本（未缓存则 acquire）。注：open 已含下载子过程，故名 keepOffline 非 download。 */
-  keepOffline(): Promise<void>;
+  /** 留一份离线副本（未缓存则分片会话下载：**复用 staging 已流分片只补缺口**——先播后 pin 不重下；
+   *  onProgress 报字节进度）。注：open 已含下载子过程，故名 keepOffline 非 download。 */
+  keepOffline(opts?: { onProgress?: (doneBytes: number, totalBytes: number) => void }): Promise<void>;
+  /** 流式读取会话（A2，大媒体按需取片）：本地有副本 → 本地切片喂；无 → 云端分片会话（tee 入 staging）。
+   *  **at-rest 字节面**（加密件给的是密文容器字节——流式消费请只用于明文文件；加密件走 open()）。
+   *  两端都拿不到 → null。keep() 升格正式本地副本后，请**重开** openStream（新 handle 走本地面）。 */
+  openStream(): Promise<FileStream | null>;
   /** 合法(clean∧在线∧曾synced∧云端有完整)→hardDelete；非法(唯一副本/不可重取)→抛 OffloadIllegalError（banner）。 */
   offload(): Promise<void>;
   // ── 加密（at-rest 透明；出处 = WebPaint ai-docs/11。不注入 codec → dormant）──
@@ -261,6 +287,28 @@ export function createStore(config: StoreConfig) {
   const CLOUD_GONE_GRACE_MS = 24 * 3600 * 1000;
   const pendingGone = createPendingGone(kv, config.cloudGoneGraceMs ?? CLOUD_GONE_GRACE_MS);
   const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeFileName: config.activeFileName });
+
+  // ── 分片下载会话（A1）：staging tee + 播放优先/pin 严格串行调度。keepOffline / openStream 走它。──
+  const stagingStore = config.staging ?? createStagingStore(ns.dbName);
+  const toU8Raw = async (raw: Uint8Array | ArrayBuffer | Blob): Promise<Uint8Array> =>
+    raw instanceof Uint8Array ? raw : raw instanceof ArrayBuffer ? new Uint8Array(raw) : new Uint8Array(await raw.arrayBuffer());
+  const sessions = createDownloadSessions({
+    staging: stagingStore,
+    fetchMeta: async (name) => { const m = await cloud.fetchMeta(name); return m ? { etag: m.etag, size: m.size, item: m.item } : null; },
+    // 分片直连 provider.downloadRange（item.id 已在开会话时解析——不每分片重走 metadata 往返）。
+    range: async (item, offset, length) => toU8Raw(await provider.downloadRange((item as { id: string }).id, offset, length)),
+    // promote 落地：对齐 identity.acquire 语义（serialize 锁 + markSynced）；已有副本/dirty 绝不覆盖（§A）。
+    adoptLocal: (name, blob, etag) => sub.serialize(name, async () => {
+      if (await local.exists(name)) return false;     // 用户其间正常 open 过 → 已有副本，收摊不覆盖
+      if (head.isDirty(name)) return false;           // dirty 永不覆盖（双保险；dirty 理应蕴含有本地副本）
+      await local.save(name, blob);
+      head.markSynced(name, etag);
+      notifyFolderOf(name);                           // 列举即时反映「已留离线」
+      return true;
+    }),
+    chunkSize: config.stagingChunkBytes,
+    capBytes: config.stagingCapBytes,
+  });
 
   // ── folder 本地登记（离线建空夹）：pending = 建了但还没确认上云的空文件夹。──────────────
   //   离线也能建空夹（用户要求）：先 kv 登记 → 并进 listAllItems.folders（离线可见/持久）→ 回线 drainFolders 补建。
@@ -697,8 +745,39 @@ export function createStore(config: StoreConfig) {
         });
       },
       isKeptOffline() { return local.exists(name); },   // 有本地副本 = 已留作离线（无 LRU、无独立 pin flag）
-      async keepOffline() {   // 确保本地有副本（未缓存则 acquire；离线/失败 best-effort）
-        if (!(await local.exists(name))) { try { await identity.acquire(name, { localName: name }); } catch (e) { ui.reportError(e); } }
+      async keepOffline(opts) {   // 确保本地有副本——分片会话（复用 staging 已流分片只补缺口 + 进度）；失败 best-effort surface
+        if (await local.exists(name)) return;
+        const runOnce = async (): Promise<void> => {
+          const sess = await sessions.open(name);
+          if (!sess) return;                            // 云端没有 → 与旧 acquire absent 行为一致（上层看 isKeptOffline）
+          try { await sess.promote({ onProgress: opts?.onProgress }); } finally { sess.close(); }
+        };
+        try { await runOnce(); }
+        catch (e) {
+          if (e instanceof EtagChangedError) { try { await runOnce(); return; } catch (e2) { ui.reportError(e2); return; } }   // 版变 → 新版重试一次
+          ui.reportError(e);
+        }
+      },
+      async openStream() {   // A2 流式面：本地有 → 本地切片；无 → 云端分片会话（tee）。at-rest 字节（内容盲）。
+        await migrationReady;
+        const blob = await local.get(name);
+        if (blob) {
+          const b = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
+          return {
+            totalSize: b.size,
+            read: async (off: number, len: number) => new Uint8Array(await b.slice(Math.max(0, off), Math.min(b.size, Math.max(0, off) + Math.max(0, len))).arrayBuffer()),
+            prefetch: async () => {}, keep: async () => {}, close: () => {},
+          };
+        }
+        const sess = await sessions.open(name).catch((e) => { ui.reportError(e, "log"); return null; });   // 离线/云端没有 → null（诚实，不假装）
+        if (!sess) return null;
+        return {
+          totalSize: sess.totalSize,
+          read: (off: number, len: number) => sess.read(off, len),
+          prefetch: (off: number, len: number) => sess.prefetch(off, len),
+          keep: (o?: { onProgress?: (d: number, t: number) => void }) => sess.promote({ onProgress: o?.onProgress }),
+          close: () => sess.close(),
+        };
       },
       offload() { return offloadMod.offload(name); },
       isEncrypted() { return encIsEncrypted(name); },
