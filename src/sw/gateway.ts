@@ -103,11 +103,13 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   }
 
   async function freshUrl(name: string, id: string): Promise<string | null> {
-    let j = await graphJson(`/me/drive/items/${id}?$select=id,@microsoft.graph.downloadUrl`);
+    // ⚠ spike-7 战例：`$select=id,@microsoft.graph.downloadUrl` 返回 200 但 annotation 被丢
+    //   （downloadUrl 是 instance annotation，配 $select 在不少端点不给）→ **裸 GET**（默认附带）。
+    let j = await graphJson(`/me/drive/items/${id}`);
     if (typeof j?.["@microsoft.graph.downloadUrl"] !== "string") {
-      // 兜底：按 id 失败（id 陈旧/接口姿势）→ 按 approot 路径再要一次（顺带把两种失因在日志里分开）
-      slog(`items/{id} 未给 downloadUrl → 按路径兜底：${name}`);
-      j = await graphJson(`/me/drive/special/approot:/${encodePath(name)}?$select=id,@microsoft.graph.downloadUrl`);
+      if (j) slog(`items/{id} 响应无 downloadUrl（键：${Object.keys(j).slice(0, 12).join(",")}）→ 按路径兜底`);
+      j = await graphJson(`/me/drive/special/approot:/${encodePath(name)}`);
+      if (j && typeof j["@microsoft.graph.downloadUrl"] !== "string") slog(`路径兜底也无 downloadUrl（键：${Object.keys(j).slice(0, 12).join(",")}）`);
     }
     const u = j?.["@microsoft.graph.downloadUrl"];
     if (typeof u !== "string") return null;
