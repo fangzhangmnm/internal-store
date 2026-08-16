@@ -14,6 +14,7 @@ import "./store-folder-listing.test.mjs";
 import "./dir-index-cache.test.mjs";
 import "./download-session.test.mjs";
 import "./read-only-files.test.mjs";
+import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";
 import "./zip-peek.test.mjs";
 // 红线对抗 battery（If-Match/parentBase/conflict→backup/move-aside/…）

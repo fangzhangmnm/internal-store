@@ -6,7 +6,7 @@
 //   跨分区原子移动（trash / restore / backup）= 同一 object store 内 rename，事务原子（idb-store.rename）。
 import { createIdbCache, type CacheRecord } from "./idb-store.ts";
 
-export type Partition = "files" | "trash" | "backup" | "collections" | "dir-index-cache" | "staging";
+export type Partition = "files" | "trash" | "backup" | "collections" | "dir-index-cache" | "staging" | "sw-bridge";
 
 export interface PartitionView {
   get(name: string): Promise<CacheRecord | undefined>;
