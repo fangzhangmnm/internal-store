@@ -64,9 +64,13 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   const encodePath = (p: string): string => p.split("/").filter(Boolean).map(encodeURIComponent).join("/");
   async function graphJson(path: string): Promise<Record<string, unknown> | null> {
     const token = await getToken();
-    if (!token) return null;
+    if (!token) { slog("graph 调用：无 token"); return null; }
     const r = await fetch(`${GRAPH_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      let d = ""; try { d = (await r.text()).slice(0, 180); } catch { /* 无 body */ }
+      slog(`graph ${r.status}：${path.slice(0, 90)} ← ${d}`);
+      return null;
+    }
     return await r.json() as Record<string, unknown>;
   }
 
@@ -99,7 +103,12 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   }
 
   async function freshUrl(name: string, id: string): Promise<string | null> {
-    const j = await graphJson(`/me/drive/items/${id}?$select=id,@microsoft.graph.downloadUrl`);
+    let j = await graphJson(`/me/drive/items/${id}?$select=id,@microsoft.graph.downloadUrl`);
+    if (typeof j?.["@microsoft.graph.downloadUrl"] !== "string") {
+      // 兜底：按 id 失败（id 陈旧/接口姿势）→ 按 approot 路径再要一次（顺带把两种失因在日志里分开）
+      slog(`items/{id} 未给 downloadUrl → 按路径兜底：${name}`);
+      j = await graphJson(`/me/drive/special/approot:/${encodePath(name)}?$select=id,@microsoft.graph.downloadUrl`);
+    }
     const u = j?.["@microsoft.graph.downloadUrl"];
     if (typeof u !== "string") return null;
     urlCache.set(name, u);
