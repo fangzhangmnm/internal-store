@@ -111,7 +111,7 @@ export function createReconcile(cfg: ReconcileCfg) {
   //   只判**该夹直属**本地文件（startsWith(prefix) ∧ 无更深 slash）——身份=path、不跨夹追踪：别夹的 clean 文件永不被本次降级。
   //   opts.cloudPrefetched（A3 修双拉）：调用方（watchFolder remote pass）已拉好的**现场**云帧 → 复用，
   //   本夹不再第二次打 Graph。undefined=自取；null=云不可达（→ 不权威 no-op）。
-  //   ⚠ 红线：prefetched 必须是现场列举——**绝不喂 folder-snapshots 快照**（gone 判定只认活云帧，快照只配画首帧）。
+  //   ⚠ 红线：prefetched 必须是现场列举——**绝不喂 dir-index-cache 目录索引缓存**（gone 判定只认活云帧，缓存非 SSoT、只配画首帧）。
   async function reconcileFolder(folder: string, opts: { activeFileName?: string; cloudPrefetched?: { files: { name: string; path?: string }[]; complete: boolean } | null } = {}): Promise<{ demoted: string[] }> {
     if (isOnline && !isOnline()) return { demoted: [] };
     const res = opts.cloudPrefetched !== undefined

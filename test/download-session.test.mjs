@@ -67,7 +67,7 @@ describe("download-session · read/tee/续用", () => {
     const got2 = await s2.read(0, 8);
     eq([...got2].join(","), [...data.slice(0, 8)].join(","));
     eq(calls.length, 2, "★重开会话同区零重下（staging 命中）");
-    assert(staging._map.has("c:f:0") && staging._map.has("c:f:1"), "分片躺在 staging");
+    assert(staging._map.has("chunk:f:0") && staging._map.has("chunk:f:1"), "分片躺在 staging");
     s2.close();
   });
 
@@ -125,7 +125,7 @@ describe("download-session · eTag 钉版 + cap + 不覆盖", () => {
     await s1.read(0, 4); s1.close();
     files.set("f", { etag: "e2", data: bytes(8) });      // 云端换版
     const s2 = await sessions.open("f");                 // 开新会话 → e1 残片应被清
-    eq(JSON.parse(await (staging._map.get("m:f")).text()).eTag, "e2", "★meta 已是新版（旧残片清掉重记）");
+    eq(JSON.parse(await (staging._map.get("meta:f")).text()).eTag, "e2", "★meta 已是新版（旧残片清掉重记）");
     // promote 中途云端再换版
     await s2.read(0, 8);
     files.set("f", { etag: "e3", data: bytes(8) });
@@ -144,8 +144,8 @@ describe("download-session · eTag 钉版 + cap + 不覆盖", () => {
     const sn = await sessions.open("new");
     await sn.read(0, 8);                                 // new 组 8 字节（在用）→ 总 16 > 10 → 清 old
     await tick();
-    assert(!staging._map.has("m:old") && !staging._map.has("c:old:0"), "★最旧整组被清");
-    assert(staging._map.has("c:new:0"), "在用会话的组保留");
+    assert(!staging._map.has("meta:old") && !staging._map.has("chunk:old:0"), "★最旧整组被清");
+    assert(staging._map.has("chunk:new:0"), "在用会话的组保留");
     sn.close();
   });
 

@@ -14,9 +14,9 @@
 //   · eTag 钉版：会话开在某一版上；promote 前重验 fetchMeta，版变 → 清本 name staging + 抛 EtagChangedError。
 //   · 时间戳（meta.touched）只用于 scratch 清理排序，绝不参与任何内容/版本决策（no-timestamps 红线）。
 //
-// staging 分区 key 形（schema v1，2026-08-15 待 user 过目）：
-//   `m:<name>`        → JSON { v:1, eTag, size, chunk, got:[chunkIdx…], touched }（会话元信息 + 已持有分片账）
-//   `c:<name>:<i>`    → 分片字节 blob（i 十进制；name 不含 ":"——Windows 非法字符已被文件名护栏挡在门外）
+// staging 分区 key 形（schema v1，2026-08-15 user 过目改名定稿：陌生人开 DevTools 一眼可懂）：
+//   `meta:<name>`     → JSON { v:1, eTag, totalBytes, chunkBytes, chunks:[分片号…], touchedAt }（会话元信息 + 已持有分片账）
+//   `chunk:<name>:<i>`→ 分片字节 blob（i 十进制；name 不含 ":"——Windows 非法字符已被文件名护栏挡在门外）
 import { reportStoreError } from "./error-handling.ts";
 
 /** staging 分区的注入端口（prod = blob-partition 的 "staging" 分区；测试 = 内存 map）。 */
@@ -49,13 +49,13 @@ export class EtagChangedError extends Error {
   constructor(name: string) { super(`云端文件已更新，下载会话失效：${name}`); this.name = "EtagChangedError"; }
 }
 
-interface StagingMeta { v: 1; eTag: string; size: number; chunk: number; got: number[]; touched: number }
+interface StagingMeta { v: 1; eTag: string; totalBytes: number; chunkBytes: number; chunks: number[]; touchedAt: number }
 
 const CHUNK_DEFAULT = 2 * 1024 * 1024;
 const CAP_DEFAULT = 256 * 1024 * 1024;
 
-const mKey = (name: string): string => `m:${name}`;
-const cKey = (name: string, i: number): string => `c:${name}:${i}`;
+const mKey = (name: string): string => `meta:${name}`;
+const cKey = (name: string, i: number): string => `chunk:${name}:${i}`;
 
 export interface DownloadSession {
   name: string;
@@ -101,7 +101,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
       const b = await sGet(mKey(name));
       if (!b) return null;
       const p = JSON.parse(await b.text()) as StagingMeta;
-      return p?.v === 1 && typeof p.eTag === "string" && Array.isArray(p.got) ? p : null;
+      return p?.v === 1 && typeof p.eTag === "string" && Array.isArray(p.chunks) ? p : null;
     } catch (e) { reportStoreError(e, "log"); return null; }
   }
   async function writeMeta(name: string, m: StagingMeta): Promise<void> {
@@ -110,7 +110,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
   /** 清某 name 的整组 staging（meta + 全部分片）。 */
   async function purgeName(name: string): Promise<void> {
     try {
-      const prefix = `c:${name}:`;
+      const prefix = `chunk:${name}:`;
       for (const k of await staging.keys()) if (k === mKey(name) || k.startsWith(prefix)) await staging.del(k);
     } catch (e) { reportStoreError(e, "log"); }   // 清理 best-effort（staging 坏了不拦主流程）
   }
@@ -119,19 +119,19 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     try {
       const metas: { name: string; meta: StagingMeta }[] = [];
       for (const k of await staging.keys()) {
-        if (!k.startsWith("m:")) continue;
-        const name = k.slice(2);
+        if (!k.startsWith("meta:")) continue;
+        const name = k.slice(5);
         const meta = await readMeta(name);
         if (meta) metas.push({ name, meta });
       }
-      let total = metas.reduce((s, x) => s + x.meta.got.length * x.meta.chunk, 0);
+      let total = metas.reduce((s, x) => s + x.meta.chunks.length * x.meta.chunkBytes, 0);
       if (total <= capBytes) return;
-      metas.sort((a, b) => a.meta.touched - b.meta.touched);   // 只排 scratch 清理顺序，非内容决策
+      metas.sort((a, b) => a.meta.touchedAt - b.meta.touchedAt);   // 只排 scratch 清理顺序，非内容决策
       for (const { name, meta } of metas) {
         if (total <= capBytes) break;
         if (activeSessions.has(name)) continue;
         await purgeName(name);
-        total -= meta.got.length * meta.chunk;
+        total -= meta.chunks.length * meta.chunkBytes;
       }
     } catch (e) { reportStoreError(e, "log"); }   // cap 清理失败无害（下次再清）；绝不影响主流程
   }
@@ -145,9 +145,9 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     const prev = await readMeta(name);
     if (prev && prev.eTag !== etag) await purgeName(name);
     const meta: StagingMeta = (prev && prev.eTag === etag)
-      ? { ...prev, touched: now() }
-      : { v: 1, eTag: etag, size, chunk: chunkSize, got: [], touched: now() };
-    const got = new Set<number>(meta.got);
+      ? { ...prev, touchedAt: now() }
+      : { v: 1, eTag: etag, totalBytes: size, chunkBytes: chunkSize, chunks: [], touchedAt: now() };
+    const got = new Set<number>(meta.chunks);
     await writeMeta(name, meta);
     const nChunks = Math.max(1, Math.ceil(size / chunkSize));
     let closed = false;
@@ -167,7 +167,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
         const bytes = await range(item, off, len);
         // tee：落 staging + 记账（失败只 log——staging 是加速器不是正确性依赖，read 仍返回字节）
         await sPut(cKey(name, i), new Blob([bytes as BlobPart]));
-        if (!got.has(i)) { got.add(i); meta.got = [...got]; meta.touched = now(); await writeMeta(name, meta); }
+        if (!got.has(i)) { got.add(i); meta.chunks = [...got]; meta.touchedAt = now(); await writeMeta(name, meta); }
         void enforceCap();
         return bytes;
       })();

@@ -386,29 +386,29 @@ export function createStore(config: StoreConfig) {
   const LOCAL_CTX: ListContext = { signedIn: false, online: false };   // 强制本地视角（首帧/写后重画：云不可达 → 纯本地 union）
   const folderWatchers = new Map<string, Set<(s: FolderSnapshot) => void>>();
 
-  // ── folder-snapshots（A3，2026-08-15 user 批）：每夹「上次**完整**云帧」持久化 → 冷首帧即显 cloud-only 缺项。──
-  //   schema v1（JSON 串落 folder-snapshots 分区，key=夹路径，""=根）：
-  //     { v:1, savedAt:ms, files:[{name,eTag,size,lastModified?ms,id?}], folders:[全路径] }
+  // ── dir-index-cache（A3，2026-08-15 user 批）：每夹「上次**完整**云帧」的目录索引缓存（**非 SSoT，脏的**，
+  //   只配画首帧）→ 冷首帧即显 cloud-only 缺项。schema v1（JSON 串落 dir-index-cache 分区，key=夹路径，""=根）：
+  //     { v:1, folder, savedAt:ms, files:[{name,eTag,size,lastModified?ms,id?}], folders:[全路径] }
   //   纪律：① 只在现场云帧 complete:true 时覆盖写（partial 不落底）；② 只喂本地帧的 cloud-only 追加显示，
   //   **绝不喂 reconcile/gone 判定**（红线）；③ savedAt 仅显示/排障，不做任何内容决策（no-timestamps 红线）；
   //   ④ 快照不绑账号——同 app 换云账号时首帧可能短暂显示前账号的文件名，云端帧到达即纠偏+覆盖（家族单用户，已知局限）。
   const SNAP_V = 1;
-  async function readFolderSnapshot(folder: string): Promise<StaleCloudView | null> {
-    if (!local.getFolderSnapshot) return null;   // 注入的 LocalCache 不支持 → 特性静默关闭
+  async function readDirIndexCache(folder: string): Promise<StaleCloudView | null> {
+    if (!local.getDirIndexCache) return null;   // 注入的 LocalCache 不支持 → 特性静默关闭
     try {
-      const raw = await local.getFolderSnapshot(folder);
+      const raw = await local.getDirIndexCache(folder);
       if (!raw) return null;
       const p = JSON.parse(raw) as { v?: number; files?: unknown; folders?: unknown };
       if (p?.v !== SNAP_V || !Array.isArray(p.files) || !Array.isArray(p.folders)) return null;   // 版本/形状不认 → 当没有（下次完整云帧重写）
       return p as unknown as StaleCloudView;
     } catch (e) { ui.reportError(e, "log"); return null; }
   }
-  function writeFolderSnapshot(folder: string, live: CloudFolderPrefetch): void {
-    if (!local.putFolderSnapshot || !live.complete) return;
+  function writeDirIndexCache(folder: string, live: CloudFolderPrefetch): void {
+    if (!local.putDirIndexCache || !live.complete) return;
     const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), id: c.id }));   // id：将来 SW 网关按名解析 item 免 Graph 往返
     const folders = live.folders.filter((f) => !isHidden(f));
     // fire-and-forget：快照写失败只 log，绝不影响帧交付。
-    void local.putFolderSnapshot(folder, JSON.stringify({ v: SNAP_V, savedAt: Date.now(), files, folders })).catch((e) => ui.reportError(e, "log"));
+    void local.putDirIndexCache(folder, JSON.stringify({ v: SNAP_V, folder, savedAt: Date.now(), files, folders })).catch((e) => ui.reportError(e, "log"));
   }
 
   // 推一帧给某夹的所有 watcher。**sanity-check**：snapshot.path 必须 === 订阅 path——orchestration 错乱把别夹推来就丢弃（红线：绝不把别夹内容塞给这个 watcher）。
@@ -421,7 +421,7 @@ export function createStore(config: StoreConfig) {
   // 本地帧 = 纯本地 union + stale 快照追加（signedIn 才掺快照；登出 → 纯本地，别显示云端名单）。
   //   stale 只补 cloud-only 缺项，本地项 badge 仍塌到本地视角（listing 内保证）——写后重画也走这，cloud-only 项不闪没。
   async function localFrameSnap(folder: string): Promise<FolderSnapshot> {
-    const stale = signedIn() ? await readFolderSnapshot(folder) : null;
+    const stale = signedIn() ? await readDirIndexCache(folder) : null;
     return listing.listFolder(folder, LOCAL_CTX, stale ? { staleCloud: stale } : undefined);
   }
   async function pushLocalFrame(folder: string): Promise<void> {
@@ -436,7 +436,7 @@ export function createStore(config: StoreConfig) {
     const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { ui.reportError(e, "log"); return null; }) : null;
     await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
     try { emitFolder(folder, await listing.listFolder(folder, ctx, { cloudPrefetched: live })); } catch (e) { ui.reportError(e); }
-    if (live?.complete) writeFolderSnapshot(folder, live);   // 完整云帧 → 覆盖快照（下次冷首帧的底）
+    if (live?.complete) writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
   }
   // 写路径变动 → 通知受影响夹（name 的父夹）的 watcher 即时重画本地帧。
   function notifyFolderOf(name: string): void {

@@ -135,13 +135,13 @@ export interface LocalCache {
   listTrash?(): Promise<TrashEntry[]>;
   /** 备份分区列举（weakOverride/keepMine loser 的本地 stash）——回收站/备份视图两端聚合用。restore/purgeTrash 已认 `backup/` 前缀 key。 */
   listBackup?(): Promise<TrashEntry[]>;
-  // ── folder-snapshots 分区（A3，2026-08-15 user 批）：每夹「上次云帧」的持久化，冷首帧即显 cloud-only 缺项。
+  // ── dir-index-cache 分区（A3，2026-08-15 user 批）：每夹「上次云帧」的目录索引缓存（**非 SSoT，脏的**），冷首帧即显 cloud-only 缺项。
   //   值 = store 自产自销的 JSON 串（LocalCache 不解释）；**只作显示首帧**，绝不喂 reconcile/gone 判定（红线）。
   //   可选：老 mock / 消费者注入的 LocalCache 不实现 → 快照特性静默关闭（首帧退回纯本地视角，无害降级）。
-  /** 读某夹快照 JSON 串；缺/未实现 → null。 */
-  getFolderSnapshot?(folder: string): Promise<string | null>;
-  /** 写某夹快照 JSON 串（覆盖写）。 */
-  putFolderSnapshot?(folder: string, json: string): Promise<void>;
+  /** 读某夹目录索引缓存 JSON 串；缺/未实现 → null。 */
+  getDirIndexCache?(folder: string): Promise<string | null>;
+  /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
+  putDirIndexCache?(folder: string, json: string): Promise<void>;
 }
 
 // ---- cloud-sync（session 级同步 over CloudProvider）：Store 消费的「cloud 后端」 ----

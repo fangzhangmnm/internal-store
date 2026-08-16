@@ -109,7 +109,7 @@ export interface FolderSnapshot {
   folders: string[];
   /** false → 该夹列举失败、不权威。 */
   complete: boolean;
-  /** true → 本帧掺了 folder-snapshots 的「上次云端所见」（A3 冷首帧）：cloud-only 项可能已过时，
+  /** true → 本帧掺了 dir-index-cache 的「上次云端所见」（A3 冷首帧）：cloud-only 项可能已过时，
    *  等云端帧纠偏。stale 帧恒 complete:false（不权威，别据此做任何删/收敛判断）。 */
   stale?: true;
 }
@@ -117,7 +117,7 @@ export interface FolderSnapshot {
 // ── listFolder 的可选预取/快照注入（A3）─────────────────────────────────────────────
 /** 现场云帧预取（修双拉）：调用方已拉好 cloud.listFolder 结果 → 传进来复用，undefined=listing 自取，null=云不可达。 */
 export interface CloudFolderPrefetch { files: { name: string; eTag: string; size: number; lastModifiedDateTime?: string | number; id?: string }[]; folders: string[]; complete: boolean }
-/** 「上次云帧」快照（folder-snapshots 分区解析后）：**只用于给本地帧追加 cloud-only 缺项**，
+/** 「上次云帧」目录索引缓存（dir-index-cache 分区解析后，非 SSoT）：**只用于给本地帧追加 cloud-only 缺项**，
  *  绝不参与本地项的 badge 分类（否则保存后旧 eTag 会闪假 newer-on-cloud）、绝不喂 reconcile（红线）。 */
 export interface StaleCloudView { files: { name: string; size?: number; lastModified?: number }[]; folders: string[] }
 
@@ -166,7 +166,7 @@ export function createListing(cfg: ListingCfg) {
   //   guardrail（红线）：绝不据本夹的 listing 判**别夹**文件 cloud-gone——因为压根不看别夹的 local key（下面 startsWith(prefix) 门）。
   //   absenceAuthoritative = 这一夹 list() 没抛错（cloudRes.complete）；离线/登出 → cloudReachable=false → 塌到本地视角。
   //   opts（A3）：cloudPrefetched=复用调用方已拉的现场云帧（修「一次订阅打两遍 Graph」）；
-  //   staleCloud=folder-snapshots 的上次云帧——**只追加 cloud-only 缺项 + 子夹**，不碰既有项的分类。
+  //   staleCloud=dir-index-cache 的上次云帧——**只追加 cloud-only 缺项 + 子夹**，不碰既有项的分类。
   async function listFolder(folder: string, ctx: ListContext, opts?: { cloudPrefetched?: CloudFolderPrefetch | null; staleCloud?: StaleCloudView | null }): Promise<FolderSnapshot> {
     const cloudRes = opts?.cloudPrefetched !== undefined
       ? opts.cloudPrefetched

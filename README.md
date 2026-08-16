@@ -110,7 +110,7 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 - **`autoCacheOpenedFile:false`（流式消费 app：3D 模型/电台类）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。
 - **`file.openStream()` 流式面（A1/A2，2026-08-15）**：大媒体按需取片——本地有副本走本地切片；无则开**分片下载会话**（2MiB 分片，按 eTag 钉版，拉到即落 `staging/` 暂存区 = tee）。句柄 `{ totalSize, read(off,len), prefetch(off,len), keep(), close() }`：`read`=播放优先级；`prefetch`=低优先（下一曲头部预拉）；`keep()`=升格正式本地副本（≡ keepOffline：**复用已流分片只补缺口，先播后 pin 不重下**）。调度全局一域：播放分片在飞时 **pin 严格串行且让路**（不 spike）。at-rest 字节面（加密件给密文；流式消费请只用于明文文件）。staging 是加速器不是正确性依赖（受全局 cap FIFO 兜底、坏了照样直连流）。
 - **列举唯一面 = `store.files.watchFolder(folder, cb)`**（订阅一夹→本地帧+云端帧同一 cb；无 `list`/`listAll`/`localKeys` 公开面）。snapshot `{ path, items, folders, complete, stale? }`，`complete:false` **别据此删缓存**。
-- **冷首帧快照（A3，2026-08-15）**：每夹「上次完整云帧」持久化在 `folder-snapshots/` 分区 → 本地帧自动追加**上次所见的 cloud-only 缺项**（首帧不再近空、无需等网络）。掺了快照的帧带 `stale:true`（可能过时，云端帧到达即纠偏）。纪律：快照**只作显示**——绝不喂 reconcile/cloud-gone 判定、绝不改写本地项的 badge；登出视角不掺快照。同批修复：一次订阅只打**一遍** Graph（此前 reconcile+listing 各拉一次）。
+- **冷首帧目录索引缓存（A3，2026-08-15）**：每夹「上次完整云帧」持久化在 `dir-index-cache/` 分区（**非 SSoT，脏的**，只配画首帧） → 本地帧自动追加**上次所见的 cloud-only 缺项**（首帧不再近空、无需等网络）。掺了快照的帧带 `stale:true`（可能过时，云端帧到达即纠偏）。纪律：快照**只作显示**——绝不喂 reconcile/cloud-gone 判定、绝不改写本地项的 badge；登出视角不掺快照。同批修复：一次订阅只打**一遍** Graph（此前 reconcile+listing 各拉一次）。
 - `store.files.reconcileAll({activeFileName?})` — **全库** cloud-gone 收敛（仅用户显式指令）：曾 synced 的 clean 孤儿 → **去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈；`activeFileName` 跳过当前打开的 doc）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT）。dirty/从没同步/partial-or-空列表 一律不动。详见 CONTEXT.md。
 
 ### 离线副本 —— keepOffline / offload（无 LRU、无 pin）

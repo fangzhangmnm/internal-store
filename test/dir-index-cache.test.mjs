@@ -1,7 +1,7 @@
-// folder-snapshots（A3，2026-08-15 user 批）—— 冷首帧快照 + 修「一次订阅打两遍 Graph」双拉。
+// dir-index-cache（A3，2026-08-15 user 批）—— 冷首帧目录索引缓存（非 SSoT）+ 修「一次订阅打两遍 Graph」双拉。
 // 验：
 //   · 双拉修复：一次 watchFolder 订阅 → provider.list 恰好 1 次（reconcile 与 listing 共享现场帧）。
-//   · 快照落底：完整云帧 → folder-snapshots 分区写 {v:1, files, folders}；partial 不落底。
+//   · 落底：完整云帧 → dir-index-cache 分区写 {v:1, files, folders}；partial 不落底。
 //   · 冷首帧：新 store 实例（同一本地）→ 首帧含 stale cloud-only 缺项、stale:true、complete:false。
 //   · badge 不被 stale 污染：本地有副本的项照旧塌本地视角（绝不因快照旧 eTag 闪 newer-on-cloud）、不重复。
 //   · 登出不掺快照（别把云端名单给未登录视角）。
@@ -33,7 +33,7 @@ function watchFrames(store, folder) {
   return { frames, un };
 }
 
-describe("folder-snapshots · 双拉修复", () => {
+describe("dir-index-cache · 双拉修复", () => {
   it("一次订阅 → provider.list 恰好 1 次（reconcile+listing 共享现场帧）", async () => {
     const provider = createMockProvider();
     provider._seed("a.mp3", bytes("A"));
@@ -50,14 +50,14 @@ describe("folder-snapshots · 双拉修复", () => {
   });
 });
 
-describe("folder-snapshots · 快照落底 + 冷首帧", () => {
-  it("完整云帧 → 快照写入 folder-snapshots 分区（v1 schema：files 带 name/eTag/size）", async () => {
+describe("dir-index-cache · 快照落底 + 冷首帧", () => {
+  it("完整云帧 → 写入 dir-index-cache 分区（v1 schema：files 带 name/eTag/size）", async () => {
     const provider = createMockProvider();
     provider._seed("a.mp3", bytes("AAA"));
     const { store, local } = mkStore({ provider });
     const { un } = watchFrames(store, "");
     await tick(); await tick(); un();
-    const raw = local._snapshots.get("");
+    const raw = local._dirIndex.get("");
     assert(raw, "根夹快照已落底");
     const p = JSON.parse(raw);
     eq(p.v, 1);
@@ -92,17 +92,17 @@ describe("folder-snapshots · 快照落底 + 冷首帧", () => {
     const local = createMockLocal();
     const kv = memKv();
     { const { store } = mkStore({ provider, local, kv }); const { un } = watchFrames(store, ""); await tick(); await tick(); un(); }
-    const before = local._snapshots.get("");
+    const before = local._dirIndex.get("");
     const p2 = createMockProvider();   // 空 provider + list 抛错 → live=null → 不写
     p2.list = async () => { throw new Error("网抖"); };
     const { store: s2 } = mkStore({ provider: p2, local, kv });
     const { un } = watchFrames(s2, "");
     await tick(); await tick(); un();
-    eq(local._snapshots.get(""), before, "★列举失败不落底（旧快照原样）");
+    eq(local._dirIndex.get(""), before, "★列举失败不落底（旧快照原样）");
   });
 });
 
-describe("folder-snapshots · badge/登出纪律", () => {
+describe("dir-index-cache · badge/登出纪律", () => {
   it("本地有副本的项：badge 塌本地视角，绝不被快照旧 eTag 拉成 newer-on-cloud、不重复", async () => {
     const provider = createMockProvider();
     provider._seed("a.mp3", bytes("AAA"));
@@ -150,7 +150,7 @@ describe("folder-snapshots · badge/登出纪律", () => {
       const { un } = watchFrames(store, ""); await tick(); await tick(); un();
     }
     // 第二世：云列举永远失败（快照在、且快照里其实有 a.mp3——就算快照被篡改成没有，也不许据快照判 gone）
-    local._snapshots.set("", JSON.stringify({ v: 1, savedAt: 0, files: [], folders: [] }));   // 对抗：快照谎称云端空
+    local._dirIndex.set("", JSON.stringify({ v: 1, folder: "", savedAt: 0, files: [], folders: [] }));   // 对抗：缓存谎称云端空
     const p2 = createMockProvider();
     p2.list = async () => { throw new Error("云不可达"); };
     const { store: s2, local: l2 } = { store: mkStore({ provider: p2, local, kv }).store, local };
@@ -179,7 +179,7 @@ describe("folder-snapshots · badge/登出纪律", () => {
   });
 });
 
-describe("folder-snapshots · listing 单元级 scope 守卫", () => {
+describe("dir-index-cache · listing 单元级 scope 守卫", () => {
   it("staleCloud 追加尊重直属 scope：别夹/深层项进不来", async () => {
     const listing = createListing({
       cloud: { async listFolder() { return { files: [], folders: [], complete: true }; }, async listAll() { return { files: [], folders: [], complete: true }; }, getETag: () => null },
