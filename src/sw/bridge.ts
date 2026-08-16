@@ -16,8 +16,10 @@ export interface SwAuthBridgeCfg {
   refreshEveryMs?: number;
 }
 
-/** 启动凭据桥：立即写一次 + 定期刷 + focus/online 时补刷。返回 stop（opts.wipe 顺带抹掉 token 记录）。 */
-export function startSwAuthBridge(cfg: SwAuthBridgeCfg): (opts?: { wipe?: boolean }) => void {
+/** 启动凭据桥：立即写一次 + 定期刷 + focus/online 时补刷。
+ *  返回 { ready, stop }：ready = 首次 token 已落 IDB（caller await 它再开播，防「SW 拿不到凭据」竞态）；
+ *  stop(opts.wipe) 停桥并可抹掉 token 记录（signOut 时用）。 */
+export function startSwAuthBridge(cfg: SwAuthBridgeCfg): { ready: Promise<void>; stop: (opts?: { wipe?: boolean }) => void } {
   const bridge = createPartitionedBlobStore(cfg.dbName).partition("sw-bridge");
   let stopped = false;
   async function refresh(): Promise<void> {
@@ -27,16 +29,17 @@ export function startSwAuthBridge(cfg: SwAuthBridgeCfg): (opts?: { wipe?: boolea
       await bridge.put("token", { blob: new Blob([JSON.stringify({ v: 1, token, savedAt: Date.now() })]), updatedAt: Date.now() });
     } catch { /* 静默失败（离线/未登录）：SW 用旧 token，过期由网关 401 路径兜 */ }
   }
-  void refresh();
+  const ready = refresh();
   const timer = setInterval(() => { void refresh(); }, cfg.refreshEveryMs ?? 35 * 60_000);
   const onWake = (): void => { void refresh(); };
   addEventListener("focus", onWake);
   addEventListener("online", onWake);
-  return (opts?: { wipe?: boolean }): void => {
+  const stop = (opts?: { wipe?: boolean }): void => {
     stopped = true;
     clearInterval(timer);
     removeEventListener("focus", onWake);
     removeEventListener("online", onWake);
     if (opts?.wipe) void bridge.del("token").catch(() => {});
   };
+  return { ready, stop };
 }

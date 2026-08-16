@@ -793,7 +793,7 @@ export function createStore(config: StoreConfig) {
           close: () => sess.close(),
         };
       },
-      offload() { return offloadMod.offload(name); },
+      async offload() { await offloadMod.offload(name); notifyFolderOf(name); },   // 成功后重画本夹（badge 即时 → cloud-only）
       isEncrypted() { return encIsEncrypted(name); },
       encrypt(opts) { roGuard("encrypt"); return encEncrypt(name, opts?.isOnline ?? isOnline); },
       decrypt(opts) { roGuard("decrypt"); return encDecrypt(name, opts?.isOnline ?? isOnline); },

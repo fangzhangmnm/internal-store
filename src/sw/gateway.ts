@@ -26,6 +26,8 @@ export interface SwGatewayCfg {
   chunkBytes?: number;
   /** app 注入的 MIME 判定（store 内容盲）；不给 → application/octet-stream。 */
   contentType?: (name: string) => string;
+  /** 调试仪表：网关把每步（请求/解析来源/分片拉取/错误）回调出去（sw 侧通常 postMessage 给页面日志区）。 */
+  onLog?: (msg: string) => void;
 }
 
 interface Resolved { id: string; size: number; eTag: string }
@@ -42,6 +44,7 @@ export function parseRange(h: string | null, size: number): { start: number; end
 
 export function createSwStreamGateway(cfg: SwGatewayCfg) {
   const chunkBytes = cfg.chunkBytes ?? CHUNK_DEFAULT;
+  const slog = (m: string): void => { try { cfg.onLog?.(m); } catch { /* 日志绝不影响主流程 */ } };
   const bs = createPartitionedBlobStore(cfg.dbName);
   const staging: PartitionView = bs.partition("staging");
   const dirIdx: PartitionView = bs.partition("dir-index-cache");
@@ -80,12 +83,15 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
         if (f?.id && typeof f.size === "number" && f.eTag) {
           const r = { id: f.id, size: f.size, eTag: f.eTag };
           resolveCache.set(name, r);
+          slog(`解析 ${name} ← dir-index-cache（id=${f.id.slice(0, 8)}… size=${f.size}）`);
           return r;
         }
+        slog(`dir-index-cache 有夹记录但无 ${name} 条目 → 走 Graph`);
       }
     } catch { /* 索引缓存坏 → 走 Graph 兜底 */ }
     const j = await graphJson(`/me/drive/special/approot:/${encodePath(name)}?$select=id,size,eTag,@microsoft.graph.downloadUrl`);
-    if (!j || typeof j.id !== "string") return null;
+    if (!j || typeof j.id !== "string") { slog(`解析 ${name} 失败（Graph 兜底也没拿到；token=${(await getToken()) ? "有" : "无"}）`); return null; }
+    slog(`解析 ${name} ← Graph（size=${j.size}）`);
     const r = { id: j.id, size: (j.size as number) ?? 0, eTag: (j.eTag as string) ?? "" };
     if (typeof j["@microsoft.graph.downloadUrl"] === "string") urlCache.set(name, j["@microsoft.graph.downloadUrl"] as string);
     resolveCache.set(name, r);
@@ -107,12 +113,12 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
     const existing = inflight.get(key);
     if (existing) return existing;
     const job = (async (): Promise<Uint8Array> => {
-      try { const c = await staging.get(`chunk:${name}:${i}`); if (c) return new Uint8Array(await c.blob.arrayBuffer()); } catch { /* staging 坏 → 直连 */ }
+      try { const c = await staging.get(`chunk:${name}:${i}`); if (c) { slog(`分片 ${i} ← staging`); return new Uint8Array(await c.blob.arrayBuffer()); } } catch { /* staging 坏 → 直连 */ }
       const off = i * chunkBytes;
       const len = Math.min(chunkBytes, item.size - off);
       const doFetch = async (url: string): Promise<Response> => fetch(url, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
       let url = urlCache.get(name) ?? await freshUrl(name, item.id);
-      if (!url) throw new Error(`无凭据/取不到 downloadUrl：${name}`);
+      if (!url) throw new Error(`无凭据/取不到 downloadUrl（token=${(await getToken()) ? "有" : "无"}）：${name}`);
       let resp = await doFetch(url);
       if (resp.status === 401 || resp.status === 403 || resp.status === 404) {   // URL 过期/失效 → 换新重试一次
         url = await freshUrl(name, item.id);
@@ -121,6 +127,7 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
       }
       if (!resp.ok && resp.status !== 206) throw new Error(`range 拉取失败 ${resp.status}：${name}`);
       const bytes = new Uint8Array(await resp.arrayBuffer());
+      slog(`分片 ${i} ← 云端（${bytes.length}B，HTTP ${resp.status}）`);
       // tee 回 staging + 记账（best-effort；schema 与 download-session 一致）
       try {
         await staging.put(`chunk:${name}:${i}`, { blob: new Blob([bytes as unknown as BlobPart]), updatedAt: Date.now() });
@@ -142,14 +149,24 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   function matches(url: URL): boolean { return url.pathname.startsWith(cfg.streamPrefix); }
 
   async function handle(req: Request): Promise<Response> {
+    try { return await handleInner(req); }
+    catch (e) {
+      const msg = String((e as Error)?.message ?? e);
+      slog(`🛑 网关错误：${msg}`);
+      return new Response(`网关错误：${msg}`, { status: 502 });
+    }
+  }
+  async function handleInner(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const name = decodeURIComponent(url.pathname.slice(cfg.streamPrefix.length));
+    slog(`请求 ${name}（Range: ${req.headers.get("Range") ?? "无"}）`);
     // ★本地正式副本（files 分区）**优先且不做任何云端解析**——keepOffline 过的 / 播种的本地文件，
     //   离线、未登录、云端不可达都必须照播（spike-1 曾把 resolve 放前面 → 未登录连本地文件都 404，已修）。
     let full: Blob | null = null;
     try { const r = await bs.partition("files").get(name); if (r) full = r.blob; } catch { /* 分区读失败 → 走云端 */ }
+    if (full) slog(`${name} ← 本地正式副本（${full.size}B）`);
     const item = full ? null : await resolve(name);
-    if (!full && !item) return new Response("未找到（未登录或云端无此文件）", { status: 404 });
+    if (!full && !item) { slog(`🛑 ${name} 404：本地无副本且解析失败`); return new Response("未找到（未登录或云端无此文件）", { status: 404 }); }
     const size = full ? full.size : item!.size;
     const ct = cfg.contentType?.(name) ?? "application/octet-stream";
     const baseHeaders: Record<string, string> = { "Accept-Ranges": "bytes", "Content-Type": ct, "Cache-Control": "no-store" };
