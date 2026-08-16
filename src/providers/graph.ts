@@ -169,8 +169,11 @@ export async function downloadRangeFromUrl(downloadUrl: string, offset: number |
 }
 
 // 拿一个新的 1h 短效 downloadUrl（过期重申请用）
+// ⚠ 裸 GET 不带 $select（2026-08-16 spike-7 战例）：downloadUrl 是 instance annotation，
+//   `$select=id,@microsoft.graph.downloadUrl` 会返回 200 却**丢掉该字段**。此前 listChildren 批量带回
+//   downloadUrl 把这条 refresh 路径遮着没炸；SW 网关手搓版先踩雷，同修回库（双实现 drift 的现世报）。
 export async function getDownloadUrl(itemId: string): Promise<string | null> {
-  const r = await graphFetch("GET", `/me/drive/items/${itemId}?$select=id,@microsoft.graph.downloadUrl`);
+  const r = await graphFetch("GET", `/me/drive/items/${itemId}`);
   const j = await r.json() as GraphDriveItem;
   return j["@microsoft.graph.downloadUrl"] || null;
 }
