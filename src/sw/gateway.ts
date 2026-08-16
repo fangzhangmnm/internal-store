@@ -207,25 +207,27 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
           : { ...baseHeaders, "Content-Length": String(size) },
       });
     }
-    let i = Math.floor(start / chunkBytes);
-    let skip = start - i * chunkBytes;
-    const nChunks = Math.max(1, Math.ceil(size / chunkBytes));
-    const stream = new ReadableStream<Uint8Array>({
-      pull: async (controller) => {
-        if (i >= nChunks) { controller.close(); return; }
-        const c = await getChunk(name, item!, i);
-        controller.enqueue(skip > 0 ? c.subarray(skip) : c);
-        skip = 0; i++;
-      },
-      // cancel：播放器不要了（seek 走了/暂停够久）→ 停拉。已 tee 的分片留在 staging。
-      cancel: () => { /* pull 不再被调即停；无需清理 */ },
-    });
-    const isRange = !!req.headers.get("Range");
-    return new Response(stream as unknown as BodyInit, {
-      status: isRange ? 206 : 200,
-      headers: isRange
-        ? { ...baseHeaders, "Content-Range": `bytes ${start}-${size - 1}/${size}`, "Content-Length": String(size - start) }
-        : { ...baseHeaders, "Content-Length": String(size) },
+    // 云端开放式（bytes=a- / 无 Range）→ **窗口式有界 206**：答 [start, 至多 2 分片对齐尾] 的真字节体，
+    //   播放器消费到窗尾会自己续发下一段 Range（= 开多久拉多久，分片粒度）。
+    //   ⚠ 为什么不用自定义 ReadableStream：spike-4 真机战例——Chrome 媒体管线对 SW 构造的
+    //   default-stream 响应**直接拒**（pull 从未被调、秒 code=4）；本地面 blob.stream()（原生字节流）却通。
+    //   窗口式全用真字节体，零流类型依赖，是 SW 媒体的稳妥老路。
+    const WINDOW_CHUNKS = 2;
+    const i0 = Math.floor(start / chunkBytes);
+    const end = Math.min(size - 1, (i0 + WINDOW_CHUNKS) * chunkBytes - 1);
+    const parts: Uint8Array[] = [];
+    for (let i = i0; i <= Math.floor(end / chunkBytes); i++) parts.push(await getChunk(name, item!, i));
+    const buf = new Uint8Array(end - start + 1);
+    let w = 0;
+    for (let i = i0; i <= Math.floor(end / chunkBytes); i++) {
+      const c = parts[i - i0], cs = i * chunkBytes;
+      const from = Math.max(start, cs) - cs, to = Math.min(end + 1, cs + c.length) - cs;
+      buf.set(c.subarray(from, to), w); w += to - from;
+    }
+    slog(`答窗口 206：bytes ${start}-${end}/${size}（${buf.length}B）`);
+    return new Response(buf as unknown as BodyInit, {
+      status: 206,
+      headers: { ...baseHeaders, "Content-Range": `bytes ${start}-${end}/${size}`, "Content-Length": String(buf.length) },
     });
   }
 
