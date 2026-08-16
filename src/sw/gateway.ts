@@ -144,12 +144,13 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   async function handle(req: Request): Promise<Response> {
     const url = new URL(req.url);
     const name = decodeURIComponent(url.pathname.slice(cfg.streamPrefix.length));
-    const item = await resolve(name);
-    if (!item) return new Response("未找到（未登录或云端无此文件）", { status: 404 });
-    // 若本地有正式副本（files 分区，keepOffline 过）→ 直接从它答（离线也能播）。
+    // ★本地正式副本（files 分区）**优先且不做任何云端解析**——keepOffline 过的 / 播种的本地文件，
+    //   离线、未登录、云端不可达都必须照播（spike-1 曾把 resolve 放前面 → 未登录连本地文件都 404，已修）。
     let full: Blob | null = null;
-    try { const r = await bs.partition("files").get(name); if (r) full = r.blob; } catch { /* 走云端 */ }
-    const size = full ? full.size : item.size;
+    try { const r = await bs.partition("files").get(name); if (r) full = r.blob; } catch { /* 分区读失败 → 走云端 */ }
+    const item = full ? null : await resolve(name);
+    if (!full && !item) return new Response("未找到（未登录或云端无此文件）", { status: 404 });
+    const size = full ? full.size : item!.size;
     const ct = cfg.contentType?.(name) ?? "application/octet-stream";
     const baseHeaders: Record<string, string> = { "Accept-Ranges": "bytes", "Content-Type": ct, "Cache-Control": "no-store" };
     const range = parseRange(req.headers.get("Range"), size) ?? { start: 0, end: null };
@@ -162,7 +163,7 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
       else {
         const i0 = Math.floor(start / chunkBytes), i1 = Math.floor(end / chunkBytes);
         const parts: Uint8Array[] = [];
-        for (let i = i0; i <= i1; i++) parts.push(await getChunk(name, item, i));
+        for (let i = i0; i <= i1; i++) parts.push(await getChunk(name, item!, i));
         const buf = new Uint8Array(end - start + 1);
         let w = 0;
         for (let i = i0; i <= i1; i++) {
@@ -195,7 +196,7 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
     const stream = new ReadableStream<Uint8Array>({
       pull: async (controller) => {
         if (i >= nChunks) { controller.close(); return; }
-        const c = await getChunk(name, item, i);
+        const c = await getChunk(name, item!, i);
         controller.enqueue(skip > 0 ? c.subarray(skip) : c);
         skip = 0; i++;
       },
