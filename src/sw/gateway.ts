@@ -11,6 +11,9 @@
 //   · staging schema 与 download-session 完全一致（meta:/chunk:、chunkBytes 对齐）→ 页面先播 pin 只补缺口的
 //     账本两个上下文通用。写账 best-effort（竞态/坏库只损失复用，不损正确性）。
 //   · 只读：网关绝不写 files/collections/云端，唯一副作用 = staging tee。
+//   ⚠ 收敛期 TODO（2026-08-19 记）：**答分片前不验 eTag**——云端换版后 staging 旧版残片会被混着新分片
+//     端出去（页面侧 download-session 开会话有钉版清理，SW 侧没有）。BR 只读镜像少换版暂无害；
+//     收敛期与 token-source 接缝一起修（getChunk 对 meta.eTag ≠ resolve.eTag 时先 purge 整组再拉）。
 //   · 开放式 Range（bytes=a-）答 ReadableStream 顺序分片：播放器要多少拉多少（开多久拉多久），cancel 即停。
 import { createPartitionedBlobStore, type PartitionView } from "../blob-partition.ts";
 
