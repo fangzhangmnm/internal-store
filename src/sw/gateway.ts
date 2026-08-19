@@ -65,7 +65,10 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   async function graphJson(path: string): Promise<Record<string, unknown> | null> {
     const token = await getToken();
     if (!token) { slog("graph 调用：无 token"); return null; }
-    const r = await fetch(`${GRAPH_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    let r: Response;
+    // fetch throw ≠ HTTP 错误状态（spike-11 战例：iOS 网络切换后 SW fetch 抛 "Load failed"）——翻成可读日志返 null，别裸抛成 502。
+    try { r = await fetch(`${GRAPH_BASE}${path}`, { headers: { Authorization: `Bearer ${token}` } }); }
+    catch (e) { slog(`graph 网络异常（fetch throw）：${String((e as Error)?.message ?? e)}`); return null; }
     if (!r.ok) {
       let d = ""; try { d = (await r.text()).slice(0, 180); } catch { /* 无 body */ }
       slog(`graph ${r.status}：${path.slice(0, 90)} ← ${d}`);
@@ -130,11 +133,16 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
       const doFetch = async (url: string): Promise<Response> => fetch(url, { headers: { Range: `bytes=${off}-${off + len - 1}` } });
       let url = urlCache.get(name) ?? await freshUrl(name, item.id);
       if (!url) throw new Error(`无凭据/取不到 downloadUrl（token=${(await getToken()) ? "有" : "无"}）：${name}`);
-      let resp = await doFetch(url);
-      if (resp.status === 401 || resp.status === 403 || resp.status === 404) {   // URL 过期/失效 → 换新重试一次
+      // fetch throw（"Load failed"）与 401/403/404 同待遇：换新 URL 重试一次（spike-11 战例：过期 URL/
+      // 网络切换后遗症都可能以 throw 现形，而不是 HTTP 状态码）。重试再 throw → 带上下文抛给 502 面。
+      let resp: Response | null = null;
+      try { resp = await doFetch(url); }
+      catch (e) { slog(`range fetch 异常（${String((e as Error)?.message ?? e)}）→ 换新 URL 重试`); }
+      if (!resp || resp.status === 401 || resp.status === 403 || resp.status === 404) {   // URL 过期/失效/网络 throw → 换新重试一次
         url = await freshUrl(name, item.id);
         if (!url) throw new Error(`downloadUrl 续期失败：${name}`);
-        resp = await doFetch(url);
+        try { resp = await doFetch(url); }
+        catch (e) { throw new Error(`range 拉取网络异常（换新 URL 重试后仍败）：${String((e as Error)?.message ?? e)}：${name}`); }
       }
       if (!resp.ok && resp.status !== 206) throw new Error(`range 拉取失败 ${resp.status}：${name}`);
       const bytes = new Uint8Array(await resp.arrayBuffer());
