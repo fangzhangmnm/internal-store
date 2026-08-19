@@ -26,7 +26,7 @@ import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
-import { createDownloadSessions, EtagChangedError, type StagingStore } from "./download-session.ts";
+import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage } from "./download-session.ts";
 import { runStoreMigrations, storeNamespace } from "./migration.ts";
 import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
@@ -207,8 +207,13 @@ export interface RawFile {
   keepOffline(opts?: { onProgress?: (doneBytes: number, totalBytes: number) => void }): Promise<void>;
   /** 流式读取会话（A2，大媒体按需取片）：本地有副本 → 本地切片喂；无 → 云端分片会话（tee 入 staging）。
    *  **at-rest 字节面**（加密件给的是密文容器字节——流式消费请只用于明文文件；加密件走 open()）。
-   *  两端都拿不到 → null。keep() 升格正式本地副本后，请**重开** openStream（新 handle 走本地面）。 */
+   *  两端都拿不到 → null。keep() 升格正式本地副本后，请**重开** openStream（新 handle 走本地面）。
+   *  不限音频：RealHome「世界预热」（glb 预载不退场等加载）同一面——prefetch/keep 预热 + stagingCoverage 报进度。 */
   openStream(): Promise<FileStream | null>;
+  /** staging 覆盖快照（A5 透明面）：**只读、零网络、离线可用**；无残片 → null。与本地正式副本无关
+   *  （那查 isKeptOffline）。徽章三态：isKeptOffline→已钉；complete→已缓存（离线可完整播）；
+   *  有值不完整→部分缓存（**离线不该起播**——防头部先响、播到洞卡死）；null→无。 */
+  stagingCoverage(): Promise<StagingCoverage | null>;
   /** 合法(clean∧在线∧曾synced∧云端有完整)→hardDelete；非法(唯一副本/不可重取)→抛 OffloadIllegalError（banner）。 */
   offload(): Promise<void>;
   // ── 加密（at-rest 透明；出处 = WebPaint ai-docs/11。不注入 codec → dormant）──
@@ -759,6 +764,7 @@ export function createStore(config: StoreConfig) {
         });
       },
       isKeptOffline() { return local.exists(name); },   // 有本地副本 = 已留作离线（无 LRU、无独立 pin flag）
+      stagingCoverage() { return sessions.coverage(name); },   // A5 透明面：只读账本，零网络（离线徽章/护栏用）
       async keepOffline(opts) {   // 确保本地有副本——分片会话（复用 staging 已流分片只补缺口 + 进度）；失败 best-effort surface
         if (await local.exists(name)) return;
         const runOnce = async (): Promise<void> => {

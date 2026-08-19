@@ -44,6 +44,21 @@ export interface DownloadSessionsCfg {
   now?: () => number;          // 测试注入
 }
 
+/** staging 覆盖快照（A5 透明面，2026-08-18 user 批「关键是透明清晰」）——只读 staging 账本，
+ *  **零网络、离线可用**。app 拿它画徽章三态（已钉走 isKeptOffline / 完整缓存 / 部分缓存）+ 离线起播
+ *  护栏（complete 才起播——防「头部在缓存先响了、播到洞静默卡死」）+ 离线边界接曲决策（headBytes）。
+ *  注意：反映的是账上那一版（eTag 在案），不上网验云端当下版。 */
+export interface StagingCoverage {
+  totalBytes: number;
+  /** 已持有字节（按分片账算，不打网络）。 */
+  bytes: number;
+  /** 从文件头起**连续**已持有的字节数（「头部备好没」）。 */
+  headBytes: number;
+  /** 全部分片在账 = 离线可完整播。 */
+  complete: boolean;
+  eTag: string;
+}
+
 /** eTag 钉版失效：云端在会话期间换了版。caller 清障后可重开会话。 */
 export class EtagChangedError extends Error {
   constructor(name: string) { super(`云端文件已更新，下载会话失效：${name}`); this.name = "EtagChangedError"; }
@@ -134,6 +149,20 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
         total -= meta.chunks.length * meta.chunkBytes;
       }
     } catch (e) { reportStoreError(e, "log"); }   // cap 清理失败无害（下次再清）；绝不影响主流程
+  }
+
+  /** 覆盖快照（只读账本，零网络）。无残片 → null。 */
+  async function coverage(name: string): Promise<StagingCoverage | null> {
+    const m = await readMeta(name);
+    if (!m) return null;
+    const nChunks = Math.max(1, Math.ceil(m.totalBytes / m.chunkBytes));
+    const got = new Set(m.chunks);
+    const sizeOf = (i: number): number => Math.min(m.chunkBytes, m.totalBytes - i * m.chunkBytes);
+    let bytes = 0;
+    for (const i of got) if (i >= 0 && i < nChunks) bytes += sizeOf(i);
+    let headBytes = 0;
+    for (let i = 0; i < nChunks && got.has(i); i++) headBytes += sizeOf(i);
+    return { totalBytes: m.totalBytes, bytes, headBytes, complete: headBytes === m.totalBytes, eTag: m.eTag };
   }
 
   // ── 会话 ────────────────────────────────────────────────────────────────────────
@@ -244,5 +273,5 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     };
   }
 
-  return { open, purgeName, _enforceCap: enforceCap };
+  return { open, coverage, purgeName, _enforceCap: enforceCap };
 }

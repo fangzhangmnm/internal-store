@@ -265,6 +265,17 @@ export interface FetchMetaResult {
 }
 
 // @public
+export interface FileStream {
+    close(): void;
+    keep(opts?: {
+        onProgress?: (doneBytes: number, totalBytes: number) => void;
+    }): Promise<void>;
+    prefetch(offset: number, length: number): Promise<void>;
+    read(offset: number, length: number): Promise<Uint8Array>;
+    totalSize: number;
+}
+
+// @public
 export interface FolderDeleteResult {
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
 }
@@ -275,6 +286,7 @@ export interface FolderSnapshot {
     folders: string[];
     items: Item[];
     path: string;
+    stale?: true;
 }
 
 // @public
@@ -343,10 +355,12 @@ export interface LocalCache {
     backup(name: string): Promise<string>;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
+    getDirIndexCache?(folder: string): Promise<string | null>;
     hardDelete(name: string): Promise<void>;
     listBackup?(): Promise<TrashEntry[]>;
     listTrash?(): Promise<TrashEntry[]>;
     purgeTrash?(trashKey: string): Promise<void>;
+    putDirIndexCache?(folder: string, json: string): Promise<void>;
     restore(trashKey: string): Promise<string>;
     save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
     stat(name: string): Promise<{
@@ -428,9 +442,12 @@ export interface RawFile {
     }>;
     isEncrypted(): Promise<boolean>;
     isKeptOffline(): Promise<boolean>;
-    keepOffline(): Promise<void>;
+    keepOffline(opts?: {
+        onProgress?: (doneBytes: number, totalBytes: number) => void;
+    }): Promise<void>;
     offload(): Promise<void>;
     open(): Promise<Blob | null>;
+    openStream(): Promise<FileStream | null>;
     pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
     reupload(): Promise<{
         status: string;
@@ -439,6 +456,7 @@ export interface RawFile {
         tryPush?: boolean;
         hint?: unknown;
     }): Promise<SaveResult>;
+    stagingCoverage(): Promise<StagingCoverage | null>;
     tryMove(to: string): Promise<TryMoveResult>;
     verifyPassword(pw: string): Promise<boolean>;
 }
@@ -454,6 +472,11 @@ export interface RawGraphItem {
     name?: string;
     path?: string;
     size?: number;
+}
+
+// @public
+export class ReadOnlyFilesError extends Error {
+    constructor(op: string);
 }
 
 // @public
@@ -492,6 +515,17 @@ export type SaveResult = {
 };
 
 // @public
+export interface StagingCoverage {
+    bytes: number;
+    complete: boolean;
+    // (undocumented)
+    eTag: string;
+    headBytes: number;
+    // (undocumented)
+    totalBytes: number;
+}
+
+// @public
 export type Store = ReturnType<typeof createStore>;
 
 // @public
@@ -516,8 +550,13 @@ export interface StoreConfig {
     local?: LocalCache;
     offlineUploadReplay?: UploadReplayPolicy;
     provider: CloudProvider;
+    readOnlyFiles?: boolean;
     signedIn?: () => boolean;
     skipMigration?: boolean;
+    // Warning: (ae-forgotten-export) The symbol "StagingStore" needs to be exported by the entry point index.d.ts
+    staging?: StagingStore;
+    stagingCapBytes?: number;
+    stagingChunkBytes?: number;
     ui: StoreUI;
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }

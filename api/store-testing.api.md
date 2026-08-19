@@ -62,10 +62,12 @@ export interface LocalCache {
     backup(name: string): Promise<string>;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
+    getDirIndexCache?(folder: string): Promise<string | null>;
     hardDelete(name: string): Promise<void>;
     listBackup?(): Promise<TrashEntry[]>;
     listTrash?(): Promise<TrashEntry[]>;
     purgeTrash?(trashKey: string): Promise<void>;
+    putDirIndexCache?(folder: string, json: string): Promise<void>;
     restore(trashKey: string): Promise<string>;
     save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
     stat(name: string): Promise<{
@@ -81,6 +83,7 @@ export interface LocalCache {
 
 // @public
 export interface MockLocal extends LocalCache {
+    _dirIndex: Map<string, string>;
     _items: Map<string, Bytes>;
     _trash: Map<string, TrashItem>;
 }

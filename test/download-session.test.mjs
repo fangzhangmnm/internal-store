@@ -160,6 +160,34 @@ describe("download-session · eTag 钉版 + cap + 不覆盖", () => {
   });
 });
 
+describe("download-session · coverage 透明面（A5）", () => {
+  it("无残片 → null；读过中段 → partial（bytes 对、headBytes=0）；读头部 → headBytes 连续段；全读 → complete", async () => {
+    const data = bytes(10);   // chunkSize=4 → 分片 [0..3][4..7][8..9]
+    const { sessions } = mkSessions({ files: new Map([["f", { etag: "e1", data }]]) });
+    eq(await sessions.coverage("f"), null, "无残片 → null");
+    const s = await sessions.open("f");
+    await s.read(4, 4);                                   // 只拿分片 1
+    let c = await sessions.coverage("f");
+    eq(c.totalBytes, 10); eq(c.bytes, 4); eq(c.headBytes, 0); eq(c.complete, false);
+    await s.read(0, 1);                                   // 补分片 0 → 头部连续 8B
+    c = await sessions.coverage("f");
+    eq(c.bytes, 8); eq(c.headBytes, 8); eq(c.complete, false); eq(c.eTag, "e1");
+    await s.read(8, 2);                                   // 补尾片 → 全量
+    c = await sessions.coverage("f");
+    eq(c.bytes, 10); eq(c.headBytes, 10); eq(c.complete, true);
+    s.close();
+  });
+
+  it("promote 清账后 → null（已升格正式副本，staging 归零）", async () => {
+    const data = bytes(10);
+    const { sessions } = mkSessions({ files: new Map([["f", { etag: "e1", data }]]) });
+    const s = await sessions.open("f");
+    await s.promote();
+    s.close();
+    eq(await sessions.coverage("f"), null, "promote 后账本清空");
+  });
+});
+
 describe("download-session · store 级（keepOffline / openStream）", () => {
   function mkStore() {
     const provider = createMockProvider();
@@ -197,6 +225,22 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     h.close();
     eq([...local._items.get("s.mp3")].join(","), [...data].join(","), "keep 落全量");
     eq(await store.file("没有这个", { isZip: false, mode: "existing" }).openStream(), null, "absent → null（诚实）");
+  });
+
+  it("file.stagingCoverage：流播中段 → partial；keepOffline 升格后 → null 且 isKeptOffline", async () => {
+    const { store, provider } = mkStore();
+    const data = bytes(10);
+    provider._seed("c.mp3", data);
+    const f = store.file("c.mp3", { isZip: false, mode: "existing" });
+    eq(await f.stagingCoverage(), null, "没流过 → null");
+    const h = await f.openStream();
+    await h.read(0, 5);                                   // 分片 0+1
+    h.close();
+    const c = await f.stagingCoverage();
+    eq(c.totalBytes, 10); eq(c.headBytes, 8); eq(c.complete, false);
+    await f.keepOffline();
+    eq(await f.stagingCoverage(), null, "升格后 staging 清账（徽章走 isKeptOffline）");
+    assert(await f.isKeptOffline(), "已钉");
   });
 
   it("openStream 本地面：本地有副本 → 切片直读（不打云）", async () => {

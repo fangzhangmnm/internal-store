@@ -45,6 +45,8 @@ export type { DelResult } from "./delete.ts";
 export type { FolderSnapshot } from "./listing.ts";
 export type { FolderDeleteResult, UploadOpts, MoveOpts, Kv } from "./types.ts";
 export type { UploadReplayPolicy } from "./upload-queue.ts";
+/** staging 覆盖快照（file.stagingCoverage 返回；A5 透明面——徽章三态/离线起播护栏/离线接曲决策）。 */
+export type { StagingCoverage } from "./download-session.ts";
 export type { ResolveChoice } from "./safe-resolve.ts";
 export type { StoreErrorLevel } from "./error-handling.ts";
 /** 加密 codec 注入契约 + collection 配置 + 回收站聚合条目。 */

@@ -408,6 +408,22 @@ export declare interface FetchMetaResult {
     item: CloudItem;
 }
 
+/** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
+export declare interface FileStream {
+    /** 总字节数。 */
+    totalSize: number;
+    /** 读一段（播放优先级；staging/本地命中则不打网络）。越界自动钳。 */
+    read(offset: number, length: number): Promise<Uint8Array>;
+    /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。 */
+    prefetch(offset: number, length: number): Promise<void>;
+    /** 升格正式本地副本（= keepOffline：只补缺口 + 进度）。本地面 no-op。升格后请重开 openStream。 */
+    keep(opts?: {
+        onProgress?: (doneBytes: number, totalBytes: number) => void;
+    }): Promise<void>;
+    /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
+    close(): void;
+}
+
 /** 删空夹的判别式结果（backend 侧唯一的文件夹删除面；绝不 throw 非空/列举失败，用 status 表达）。 */
 export declare interface FolderDeleteResult {
     /** 四态：deleted/already-gone=终态成功；non-empty=有内容；list-failed=列举失败确认不了空。 */
@@ -424,6 +440,9 @@ export declare interface FolderSnapshot {
     folders: string[];
     /** false → 该夹列举失败、不权威。 */
     complete: boolean;
+    /** true → 本帧掺了 dir-index-cache 的「上次云端所见」（A3 冷首帧）：cloud-only 项可能已过时，
+     *  等云端帧纠偏。stale 帧恒 complete:false（不权威，别据此做任何删/收敛判断）。 */
+    stale?: true;
 }
 
 /** open / refresh 的终态。 */
@@ -547,6 +566,10 @@ export declare interface LocalCache {
     listTrash?(): Promise<TrashEntry[]>;
     /** 备份分区列举（weakOverride/keepMine loser 的本地 stash）——回收站/备份视图两端聚合用。restore/purgeTrash 已认 `backup/` 前缀 key。 */
     listBackup?(): Promise<TrashEntry[]>;
+    /** 读某夹目录索引缓存 JSON 串；缺/未实现 → null。 */
+    getDirIndexCache?(folder: string): Promise<string | null>;
+    /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
+    putDirIndexCache?(folder: string, json: string): Promise<void>;
 }
 
 /** provider.move 的选项。 */
@@ -655,8 +678,20 @@ export declare interface RawFile {
     }>;
     /** 本地有副本？（= 已留作离线）。 */
     isKeptOffline(): Promise<boolean>;
-    /** 留一份离线副本（未缓存则 acquire）。注：open 已含下载子过程，故名 keepOffline 非 download。 */
-    keepOffline(): Promise<void>;
+    /** 留一份离线副本（未缓存则分片会话下载：**复用 staging 已流分片只补缺口**——先播后 pin 不重下；
+     *  onProgress 报字节进度）。注：open 已含下载子过程，故名 keepOffline 非 download。 */
+    keepOffline(opts?: {
+        onProgress?: (doneBytes: number, totalBytes: number) => void;
+    }): Promise<void>;
+    /** 流式读取会话（A2，大媒体按需取片）：本地有副本 → 本地切片喂；无 → 云端分片会话（tee 入 staging）。
+     *  **at-rest 字节面**（加密件给的是密文容器字节——流式消费请只用于明文文件；加密件走 open()）。
+     *  两端都拿不到 → null。keep() 升格正式本地副本后，请**重开** openStream（新 handle 走本地面）。
+     *  不限音频：RealHome「世界预热」（glb 预载不退场等加载）同一面——prefetch/keep 预热 + stagingCoverage 报进度。 */
+    openStream(): Promise<FileStream | null>;
+    /** staging 覆盖快照（A5 透明面）：**只读、零网络、离线可用**；无残片 → null。与本地正式副本无关
+     *  （那查 isKeptOffline）。徽章三态：isKeptOffline→已钉；complete→已缓存（离线可完整播）；
+     *  有值不完整→部分缓存（**离线不该起播**——防头部先响、播到洞卡死）；null→无。 */
+    stagingCoverage(): Promise<StagingCoverage | null>;
     /** 合法(clean∧在线∧曾synced∧云端有完整)→hardDelete；非法(唯一副本/不可重取)→抛 OffloadIllegalError（banner）。 */
     offload(): Promise<void>;
     /** 本地字节是否加密容器。 */
@@ -698,6 +733,11 @@ export declare interface RawGraphItem {
     downloadUrl?: string;
     /** Graph 直传的下载 URL 注解。 */
     "@microsoft.graph.downloadUrl"?: string;
+}
+
+/** files 面只读镜像（readOnlyFiles:true）下调用写路径 → 抛此错（app surface；这不是失败，是契约）。 */
+export declare class ReadOnlyFilesError extends Error {
+    constructor(op: string);
 }
 
 /** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
@@ -752,6 +792,29 @@ export declare type SaveResult = {
     reason?: string;
 };
 
+/** staging 覆盖快照（A5 透明面，2026-08-18 user 批「关键是透明清晰」）——只读 staging 账本，
+ *  **零网络、离线可用**。app 拿它画徽章三态（已钉走 isKeptOffline / 完整缓存 / 部分缓存）+ 离线起播
+ *  护栏（complete 才起播——防「头部在缓存先响了、播到洞静默卡死」）+ 离线边界接曲决策（headBytes）。
+ *  注意：反映的是账上那一版（eTag 在案），不上网验云端当下版。 */
+export declare interface StagingCoverage {
+    totalBytes: number;
+    /** 已持有字节（按分片账算，不打网络）。 */
+    bytes: number;
+    /** 从文件头起**连续**已持有的字节数（「头部备好没」）。 */
+    headBytes: number;
+    /** 全部分片在账 = 离线可完整播。 */
+    complete: boolean;
+    eTag: string;
+}
+
+/** staging 分区的注入端口（prod = blob-partition 的 "staging" 分区；测试 = 内存 map）。 */
+declare interface StagingStore {
+    get(key: string): Promise<Blob | null>;
+    put(key: string, blob: Blob): Promise<void>;
+    del(key: string): Promise<void>;
+    keys(): Promise<string[]>;
+}
+
 /** store 本体类型（createStore 的返回面：file / collection / files / encryption）。 */
 export declare type Store = ReturnType<typeof createStore>;
 
@@ -785,6 +848,12 @@ export declare interface StoreConfig {
     kv?: Kv;
     /** 内部/测试 seam：本地缓存注入（prod 默认 idb，createLocalCache）。 */
     local?: LocalCache;
+    /** 内部/测试 seam：staging 暂存区注入（prod 默认 idb 的 `staging/` 分区）。 */
+    staging?: StagingStore;
+    /** 分片下载会话的分片大小（默认 2MiB；= pin 给播放让路的粒度）。 */
+    stagingChunkBytes?: number;
+    /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
+    stagingCapBytes?: number;
     /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
     getPassword?: (name: string) => string | null;
     /** 采纳云端字节前的有效性闸（N2：clean 快进/pull 覆盖本地前调）——**所有 consumer 必传，禁 placeholder/noop**。
@@ -810,6 +879,11 @@ export declare interface StoreConfig {
     cloudGoneGraceMs?: number;
     /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
     activeFileName?: () => string | null;
+    /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
+     *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
+     *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
+     *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
+    readOnlyFiles?: boolean;
 }
 
 /** 错误上报分级：error=非预期失败；warning=可疑但非致命；info=值得让用户知道的瞬态；log=良性 offline/fallback。 */
