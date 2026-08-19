@@ -768,7 +768,19 @@ export function createStore(config: StoreConfig) {
       async keepOffline(opts) {   // 确保本地有副本——分片会话（复用 staging 已流分片只补缺口 + 进度）；失败 best-effort surface
         if (await local.exists(name)) return;
         const runOnce = async (): Promise<void> => {
-          const sess = await sessions.open(name);
+          // A6 离线升格（2026-08-19 user 批）：云端不可达时，staging 账完整 → 零网络落地（谱系=账上 eTag，回线 freshness 照常校验）
+          if (!isOnline()) {
+            const r = await sessions.promoteFromStaging(name);
+            if (r === "done") return;
+            throw new Error(`离线无法留离线：本地缓存${r === "none" ? "没有" : "不完整"}，需要网络补齐`);
+          }
+          let sess;
+          try { sess = await sessions.open(name); }
+          catch (e) {   // isOnline 说在线但网络实际抛了（onLine 有说谎前科）→ 同走离线升格兜底
+            const r = await sessions.promoteFromStaging(name);
+            if (r === "done") return;
+            throw new Error(`留离线失败：云端不可达（${(e as Error).message}），且本地缓存${r === "none" ? "没有" : "不完整"}`);
+          }
           if (!sess) return;                            // 云端没有 → 与旧 acquire absent 行为一致（上层看 isKeptOffline）
           try { await sess.promote({ onProgress: opts?.onProgress }); } finally { sess.close(); }
         };

@@ -165,6 +165,27 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     return { totalBytes: m.totalBytes, bytes, headBytes, complete: headBytes === m.totalBytes, eTag: m.eTag };
   }
 
+  /** 离线升格（A6，2026-08-19 user 批）：staging 账**完整**时零网络组装落地，谱系记账上的 eTag。
+   *  红线分析：等价于「早先拉过该版、云端其后又动」的正常 clean 陈旧态——回线后 freshness/pull
+   *  照常校验收敛；adoptLocal 原有护栏不变（已有副本/dirty 绝不覆盖，false 也照样收摊清账）。
+   *  账没有 → "none"；缺片/尺寸不符 → "incomplete"（**不清账**——残片仍有复用价值，caller 报人话）。 */
+  async function promoteFromStaging(name: string): Promise<"done" | "none" | "incomplete"> {
+    const m = await readMeta(name);
+    if (!m) return "none";
+    const nChunks = Math.max(1, Math.ceil(m.totalBytes / m.chunkBytes));
+    const parts: Blob[] = [];
+    let size = 0;
+    for (let i = 0; i < nChunks; i++) {
+      const c = await sGet(cKey(name, i));
+      if (!c) return "incomplete";
+      parts.push(c); size += c.size;
+    }
+    if (size !== m.totalBytes) return "incomplete";   // 账/字节不符：宁可报不完整也绝不落错尺寸副本
+    await adoptLocal(name, new Blob(parts), m.eTag);
+    await purgeName(name);
+    return "done";
+  }
+
   // ── 会话 ────────────────────────────────────────────────────────────────────────
   async function open(name: string): Promise<DownloadSession | null> {
     const cm0 = await fetchMeta(name);
@@ -273,5 +294,5 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     };
   }
 
-  return { open, coverage, purgeName, _enforceCap: enforceCap };
+  return { open, coverage, promoteFromStaging, purgeName, _enforceCap: enforceCap };
 }

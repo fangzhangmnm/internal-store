@@ -243,6 +243,44 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     assert(await f.isKeptOffline(), "已钉");
   });
 
+  it("A6 离线升格：缓存完整 → keepOffline 零网络落地（谱系=账上 eTag）；不完整 → 人话报错不落地", async () => {
+    const provider = createMockProvider();
+    const local = createMockLocal();
+    const staging = memStaging();
+    let online = true;
+    const errors = [];
+    const store = createStore({
+      appId: "test", provider, local, kv: memKv(), staging, stagingChunkBytes: 4,
+      ui: { ...UI, reportError: (e) => errors.push(String(e?.message ?? e)) },
+      validateAdopt: () => true, isOnline: () => online, signedIn: () => true, skipMigration: true,
+    });
+    const data = bytes(10);
+    provider._seed("off.mp3", data);
+    // 全量流播（staging 完整）→ 断网
+    const h = await store.file("off.mp3", { isZip: false, mode: "existing" }).openStream();
+    await h.read(0, 10); h.close();
+    online = false;
+    provider.list = () => { throw new Error("离线"); };
+    const origRange = provider.downloadRange.bind(provider);
+    let ranges = 0;
+    provider.downloadRange = (...a) => { ranges++; return origRange(...a); };
+    await store.file("off.mp3", { isZip: false, mode: "existing" }).keepOffline();
+    assert(local._items.has("off.mp3"), "★离线升格落地");
+    eq([...local._items.get("off.mp3")].join(","), [...data].join(","), "字节逐位对");
+    eq(ranges, 0, "★零网络");
+    eq(await store.file("off.mp3", { isZip: false, mode: "existing" }).stagingCoverage(), null, "升格后清账");
+    // 不完整案：只流了中段 → 离线 keepOffline 报人话、不落地、残片不清
+    online = true;
+    provider._seed("part.mp3", data);
+    const h2 = await store.file("part.mp3", { isZip: false, mode: "existing" }).openStream();
+    await h2.read(4, 4); h2.close();
+    online = false;
+    await store.file("part.mp3", { isZip: false, mode: "existing" }).keepOffline();
+    assert(!local._items.has("part.mp3"), "不完整不落地");
+    assert(errors.some((m) => m.includes("不完整")), `报人话（实=${errors.join("|")}）`);
+    assert(await store.file("part.mp3", { isZip: false, mode: "existing" }).stagingCoverage(), "残片不清（仍可复用）");
+  });
+
   it("openStream 本地面：本地有副本 → 切片直读（不打云）", async () => {
     const { store, provider, local } = mkStore();
     const data = bytes(10);

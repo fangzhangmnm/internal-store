@@ -122,7 +122,9 @@ describe("dir-index-cache · badge/登出纪律", () => {
     await tick(); un();
     const hits = frames[0].items.filter((i) => i.path === "a.mp3");
     eq(hits.length, 1, "不重复");
-    assert(hits[0].syncState !== "newer-on-cloud" && hits[0].syncState !== "synced", `★本地项塌本地视角（实=${hits[0].syncState}）`);
+    // 2026-08-19 user 拍板更新：谱系在案（everSynced∧clean）离线显 synced（=已留离线语义）；
+    // 本测核心不变——绝不被快照旧 eTag 拉成 newer-on-cloud（那要等真云端帧来纠偏）。
+    eq(hits[0].syncState, "synced", `★谱系在案离线显 synced、绝不闪 newer-on-cloud（实=${hits[0].syncState}）`);
   });
 
   it("登出（signedIn:false）→ 首帧不掺快照（不给未登录视角看云端名单）", async () => {

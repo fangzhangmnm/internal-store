@@ -71,9 +71,12 @@ export function classifySyncState(f: {
 }): SyncState {
   if (!f.hasLocal) return "cloud-only";                 // union 保证：到这一定 hasCloud
   // ── 本地有副本 ────────────────────────────────────────────────
-  if (!f.cloudReachable) {                              // 离线/登出：云轴不可知 → 塌到本地视角（用户在场也别谎报 synced）
+  if (!f.cloudReachable) {                              // 离线/登出：云轴不可知 → 按谱系塌（2026-08-19 user 拍板）
     if (f.dirty) return f.everSynced ? "unpushed" : "float";
-    return "local-only";
+    // everSynced=谱系在案 → 显 synced（=「已留离线」语义；与下方 partial-absence 保守显 synced 同精神，
+    // 回线后若云端动过自然纠偏成 newer-on-cloud）。原「一律塌 local-only」把已钉文件反向谎报成
+    // 「从没上过云的真本地文件」——BR 真机战报打回（曾经的「别谎报 synced」注释被此案 supersede）。
+    return f.everSynced ? "synced" : "local-only";
   }
   // ── cloudReachable ───────────────────────────────────────────
   if (f.hasCloud) {                                     // 云端确实有（可信，无关 complete）

@@ -54,3 +54,16 @@ test("[classify] clean cloud-gone + 非 pendingGone → 'local-only'（老行为
 test("[classify] dirty cloud-gone → 'ghost'（未推字节永不删，pendingGone 不影响）", () => {
   eq(classifySyncState({ ...base, dirty: true, pendingGone: true }), "ghost", "dirty 走 ghost");
 });
+
+// ── classifySyncState 离线分支（2026-08-19 user 拍板：谱系在案离线显 synced，BR 真机战报打回旧「一律 local-only」）──
+const off = { hasLocal: true, hasCloud: false, cloudMoved: false, cloudReachable: false, absenceAuthoritative: false };
+test("[classify] 离线 + everSynced∧clean → 'synced'（=已留离线语义，回线纠偏）", () => {
+  eq(classifySyncState({ ...off, everSynced: true, dirty: false }), "synced", "拍板 2026-08-19");
+});
+test("[classify] 离线 + 从没上过云 clean → 'local-only'（真本地文件不变）", () => {
+  eq(classifySyncState({ ...off, everSynced: false, dirty: false }), "local-only");
+});
+test("[classify] 离线 + dirty → unpushed/float 不变", () => {
+  eq(classifySyncState({ ...off, everSynced: true, dirty: true }), "unpushed");
+  eq(classifySyncState({ ...off, everSynced: false, dirty: true }), "float");
+});
