@@ -808,7 +808,7 @@ export declare interface StagingCoverage {
 }
 
 /** staging 分区的注入端口（prod = blob-partition 的 "staging" 分区；测试 = 内存 map）。 */
-declare interface StagingStore {
+export declare interface StagingStore {
     get(key: string): Promise<Blob | null>;
     put(key: string, blob: Blob): Promise<void>;
     del(key: string): Promise<void>;

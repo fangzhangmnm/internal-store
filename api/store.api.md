@@ -526,6 +526,18 @@ export interface StagingCoverage {
 }
 
 // @public
+export interface StagingStore {
+    // (undocumented)
+    del(key: string): Promise<void>;
+    // (undocumented)
+    get(key: string): Promise<Blob | null>;
+    // (undocumented)
+    keys(): Promise<string[]>;
+    // (undocumented)
+    put(key: string, blob: Blob): Promise<void>;
+}
+
+// @public
 export type Store = ReturnType<typeof createStore>;
 
 // @public
@@ -553,7 +565,6 @@ export interface StoreConfig {
     readOnlyFiles?: boolean;
     signedIn?: () => boolean;
     skipMigration?: boolean;
-    // Warning: (ae-forgotten-export) The symbol "StagingStore" needs to be exported by the entry point index.d.ts
     staging?: StagingStore;
     stagingCapBytes?: number;
     stagingChunkBytes?: number;
