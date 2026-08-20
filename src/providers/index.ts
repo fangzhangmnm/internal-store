@@ -60,6 +60,7 @@ export interface OneDriveConfig {
  */
 export function createOneDriveProvider(config: OneDriveConfig = {}): { provider: CloudProvider; auth: OneDriveAuth } {
   configureOneDriveAuth(config);                  // { clientId, scopes?, authority?, msalUrl? }
+  graph.configureGraphTokenSource(getToken);      // token-source 接缝：页面上下文 = MSAL（SW 上下文注入凭据桥读端）
   return {
     provider: graphToCloudProvider(graph),        // CloudProvider（喂 createCloudSync）
     auth: { isAuthConfigured, initAuth, signIn, signOut, getToken, isSignedIn, getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState },

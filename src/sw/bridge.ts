@@ -43,3 +43,16 @@ export function startSwAuthBridge(cfg: SwAuthBridgeCfg): { ready: Promise<void>;
   };
   return { ready, stop };
 }
+
+/** **SW 侧**读端：把凭据桥翻成 graph 层的 token-source（configureGraphTokenSource 用）。
+ *  无 token/记录不可读 → throw（graph 调用者按「云端不可达」处理——离线/未登录同一条降级路）。 */
+export function createBridgeTokenSource(dbName: string): () => Promise<string> {
+  const bridge = createPartitionedBlobStore(dbName).partition("sw-bridge");
+  return async () => {
+    const r = await bridge.get("token");
+    if (!r) throw new Error("凭据桥无 token（未登录或页面桥未启动）");
+    const p = JSON.parse(await r.blob.text()) as { v?: number; token?: string };
+    if (p?.v === 1 && typeof p.token === "string") return p.token;
+    throw new Error("凭据桥 token 记录不可读");
+  };
+}

@@ -17,6 +17,10 @@
     "./testing": {
       "types": "./dist/testing/index.d.ts",
       "default": "./dist/testing/index.js"
+    },
+    "./sw": {
+      "types": "./dist/sw/index.d.ts",
+      "default": "./dist/sw/index.js"
     }
   },
   "scripts": {

@@ -14,7 +14,16 @@
 //   - @microsoft.graph.conflictBehavior 在 URL 查询串，不是 header（@ 在 header 非法）。
 //   - 大于 4MB 走 createUploadSession 分块上传。atlas zip 大概率超 4MB。
 
-import { getToken } from "./auth.ts";
+// ── token-source 接缝（2026-08-20 收敛，2026-08-15 grill 拍板方向）────────────────────────────
+//   graph 层不绑 MSAL：页面 = createOneDriveProvider 自动注入 auth.getToken；SW = 注入凭据桥读端
+//   （sw/bridge createBridgeTokenSource）。SW 网关此前手搓的一份 Graph 实现随之退役（双实现 drift
+//   的现世报见下方 getDownloadUrl 的 $select 雷注）。
+let _tokenSource: (() => Promise<string>) | null = null;
+export function configureGraphTokenSource(fn: () => Promise<string>): void { _tokenSource = fn; }
+async function getToken(): Promise<string> {
+  if (!_tokenSource) throw new Error("graph token source 未配置（页面走 createOneDriveProvider；SW 走 configureGraphTokenSource(createBridgeTokenSource(dbName))）");
+  return _tokenSource();
+}
 
 // ---- 实际读到的 Graph JSON 形状（只声明本文件真正访问的字段，其余 Graph 字段忽略）。----
 // driveItem 的 file/folder facet 二选一区分文件/文件夹；@ 前缀字段是 Graph 注解。
@@ -143,9 +152,21 @@ export async function downloadItemBlob(itemId: string): Promise<Blob> {
 //   offset = null + length 给 suffix range "bytes=-N"（取最后 N 字节）
 //   offset 给 prefix range "bytes=OFFSET-OFFSET+LEN-1"
 //   走 downloadUrl 拿 CDN signed URL（支持 Range header），fallback /content
+// downloadUrl 内存缓存（SW 网关手搓件合流，2026-08-20）：分片流播每 2MB 一个 range，
+// 不该每片重走一次 getDownloadUrl 往返；过期/失效（401/403/404 或 fetch throw——iOS 切网后遗症
+// 会以 throw 现形）→ 清缓存重申请一次。
+const _dlUrlCache = new Map<string, string>();
 export async function downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer> {
-  const dl = await getDownloadUrl(itemId);
-  if (dl) return await downloadRangeFromUrl(dl, offset, length);
+  let url = _dlUrlCache.get(itemId) ?? await getDownloadUrl(itemId);
+  if (url) {
+    _dlUrlCache.set(itemId, url);
+    try { return await downloadRangeFromUrl(url, offset, length); }
+    catch (_e) {
+      _dlUrlCache.delete(itemId);
+      url = await getDownloadUrl(itemId);
+      if (url) { _dlUrlCache.set(itemId, url); return await downloadRangeFromUrl(url, offset, length); }
+    }
+  }
   const r = await graphFetch("GET", `/me/drive/items/${itemId}/content`, { headers: { Range: _rangeHeader(offset, length) } });
   return await r.arrayBuffer();
 }
@@ -248,7 +269,7 @@ export async function deleteItem(itemId: string, eTag?: string | null): Promise<
 let _approotIdCache: string | null = null;
 const _subfolderIdCache = new Map<string, string>();
 
-export function clearFolderCaches(): void { _approotIdCache = null; _subfolderIdCache.clear(); }
+export function clearFolderCaches(): void { _approotIdCache = null; _subfolderIdCache.clear(); _dlUrlCache.clear(); }
 
 export async function getApprootId(): Promise<string> {
   if (_approotIdCache) return _approotIdCache;

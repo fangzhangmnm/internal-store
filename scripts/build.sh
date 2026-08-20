@@ -13,4 +13,5 @@ find dist -name '*.js' -exec du -b {} + | sort -rn | head -3 | awk '{printf "  %
 # 户口刷新（api-extractor --local：公共面变了就重写 api/*.api.md，git diff 即审核面）
 npx api-extractor run --local -c api-extractor.json
 npx api-extractor run --local -c api-extractor-testing.json
-echo "[户口] api/store.api.md + api/store-testing.api.md 已刷新"
+npx api-extractor run --local -c api-extractor-sw.json
+echo "[户口] api/store.api.md + api/store-testing.api.md + api/store-sw.api.md 已刷新"
