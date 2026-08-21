@@ -20,6 +20,8 @@ export interface PartitionView {
 
 export interface PartitionedBlobStore {
   partition(p: Partition): PartitionView;
+  /** 全库按分区分桶的占用（单次 cursor）。分区前缀的知识只在本模块，所以口径也从这里出。 */
+  usageAll(): Promise<Record<string, { bytes: number; count: number }>>;
 }
 
 export function createPartitionedBlobStore(dbName: string): PartitionedBlobStore {
@@ -37,5 +39,5 @@ export function createPartitionedBlobStore(dbName: string): PartitionedBlobStore
       moveTo: (name, to, toName) => idb.rename(key(p, name), key(to, toName)),
     };
   }
-  return { partition: view };
+  return { partition: view, usageAll: () => idb.usageAll() };
 }

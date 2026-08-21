@@ -290,6 +290,10 @@ export declare function createStore(config: StoreConfig): {
             bytes: number;
             count: number;
         }>;
+        usageBreakdown: () => Promise<Record<string, {
+            bytes: number;
+            count: number;
+        }>>;
         /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
         ensureFolder: (path: string) => Promise<void>;
         /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */
@@ -552,6 +556,15 @@ export declare interface LocalCache {
         bytes: number;
         count: number;
     }>;
+    /** **分区级**占用（files/trash/backup/collections/dir-index-cache/staging …），单次 cursor 分桶。
+     *  为什么要有它：`usage()` 只报 files 分区，而 trash/backup 同样吃浏览器配额且用户看不见
+     *  —— 宿主要如实告诉用户「本机到底被占了多少」，就必须拿得到分区口径（2026-08-21 WeebPaint 提出）。
+     *  同 usage()：只返标量、**永不返名字**（全库列举是被否决的退化设计）。
+     *  可选：老 mock / 注入式 LocalCache 不实现 → 宿主降级为只报 files（无害）。 */
+    usageBreakdown?(): Promise<Record<string, {
+        bytes: number;
+        count: number;
+    }>>;
     /** 复制一份备份（原件留着；pull 前的安全网），返备份名。 */
     backup(name: string): Promise<string>;
     /** 移进本地 .trash。deleteEventId 由 delete.ts 生成、与云端腿**共用**（trash-merge 据此精确配对）。返 trashKey。 */
