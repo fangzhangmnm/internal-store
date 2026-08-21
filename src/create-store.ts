@@ -727,8 +727,22 @@ export function createStore(config: StoreConfig) {
           // offlineEscape：在线但 fetchMeta 挂死（iOS 老 token iframe）时，用户点「跳过到离线」→ probe 赢 race → 读本地。
           //   对齐前身引擎 cloud-freshness「跳过到离线」（无硬超时，用户即超时）。不立即返缓存=防云端变了再采纳的闪。
           const esc = isOnline() ? ui.offlineEscape?.() : undefined;
-          try { await fresh.open(name, { isOnline, probe: esc?.probe }).catch((e) => ui.reportError(e)); }
-          finally { esc?.settle(); }
+          try {
+            // 冲突必 surface（ADR-0016 后半，20260820 事故修）：dirty ∧ cloudMoved → onNewer 走 push 412 同一张
+            //   resolveConflict sheet（takeCloud=safePull 先备份再拉 / keepMine|cancel=留本地 dirty，之后 push 412 再 surface）。
+            //   旧版没接 onNewer → freshness 默认 "cancel" = 静默保留陈旧本地（红线破口）。adopt 不接：open 的字节
+            //   经下方 readLocal() 返回值流回 app（refresh 才需要 adopt 活替换已打开的 doc）。
+            const r = await fresh.open(name, {
+              isOnline, probe: esc?.probe,
+              onNewer: onConflict,
+              localDirty: () => sub.edits.localDirty(),
+            }).catch((e) => { ui.reportError(e); return null; });
+            // FreshResult 不再丢弃：用户选了 takeCloud（或 clean 快进）但拉取失败（坏字节/备份失败/云端消失）
+            //   → 本地照读（不丢字节），但失败必 surface——绝不让「我选了用云端」静默变成「还是旧本地」。
+            if (r && (r.error != null || r.reason === "invalid-cloud-bytes" || r.reason === "cloud-vanished" || r.reason === "backup-failed")) {
+              ui.reportError(r.error ?? new Error(`打开时同步云端失败（${name}）：${r.reason}，已保留本地副本`), "warning");
+            }
+          } finally { esc?.settle(); }
           return readLocal();
         }
         if (autoCacheOpenedFile) {                                          // 本地没有、持有模式 → 拉云落本地（无可显示，必须等）

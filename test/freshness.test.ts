@@ -94,3 +94,69 @@ test("refresh clean 动过 → fast-forwarded", async () => {
   eq(r.status, "fast-forwarded", "clean 动过 → 快进");
   eq(await asStr(await local.get("f")), "CLOUD", "本地更新");
 });
+
+// ── 缺陷 B（20260820-open-time-conflict-surface-handoff）：!base（无 baseline）∧ 云端有文件 ≠ in-sync。
+//   rig 区别：云端文件用 provider._seed 放（外部写入方）→ 本机 cloud kv 无 etag → seenBase 真 null
+//   （rig() 里 cloud.push 会写 durable etag，造不出 !base）。判法对齐 listing 的 moved = cloudMoved || !everSynced。
+function rigExternalCloud() {
+  const provider = createMockProvider();
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });
+  const local = createMockLocal();
+  const head = createLocalHead({ kv: memKv(), getCloudEtag: (n: string) => cloud.getETag(n) });
+  const safeResolve = createSafeResolve({ cloud, local, head, validateAdopt: () => true });
+  const { open, refresh } = createFreshness({ cloud, head, safeResolve });
+  return { provider, cloud, local, head, open, refresh };
+}
+
+test("open dirty ∧ !base ∧ 云端有 → 必弹（onNewer 被调；takeCloud 拉云端）", async () => {
+  const { provider, local, head, open } = rigExternalCloud();
+  provider._seed("f", "CLOUD");
+  await local.save("f", enc("MINE")); head.recordEdit("f");
+  let asked = 0;
+  const r = await open("f", { onNewer: () => { asked++; return "takeCloud"; } });
+  eq(asked, 1, "!base 也必须 surface（修前被判 in-sync 静默留本地）");
+  eq(r.source, "pulled", "takeCloud → 拉");
+  eq(await asStr(await local.get("f")), "CLOUD", "本地变云端版（MINE 已备份）");
+});
+
+test("open dirty ∧ !base ∧ 云端有 + cancel → 留本地（kept，不静默）", async () => {
+  const { provider, local, head, open } = rigExternalCloud();
+  provider._seed("f", "CLOUD");
+  await local.save("f", enc("MINE")); head.recordEdit("f");
+  let asked = 0;
+  const r = await open("f", { onNewer: () => { asked++; return "cancel"; } });
+  eq(asked, 1, "弹过再留，不是没弹");
+  eq(r.reason, "kept", "cancel → 留本地");
+  eq(await asStr(await local.get("f")), "MINE", "本地没动");
+});
+
+test("open clean ∧ !base ∧ 云端有 → 静默快进不弹", async () => {
+  const { provider, local, open } = rigExternalCloud();
+  provider._seed("f", "CLOUD");
+  await local.save("f", enc("STALE"));                 // clean 陈旧副本（谱系丢失场景）
+  let asked = 0;
+  const r = await open("f", { onNewer: () => { asked++; return "cancel"; } });
+  eq(asked, 0, "clean 不弹");
+  eq(r.source, "fast-forwarded", "clean → 快进");
+  eq(await asStr(await local.get("f")), "CLOUD", "本地变云端版");
+});
+
+test("refresh clean ∧ !base ∧ 云端有 → 快进（对齐 open）", async () => {
+  const { provider, local, refresh } = rigExternalCloud();
+  provider._seed("f", "CLOUD");
+  await local.save("f", enc("STALE"));
+  const r = await refresh("f");
+  eq(r.status, "fast-forwarded", "!base 不再误判 in-sync");
+  eq(await asStr(await local.get("f")), "CLOUD", "本地更新");
+});
+
+test("open 离线 → 秒开本地（不弹、不碰 fetchMeta）不回归", async () => {
+  const { provider, local, head, open } = rigExternalCloud();
+  provider._seed("f", "CLOUD");
+  await local.save("f", enc("MINE")); head.recordEdit("f");
+  let asked = 0;
+  const r = await open("f", { isOnline: () => false, onNewer: () => { asked++; return "takeCloud"; } });
+  eq(asked, 0, "离线不弹");
+  eq(r.reason, "offline", "离线直读本地");
+  eq(await asStr(await local.get("f")), "MINE", "本地没动");
+});

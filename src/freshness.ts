@@ -75,14 +75,17 @@ export function createFreshness(cfg: FreshnessCfg) {
       }
       if (!meta) return { source: "local", reason: "cloud-absent" };
       const base = head.seenBase(name);
-      if (!base || meta.etag === base) {
+      if (base != null && meta.etag === base) {
         // 云端 === 本 tab 已见 base（没动）→ in-sync。reload 后内存 _base 空（seenBase 回退共享 etag），
         //   此时 markSeen 重捕 _base（dirty 还顺带重捕 _parent，local-head.ts:82）→ 闭合「dirty 但 _base 空 →
         //   下次推走 no-base fail → 误报 CloudNameCollisionError」窗口。只在 meta.etag===base（云端没动）调=安全：
         //   云端动过会落到下面 dirty→surface 路径，绝不在这里前推 parent（防 B1 silent-overwrite）。
-        if (base != null) head.markSeen(name, meta.etag);
+        head.markSeen(name, meta.etag);
         return { source: "local", reason: "in-sync" };
       }
+      // !base（无 baseline：从未 synced 的血统 / 谱系丢失）∧ 云端有文件 → 按「云端有别的版本」处理，
+      //   对齐 listing.classifySyncState 的 `moved = cloudMoved || !everSynced`（同一事实不许两种结论）。
+      //   旧版把 !base 判 in-sync = 静默保留陈旧本地（缺陷 B，20260820-open-time-conflict-surface-handoff）。
       const dirty = head.isDirty(name) || (localDirty ? localDirty() : false);
       if (!dirty) {                                       // clean → 静默快进（无 sheet；safePull 因 clean 跳备份）
         const r = await safeResolve.safePull(name, { adopt });
@@ -108,7 +111,8 @@ export function createFreshness(cfg: FreshnessCfg) {
       try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { status: "cloud-error" }; }
       if (!meta) return { status: "cloud-absent" };
       const base = head.seenBase(name);
-      if (!base || meta.etag === base) return { status: "in-sync" };
+      // !base ∧ 云端有 → 同 open：按 moved 处理（对齐 listing；clean-only 路径 → 直接快进采纳云端）。
+      if (base != null && meta.etag === base) return { status: "in-sync" };
       if (head.isDirty(name) || (localDirty && localDirty())) return { status: "dirty-skip" };  // fetchMeta 期间用户动了笔 → 放弃
       if (onReplaceStart) onReplaceStart();
       const r = await safeResolve.safePull(name, { adopt });

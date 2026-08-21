@@ -26,6 +26,7 @@ import "./trash-merge.test.ts";
 import "./upload-queue.test.ts";
 import "./seal.test.ts";
 import "./freshness.test.ts";
+import "./store-open-conflict.test.ts";
 import "./local-head.test.ts";
 import "./offload.test.ts";
 import "./identity.test.ts";
