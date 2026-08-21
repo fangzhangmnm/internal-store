@@ -28,7 +28,7 @@ export class OffloadIllegalError extends Error {
 export interface OffloadCfg {
   cloud: Pick<CloudSync, "fetchMeta">;
   local: Pick<LocalCache, "exists" | "hardDelete">;
-  head: Pick<LocalHead, "isDirty" | "isDirtyAnywhere" | "seenBase" | "forget">;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "seenBase" | "forget">;
   isOnline?: () => boolean;
   // 同名串行（sub.serialize）：让 offload 的 hardDelete 与 file.save 的 local 写互斥。
   //   缺它（默认直通）= 退回旧 TOCTOU 行为，仅靠下面的 re-check 兜宽窗口。

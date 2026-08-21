@@ -15,7 +15,7 @@ import type { AdoptFn } from "./types.ts";
 
 export interface FreshnessCfg {
   cloud: Pick<CloudSync, "fetchMeta">;
-  head: Pick<LocalHead, "seenBase" | "isDirty" | "markSeen">;
+  head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere" | "markSeen">;
   safeResolve: Pick<SafeResolve, "safePull">;
   busy?: Busy;
 }
@@ -67,7 +67,7 @@ export function createFreshness(cfg: FreshnessCfg) {
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
     const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy } = opts;
     if (!isOnline()) return { source: "local", reason: "offline" };
-    return busy("检查云端…", async () => {
+    return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
       if (probe) {
         const raced = await Promise.race([
@@ -93,7 +93,7 @@ export function createFreshness(cfg: FreshnessCfg) {
       // !base（无 baseline：从未 synced 的血统 / 谱系丢失）∧ 云端有文件 → 按「云端有别的版本」处理，
       //   对齐 listing.classifySyncState 的 `moved = cloudMoved || !everSynced`（同一事实不许两种结论）。
       //   旧版把 !base 判 in-sync = 静默保留陈旧本地（缺陷 B，20260820-open-time-conflict-surface-handoff）。
-      const dirty = head.isDirty(name) || (localDirty ? localDirty() : false);
+      const dirty = head.isDirtyAnywhere(name) || (localDirty ? localDirty() : false);// 全局问题用 isDirtyAnywhere（2026-08-21：别 tab 的未推字节 per-tab 视角看不见）
       if (!dirty) {                                       // clean → 静默快进（无 sheet；safePull 因 clean 跳备份——!base 例外，谱系未知必备份）
         const r = await safeResolve.safePull(name, { adopt });
         // 快进没承诺过什么 → 失败只 info（状态栏，不 banner；captive portal 下每次 open 都会走到这里）。
@@ -116,15 +116,15 @@ export function createFreshness(cfg: FreshnessCfg) {
   async function refresh(name: string, opts: RefreshOpts = {}): Promise<FreshResult> {
     const { isOnline = () => true, adopt, localDirty, onReplaceStart, busy = passBusy } = opts;
     if (!isOnline()) return { status: "offline" };
-    if (head.isDirty(name) || (localDirty && localDirty())) return { status: "dirty-skip" };
-    return busy("检查云端…", async () => {
+    if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡
+    return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
       try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { status: "cloud-error" }; }
       if (!meta) return { status: "cloud-absent" };
       const base = head.seenBase(name);
       // !base ∧ 云端有 → 同 open：按 moved 处理（对齐 listing；clean-only 路径 → 直接快进采纳云端）。
       if (base != null && meta.etag === base) return { status: "in-sync" };
-      if (head.isDirty(name) || (localDirty && localDirty())) return { status: "dirty-skip" };  // fetchMeta 期间用户动了笔 → 放弃
+      if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡  // fetchMeta 期间用户动了笔 → 放弃
       if (onReplaceStart) onReplaceStart();
       const r = await safeResolve.safePull(name, { adopt });
       return r.ok ? { status: "fast-forwarded" } : { status: "ff-failed", reason: r.reason };

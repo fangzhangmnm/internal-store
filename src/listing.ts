@@ -96,7 +96,7 @@ export function classifySyncState(f: {
 export interface ListingCfg {
   cloud: Pick<CloudSync, "listAll" | "listFolder" | "getETag">;
   local: Pick<LocalCache, "appKeys"> & Partial<Pick<LocalCache, "stat">>;   // stat 选填：给本地项填 size/updatedAt（老 mock 无 stat → 跳过）
-  head: Pick<LocalHead, "seenBase" | "isDirty">;
+  head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere">;
   pendingFolders?: () => string[];   // 离线建、尚未确认上云的空文件夹（folder-registry；并进 folders 让它离线可见）
   isPendingGone?: (path: string) => boolean;   // clean cloud-gone 孤儿在防抖 grace 内（pending-gone 深模块）→ 显 pendingGone badge
   pendingFolderDeletions?: () => string[];   // 离线排队待删的已上云空夹（全路径）→ **从 folders 减去**（回线 drain 前先隐藏，不再 list）
@@ -149,7 +149,7 @@ export function createListing(cfg: ListingCfg) {
     const cloudMoved = hasCloud && cf!.eTag !== seen;
     const syncState = classifySyncState({
       hasLocal, hasCloud, everSynced, cloudMoved,
-      dirty: head.isDirty(path),
+      dirty: head.isDirtyAnywhere(path),   // 徽章答的是「这台设备有没有未推字节」（全局），不是本 tab 谱系
       cloudReachable, absenceAuthoritative,
       pendingGone: isPendingGone?.(path),
     });

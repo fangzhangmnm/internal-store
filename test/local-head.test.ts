@@ -27,7 +27,7 @@ test("★ 全链路：reload 后 durable etag → seenBase → markSeen 重捕 p
   A.markSynced("f", "v1");                              // 从云端取来
   A.recordEdit("f");                                    // 用户画了几笔（onBeforeReload 只落本地并标脏）
   const B = createLocalHead({ kv, getCloudEtag: cloud.get, setCloudEtag: cloud.set });   // ← 版本更新 reload
-  assert(B.isDirty("f"), "dirty 跨 reload 存活（kv durable）");
+  assert(B.isDirtyThisTab("f"), "dirty 跨 reload 存活（kv durable）");
   B.markSeen("f", "v1");                                // freshness.open：云端没动（meta.etag === seenBase）→ 重捕
   eq(B.ifMatchFor("f"), "v1", "If-Match 非空 → 正常 replace 上传");
 });
@@ -84,7 +84,7 @@ test("reload re-capture：dirty 持久活、内存丢 → markSeen 后不再 byp
   const kv = memKv();
   kv.set("head.dirty:f", "1");                  // 上个 session 持久化的 dirty（未推字节在 IDB）
   const lh = createLocalHead({ kv, getCloudEtag: () => null });   // 新 tab：内存空
-  assert(lh.isDirty("f"), "reload 后 dirty 从 kv 活着");
+  assert(lh.isDirtyThisTab("f"), "reload 后 dirty 从 kv 活着");
   lh.markSeen("f", "v3");                       // open 采纳云版 → 在此 re-capture parent
   eq(lh.ifMatchFor("f"), "v3", "re-capture parent=v3，不再抛 bypass");
 });
@@ -114,19 +114,19 @@ test("onPushed dirtyAfter=true → reparent 留 dirty；false → 清", () => {
   const lh = createLocalHead({ kv, getCloudEtag: () => null });
   lh.markSeen("f", "v1"); lh.recordEdit("f");
   lh.onPushed("f", "v2", true);                 // 推中又改
-  assert(lh.isDirty("f"), "dirtyAfter → 仍 dirty");
+  assert(lh.isDirtyThisTab("f"), "dirtyAfter → 仍 dirty");
   eq(lh.ifMatchFor("f"), "v2", "reparent：剩余编辑派生自刚推的 v2");
   lh.onPushed("f", "v3", false);               // 干净落地
-  assert(!lh.isDirty("f"), "dirtyAfter=false → 清 dirty");
+  assert(!lh.isDirtyThisTab("f"), "dirtyAfter=false → 清 dirty");
 });
 
 test("markSynced：采纳云版 → 清 dirty + base 推进", () => {
   const kv = memKv();
   const lh = createLocalHead({ kv, getCloudEtag: () => null });
   lh.markSeen("f", "v1"); lh.recordEdit("f");
-  assert(lh.isDirty("f"), "编辑后 dirty");
+  assert(lh.isDirtyThisTab("f"), "编辑后 dirty");
   lh.markSynced("f", "v5");                     // pull/快进采纳云版
-  assert(!lh.isDirty("f"), "采纳后 clean");
+  assert(!lh.isDirtyThisTab("f"), "采纳后 clean");
   eq(lh.seenBase("f"), "v5", "base 推进到 v5");
 });
 
@@ -137,14 +137,14 @@ test("★ 跨 tab：B 写的未推字节，A 的驱逐守卫必须看得见（is
   const A = createLocalHead({ kv, getCloudEtag: cloud.get, setCloudEtag: cloud.set });
   const B = createLocalHead({ kv, getCloudEtag: cloud.get, setCloudEtag: cloud.set });
   A.markSynced("f", "v1");                             // A 这边是干净的（刚采纳云版）
-  eq(A.isDirty("f"), false, "A 的 per-tab 视角：干净");
+  eq(A.isDirtyThisTab("f"), false, "A 的 per-tab 视角：干净");
 
   B.recordEdit("f");                                   // B 画了几笔，未推 → durable dirty=1
-  eq(A.isDirty("f"), false, "A 的 per-tab 视角仍是干净——这是对的，谱系视角本就 per-tab（W2）");
+  eq(A.isDirtyThisTab("f"), false, "A 的 per-tab 视角仍是干净——这是对的，谱系视角本就 per-tab（W2）");
   eq(A.isDirtyAnywhere("f"), true, "★ 但驱逐守卫问的是「任何 tab 有没有未推字节」→ 必须是 true");
 });
 
-test("isDirty 保持 per-tab（别改成 durable 优先，会把 ifMatchFor 打进 BypassError）", () => {
+test("isDirtyThisTab 保持 per-tab（别改成 durable 优先，会把 ifMatchFor 打进 BypassError）", () => {
   const kv = memKv();
   const cloud = cloudEtagRef("v1");
   const A = createLocalHead({ kv, getCloudEtag: cloud.get, setCloudEtag: cloud.set });
@@ -152,7 +152,7 @@ test("isDirty 保持 per-tab（别改成 durable 优先，会把 ifMatchFor 打�
   A.markSeen("f", "v1"); A.recordEdit("f");
   A.onPushed("f", "v2", false);                        // A 推成功 → A 的 episode 结束（_parent 已删）
   B.markSeen("f", "v2"); B.recordEdit("f");            // B 开始自己的 episode → durable dirty=1
-  // 若 isDirty 改成 durable 优先，A 这里会进 dirty 分支、无 _parent 而 _base 已知 → 抛 BypassError。
+  // 若 isDirtyThisTab 改成 durable 优先，A 这里会进 dirty 分支、无 _parent 而 _base 已知 → 抛 BypassError。
   eq(A.ifMatchFor("f"), "v2", "A 仍能正常推（clean 走 seenBase），没被别 tab 的 dirty 打瘫");
 });
 

@@ -71,7 +71,7 @@ export function createTrash(cfg: TrashCfg) {
 
   async function restore(opts: RestoreOpts = {}): Promise<TrashResult> {
     const { fromCloud, cloudItemId, targetName, trashKey, encrypted, busy = _busy } = opts;
-    return busy("恢复中…", async () => {
+    return busy("trash.restoring", async () => {
       let name: string | null = targetName || null, restoredLocal = false, restoredCloud = false;
       // both 行策略：本地先恢复到**原名**；云端腿随后 cloud.restore 撞名自动 (2)（复用其重试）→ 两份都在、不覆盖。
       if (trashKey && local) { const n = await local.restore(trashKey); if (n) { name = n; restoredLocal = true; } }
@@ -90,7 +90,7 @@ export function createTrash(cfg: TrashCfg) {
   async function purge(opts: PurgeOpts = {}): Promise<TrashResult> {
     const { trashKey, cloudItemId, confirm, busy = _busy } = opts;
     if (confirm && !(await confirm({ title: "彻底删除", body: "不可恢复", danger: true }))) return { status: "cancelled" };
-    return busy("彻底删除…", async () => {
+    return busy("trash.purging", async () => {
       if (trashKey && local && local.purgeTrash) await local.purgeTrash(trashKey);
       if (cloudItemId != null) await cloud.purge(cloudItemId);
       return { status: "purged" };
@@ -100,7 +100,7 @@ export function createTrash(cfg: TrashCfg) {
   // 批量彻底删：scope 选端（"local"/"cloud"/"both"）。强退=cancel（绝不自动续：下次 trash 可能已有新 item）。
   async function emptyTrash(opts: EmptyTrashOpts = {}): Promise<TrashResult> {
     const { isOnline, busy = _busy, concurrency = 5, scope = "both" } = opts;
-    return busy("清空回收站…", async () => {
+    return busy("trash.emptyTrash", async () => {
       let purged = 0; const failed: { name?: string; where: string; error: string }[] = [];
       const errMsg = (e: unknown) => String((e as { message?: unknown })?.message || e);
       if (scope !== "cloud" && local && local.listTrash && local.purgeTrash) {
@@ -128,7 +128,7 @@ export function createTrash(cfg: TrashCfg) {
   //   与 emptyTrash 同纪律：scope 选端、逐项独立 try、失败汇总不静默、强退=cancel。备份用 listBackup + 通用 purge/purgeTrash。
   async function emptyBackup(opts: EmptyTrashOpts = {}): Promise<TrashResult> {
     const { isOnline, busy = _busy, concurrency = 5, scope = "both" } = opts;
-    return busy("清空备份箱…", async () => {
+    return busy("trash.emptyBackups", async () => {
       let purged = 0; const failed: { name?: string; where: string; error: string }[] = [];
       const errMsg = (e: unknown) => String((e as { message?: unknown })?.message || e);
       if (scope !== "cloud" && local && local.listBackup && local.purgeTrash) {

@@ -15,6 +15,8 @@ export type { Item, SyncState, ListContext } from "./listing.ts";
 export { isCached, isDirty } from "./listing.ts";
 /** 字节别名（host adapter 的类型用；不暴露内部文件路径）。 */
 export type { Bytes } from "./types.ts";
+
+export type { StoreTextKey, StoreTextFn, StoreTextParams } from "./ui-text.ts";   // busy 文案接缝（宿主写 StoreUI.text 需要可命名）
 // 加密：**裸字节**级的面走 store.encryption（有 name 的场景走 file.*）；EncryptedBlob 是 at-rest 密文的 branded 类型。
 /** collection 面的类型：Collection 接口、对外 entry（CollectionEntry）、reconcile 终态（ReconcileResult）。 */
 export type { Collection, CollectionEntry, ReconcileResult } from "./collection.ts";

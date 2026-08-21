@@ -25,7 +25,7 @@ describe("listing.listFolder · 单夹直属 scope + 子夹派生", () => {
       getETag: () => null,
     };
     const local = { async appKeys() { return appKeys; } };
-    const head = { seenBase: (n) => (n in seen ? seen[n] : null), isDirty: (n) => dirty.has(n) };
+    const head = { seenBase: (n) => (n in seen ? seen[n] : null), isDirtyAnywhere: (n) => dirty.has(n) };
     return createListing({ cloud, local, head, pendingFolders: () => pending });
   }
 
@@ -79,7 +79,7 @@ describe("reconcile.reconcileFolder · per-folder cloud-gone guardrail", () => {
     const local = { async appKeys() { return appKeys; }, async trash(n) { trashed.push(n); return `trash/${n}`; } };
     const head = {
       seenBase: (n) => (n in seen ? seen[n] : null),
-      isDirty: (n) => dirty.has(n),
+      isDirtyAnywhere: (n) => dirty.has(n),
       forget: (n) => forgot.push(n),
     };
     const pending = createPendingGone(memKv(), 0);

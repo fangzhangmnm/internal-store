@@ -83,7 +83,7 @@ test("rename dirty + 云推失败 → cloudDeferred + newName 标脏（待推，
   const r = await rename("old.pdf", "new.pdf");
   assert(r.cloudDeferred, "云推失败 → cloudDeferred（surface）");
   assert(await local.exists("new.pdf"), "本地已是 new.pdf");
-  assert(head.isDirty("new.pdf"), "newName 标脏=待推（下次 push 自动带走 → 自动收敛，不必重跑 rename）");
+  assert(head.isDirtyThisTab("new.pdf"), "newName 标脏=待推（下次 push 自动带走 → 自动收敛，不必重跑 rename）");
 });
 
 // ── 改名 = 上传失败后的逃生通道（用户 2026-07-18 拍定）。────────────────────────────────────

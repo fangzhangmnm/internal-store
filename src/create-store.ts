@@ -35,9 +35,14 @@ import { setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts
 // ── ui bundle（Model B，README.md §7）──
 /** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
  *  （offlineEscape 例外：缺它优雅退回 isOnline 守卫，非隐藏失败）。 */
+import { resolveStoreText, type StoreTextFn, type StoreTextKey } from "./ui-text.ts";
+
 export interface StoreUI {
   /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
   busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+  /** 可选：busy 文案翻译注入（2026-08-21 拍板，库内不再烤成品语言串）。库把 StoreTextKey
+   *  发给宿主换译文（params 由宿主插值）；不实现 / 返回 undefined → 内建英文缺省。 */
+  text?: StoreTextFn;
   /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。
    *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
    *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
@@ -235,8 +240,12 @@ export interface ZipFile extends RawFile {
   //   加密件只返密文（**绝不在这解密**）——让 app 的缓存层原样存密文，明文缩略图永不落 IDB（安全红线）。
   /** 从 zip 容器里**按文件名**抓 zipEntry 的字节。**明文** zip → entry 原始字节 Blob(**无 type**，格式盲，app 自解释)；
    *  **加密**容器 → **密文** peek Blob(type=ENC_PEEK_MIME，未解密，解密走 decryptPeek)；找不到/不可达→null。
-   *  ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。 */
-  getPeek(opts: { bytesLength: number; zipEntry: string }): Promise<Blob | null>;
+   *  ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。
+   *  source **必填无默认**（2026-08-21 拍板护栏）：每个调用点被迫声明「要看哪一版」——
+   *    "local" = 本地字节优先、无本地才落云端 byte-range（= 旧行为；本地态的 thumb 用这个）；
+   *    "cloud" = **只看云端**（byte-range），无 provider/离线/云端无 → null，**绝不静默落回本地**
+   *      （cloud-newer 刷新用这个；若允许本地兜底，就会重现「新 token 配旧字节」的假新鲜缓存）。 */
+  getPeek(opts: { bytesLength: number; zipEntry: string; source: "local" | "cloud" }): Promise<Blob | null>;
   /** 把 getPeek 返回的密文 peek blob 非交互解密成明文（内存密码；锁定/错密码→null）。已是明文(非 ENC_PEEK_MIME)→原样返。 */
   decryptPeek(encPeek: Blob): Promise<Blob | null>;
   /** 本地 at-rest 字节**原样**（内容盲，不解壳）——仅当这份是加密容器时给，否则 null。
@@ -320,7 +329,7 @@ export function createStore(config: StoreConfig) {
     // promote 落地：对齐 identity.acquire 语义（serialize 锁 + markSynced）；已有副本/dirty 绝不覆盖（§A）。
     adoptLocal: (name, blob, etag) => sub.serialize(name, async () => {
       if (await local.exists(name)) return false;     // 用户其间正常 open 过 → 已有副本，收摊不覆盖
-      if (head.isDirty(name)) return false;           // dirty 永不覆盖（双保险；dirty 理应蕴含有本地副本）
+      if (head.isDirtyAnywhere(name)) return false;   // dirty 永不覆盖（双保险，anywhere：别 tab 的未推也算；dirty 理应蕴含有本地副本）
       await local.save(name, blob);
       head.markSynced(name, etag);
       notifyFolderOf(name);                           // 列举即时反映「已留离线」
@@ -490,7 +499,9 @@ export function createStore(config: StoreConfig) {
     unseal: (n, blob) => seal.unsealForRead(n, blob),   // 返明文；加密但锁定 → null（safePull 退验封套）
     looksEncrypted: (b) => looksEncryptedContainer(b),
   });
-  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: ui.busy });
+  // busy 文案接缝（2026-08-21）：模块只发 StoreTextKey，这里统一换译文（宿主 text 优先，缺省英文）。
+  const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn);
+  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
   const uploadReplayPolicy: UploadReplayPolicy = config.offlineUploadReplay ?? "manual";
@@ -513,17 +524,17 @@ export function createStore(config: StoreConfig) {
     kv, local, head, isOnline, serialize: sub.serialize, pushLocal: pushLocalBytes,
     policy: uploadReplayPolicy, confirm: ui.confirmReplay, onStatus: ui.onReplayStatus,
   });
-  const fresh = createFreshness({ cloud, head, safeResolve, busy: ui.busy });
-  const del = createDelete({ cloud, local, head, kv, busy: ui.busy });
+  const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT });
+  const del = createDelete({ cloud, local, head, kv, busy: busyT });
   const identity = createIdentity({
-    cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: ui.busy,
+    cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: busyT,
     // 离线 move = 删+建（决策 1A/2）：在线走 identity 内的服务端原子 move；离线降级，复用 del.del 离线删 + uploadReplay 补推。
     isOnline,
     deleteOffline: (name: string) => del.del(name, { isOnline }).then(() => {}),   // 完整离线删语义（move-aside + base-etag 云删排队 + null 守卫 + forget）
     queueUpload: (name: string) => uploadReplay.enqueue(name),                     // never-synced float 重连补推（ADR-0018）
     nameOccupied,                                                                  // 唯一占用检查（assertNameFree 据此抛）
   });
-  const trashMod = createTrash({ cloud, local, head, busy: ui.busy });
+  const trashMod = createTrash({ cloud, local, head, busy: busyT });
 
   // 回收站/备份箱两端聚合（README §2）：cloud + local 一次列举 → mergeTrash 归并成单一 TrashItem[]。
   //   trash 才判 conflictLive（备份箱是冲突 loser、无此语义 → 传空 live set）；且仅当有本地项时才拉 live（省 listAll 全树 walk）。
@@ -590,8 +601,9 @@ export function createStore(config: StoreConfig) {
   }
   // getPeek 的字节源：尾片 + 总字节 + 「按绝对偏移二次拉」。本地→Blob.slice（惰性，不碰网）；纯云端→byte-range。
   //   range() 供库内 zip 解析在 CD/entry 溢出尾片时二次拉（本地切片 / 云端 pullRange）。
-  async function openPeekSource(name: string, n: number): Promise<PeekSource | null> {
-    const blob = await local.get(name);
+  //   source="cloud" → 跳过本地分支只走 byte-range（拿不到=null，不落回本地——护栏见 ZipFile.getPeek JSDoc）。
+  async function openPeekSource(name: string, n: number, source: "local" | "cloud"): Promise<PeekSource | null> {
+    const blob = source === "cloud" ? null : await local.get(name);
     if (blob) {
       const b = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
       const total = b.size;
@@ -657,7 +669,7 @@ export function createStore(config: StoreConfig) {
     }
   }
   async function encEncrypt(name: string, online: () => boolean): Promise<{ status: string }> {
-    return ui.busy(`正在加密 ${name}…`, () => sub.serialize(name, async () => {
+    return ui.busy(resolveStoreText(ui.text, "file.encrypting", { name }), () => sub.serialize(name, async () => {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
@@ -672,7 +684,7 @@ export function createStore(config: StoreConfig) {
     }));
   }
   async function encDecrypt(name: string, online: () => boolean): Promise<{ status: string }> {
-    return ui.busy(`正在解除加密 ${name}…`, () => sub.serialize(name, async () => {
+    return ui.busy(resolveStoreText(ui.text, "file.decrypting", { name }), () => sub.serialize(name, async () => {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
@@ -723,7 +735,7 @@ export function createStore(config: StoreConfig) {
           if (!pushed) reason = r.status;
         } catch (e) { ui.reportError(e); reason = "error"; }
         // ADR-0018：离线「新上传」补推——push 没成(仍 dirty) ∧ 从没 synced(seenBase null) → 入队，回线 drainUploadQueue 补推。
-        if (head.isDirty(name) && head.seenBase(name) == null) uploadReplay.enqueue(name);
+        if (head.isDirtyThisTab(name) && head.seenBase(name) == null) uploadReplay.enqueue(name);   // per-tab：问的是「**我这次** push 没落地吗」（episode 账）
         return { pushed, reason };
       },
       async open() {
@@ -770,13 +782,13 @@ export function createStore(config: StoreConfig) {
       async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
         roGuard("reupload");
-        return ui.busy("重新上传…", async () => {
+        return ui.busy(resolveStoreText(ui.text, "file.reuploading"), async () => {
           if (!(await local.exists(name))) return { status: "no-local" };
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
           head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
           head.recordEdit(name);                   // 标未推 → 走首推路径（no-base，conflictBehavior:fail 撞名不覆盖）
           const r = await pushLocalBytes(name);    // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）
-          if (!head.isDirty(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // push 成功 = synced → 清 candidate + 重画
+          if (!head.isDirtyThisTab(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // per-tab episode：问「**我这次** push 落地没」；push 成功 = synced → 清 candidate + 重画
           return r;
         });
       },
@@ -850,8 +862,8 @@ export function createStore(config: StoreConfig) {
     //   加密容器：外层明文 zip 带名为 CONTAINER_PEEK_ENTRIES 的旁路 entry（"peek"）——按名命中即
     //     返其**密文**字节(ENC_PEEK_MIME，不解密，供 app 缓存层原样存密文=明文不落 IDB)。明文 ora 无此名 entry 不误命中。
     //   明文容器：按 app 提供的 o.zipEntry 抓 → entry 原始字节 Blob(无 type)。找不到/不可达→null。
-    const getPeek = async (o: { bytesLength: number; zipEntry: string }): Promise<Blob | null> => {
-      const src = await openPeekSource(name, o.bytesLength);
+    const getPeek = async (o: { bytesLength: number; zipEntry: string; source: "local" | "cloud" }): Promise<Blob | null> => {
+      const src = await openPeekSource(name, o.bytesLength, o.source);
       if (!src) return null;
       const entries = await readCentralDirectory(src);
       if (!entries) return null;
@@ -941,9 +953,9 @@ export function createStore(config: StoreConfig) {
       /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
       ensureFolder: (path: string) => { roGuard("ensureFolder"); return ensureFolderLocalFirst(path); },
       /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */
-      newFolder: singleFlight("新建文件夹", (path: string) => { roGuard("newFolder"); return ui.busy("新建文件夹…", async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); }); }),   // 子夹出现在父夹 → 重画父夹
+      newFolder: singleFlight("新建文件夹", (path: string) => { roGuard("newFolder"); return ui.busy(resolveStoreText(ui.text, "folder.creating"), async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); }); }),   // 子夹出现在父夹 → 重画父夹
       /** 删除**空**文件夹——「必须证实为空」库内强制（两端判空；非空/无法确认 → 抛错拒删）。 */
-      deleteFolder: singleFlight("删除文件夹", (path: string) => { roGuard("deleteFolder"); return ui.busy("删除文件夹…", async (): Promise<void> => {
+      deleteFolder: singleFlight("删除文件夹", (path: string) => { roGuard("deleteFolder"); return ui.busy(resolveStoreText(ui.text, "folder.deleting"), async (): Promise<void> => {
         assertValidFileName(path, appId);                            // 路径护栏
         // 判空**两端都查**：本地有该夹下的文件（含 local-only/未上云）→ 拒删（否则删掉云端夹、本地文件成孤儿）。
         const prefix = `${path}/`;

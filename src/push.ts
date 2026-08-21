@@ -64,7 +64,7 @@ export function createPush(cfg: PushCfg) {
     // encode 出明文 → seal 按 at-rest 态包壳（调用方对加密零感知）。只编码+包壳一次，重试复用（B5 逐字节比对要相等）。
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);
-    return busy("正在同步…", async () => {
+    return busy("sync.pushing", async () => {
       let attempt = 0, lastErr: unknown;
       while (attempt < maxAttempts) {
         attempt++;

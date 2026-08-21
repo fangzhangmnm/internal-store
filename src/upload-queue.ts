@@ -20,7 +20,7 @@ export interface ReplayStatus { phase: "start" | "pushed" | "collision" | "done"
 export interface UploadReplayCfg {
   kv: Kv;
   local: Pick<LocalCache, "exists">;
-  head: Pick<LocalHead, "isDirty" | "seenBase">;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "seenBase">;
   isOnline: () => boolean;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   // 读本地字节 → 解壳 → doPush（**非 busy、未串行**；本模块负责 per-name serialize）。CloudNameCollisionError 直接抛出。
@@ -61,7 +61,7 @@ export function createUploadReplay(cfg: UploadReplayCfg) {
       // per-name serialize：与用户 save/delete/rename 同名互斥，绝不重叠（非 busy 后台的 race 防线）。
       const r = await serialize(name, async (): Promise<string> => {
         if (!(await local.exists(name))) return "gone";                        // 被删/superseded → 出队
-        if (!head.isDirty(name) || head.seenBase(name) != null) return "synced"; // 已推/已同步 → 出队
+        if (!head.isDirtyAnywhere(name) || head.seenBase(name) != null) return "synced";   // anywhere：「还欠不欠推」是全局账 // 已推/已同步 → 出队
         // 必须看结果：deferred = 云端落地未确认（push.ts 的 F0 分支），本模块头部立的规矩是
         //   「没确认成功绝不出队」→ 当 keep 留队重试，绝不计入 pushed（否则又是一次谎报 + 自动重推永久丢失）。
         try { const r = await pushLocal(name); return r?.status === "deferred" ? "keep" : "pushed"; }

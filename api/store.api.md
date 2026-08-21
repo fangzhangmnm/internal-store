@@ -576,6 +576,15 @@ export interface StoreConfig {
 export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 // @public
+export type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
+
+// @public (undocumented)
+export type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.reuploading" | "folder.creating" | "folder.deleting";
+
+// @public (undocumented)
+export type StoreTextParams = Record<string, string>;
+
+// @public (undocumented)
 export interface StoreUI {
     busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
     confirmReplay?: (count: number) => Promise<boolean>;
@@ -596,6 +605,7 @@ export interface StoreUI {
         cloud: Blob | null;
         occasion: "open" | "push";
     }) => Promise<ResolveChoice>;
+    text?: StoreTextFn;
 }
 
 // @public
@@ -666,6 +676,7 @@ export interface ZipFile extends RawFile {
     getPeek(opts: {
         bytesLength: number;
         zipEntry: string;
+        source: "local" | "cloud";
     }): Promise<Blob | null>;
 }
 

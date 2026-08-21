@@ -45,7 +45,7 @@ test("open in-sync 重捕 _base：reload 后 dirty(内存 _base/_parent 空)→ 
   await local.save("f", enc("MINE"));
   const safeResolve = createSafeResolve({ cloud, local, head, validateAdopt: () => true });
   const { open } = createFreshness({ cloud, head, safeResolve });
-  assert(head.isDirty("f"), "reload 后仍 dirty(kv durable)");
+  assert(head.isDirtyThisTab("f"), "reload 后仍 dirty(kv durable)");
   // 修前：open in-sync 不 markSeen → _base/_parent 空 → ifMatchFor 走 no-base(null) → 推送 fail → 误报 collision。
   // 修后：open in-sync(云端 etag===seenBase 回退值)→ markSeen 重捕 _base + _parent。
   const r = await open("f");

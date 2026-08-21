@@ -889,11 +889,19 @@ export declare interface StoreConfig {
 /** 错误上报分级：error=非预期失败；warning=可疑但非致命；info=值得让用户知道的瞬态；log=良性 offline/fallback。 */
 export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
-/** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
- *  （offlineEscape 例外：缺它优雅退回 isOnline 守卫，非隐藏失败）。 */
+/** 宿主翻译注入面（StoreUI.text）。返回 undefined = 该 key 落回英文缺省。 */
+export declare type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
+
+export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.reuploading" | "folder.creating" | "folder.deleting";
+
+export declare type StoreTextParams = Record<string, string>;
+
 export declare interface StoreUI {
     /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
     busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+    /** 可选：busy 文案翻译注入（2026-08-21 拍板，库内不再烤成品语言串）。库把 StoreTextKey
+     *  发给宿主换译文（params 由宿主插值）；不实现 / 返回 undefined → 内建英文缺省。 */
+    text?: StoreTextFn;
     /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。
      *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
      *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
@@ -1011,10 +1019,15 @@ export declare interface WeakOverrideResult {
 export declare interface ZipFile extends RawFile {
     /** 从 zip 容器里**按文件名**抓 zipEntry 的字节。**明文** zip → entry 原始字节 Blob(**无 type**，格式盲，app 自解释)；
      *  **加密**容器 → **密文** peek Blob(type=ENC_PEEK_MIME，未解密，解密走 decryptPeek)；找不到/不可达→null。
-     *  ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。 */
+     *  ⚠库不认内容格式——就是「按名取到的 entry 字节」；app 通常拿去当缩略图（内容知识全在 app）。
+     *  source **必填无默认**（2026-08-21 拍板护栏）：每个调用点被迫声明「要看哪一版」——
+     *    "local" = 本地字节优先、无本地才落云端 byte-range（= 旧行为；本地态的 thumb 用这个）；
+     *    "cloud" = **只看云端**（byte-range），无 provider/离线/云端无 → null，**绝不静默落回本地**
+     *      （cloud-newer 刷新用这个；若允许本地兜底，就会重现「新 token 配旧字节」的假新鲜缓存）。 */
     getPeek(opts: {
         bytesLength: number;
         zipEntry: string;
+        source: "local" | "cloud";
     }): Promise<Blob | null>;
     /** 把 getPeek 返回的密文 peek blob 非交互解密成明文（内存密码；锁定/错密码→null）。已是明文(非 ENC_PEEK_MIME)→原样返。 */
     decryptPeek(encPeek: Blob): Promise<Blob | null>;

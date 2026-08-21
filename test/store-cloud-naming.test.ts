@@ -16,7 +16,7 @@ import { createMockLocal } from "../src/testing/mock-local.ts";
 const td = new TextDecoder();
 const CTX_ON = { signedIn: true, online: true };
 const emptyLocal = { async appKeys(): Promise<string[]> { return []; } };
-const cleanHead = { seenBase: (): string | null => null, isDirty: (): boolean => false };
+const cleanHead = { seenBase: (): string | null => null, isDirtyAnywhere: (): boolean => false };
 // 薄默认（对齐 create-store）：fileName 恒等、encFileName 追加 .zip。
 const APPEND_ZIP = (n: string): string => `${n}.zip`;
 
@@ -131,7 +131,7 @@ test("[getPeek] 纯云端 X.ora → cloud byte-range 取尾片 + 解 CD 按名�
   const provider = createMockProvider();
   provider._seed("note.ora", oraZip());
   const store = mkStore(provider);
-  const peek = await store.file("note.ora", { isZip: true }).getPeek({ bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
+  const peek = await store.file("note.ora", { isZip: true }).getPeek({ source: "local", bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
   assert(!!peek, "纯云端应经 cloud.pullTail 取尾片、按名命中 thumbnail entry");
   eq(peek!.type, "", "格式盲：明文 entry 不贴 MIME");
   assert(bytesEq(new Uint8Array(await peek!.arrayBuffer()), THUMB), "按名返回 = thumbnail 字节（不是 reference）");
@@ -141,7 +141,7 @@ test("[getPeek] 本地缓存有 → Blob.slice 尾片（不碰网络）+ 按名�
   const provider = createMockProvider();
   const store = mkStore(provider);
   await store.file("draw.ora", { isZip: false }).save(oraZip());
-  const peek = await store.file("draw.ora", { isZip: true }).getPeek({ bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
+  const peek = await store.file("draw.ora", { isZip: true }).getPeek({ source: "local", bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
   assert(!!peek, "本地有副本 → 切尾片、按名取 thumbnail");
   assert(bytesEq(new Uint8Array(await peek!.arrayBuffer()), THUMB), "本地路径同样按名返回 thumbnail");
 });
@@ -151,7 +151,7 @@ test("[getPeek] 尾片太小装不下 CD → cloud.pullRange 二次拉，仍按�
   provider._seed("big.ora", buildStoreZip([{ name: "data/layer1.png", data: new Uint8Array(6000).fill(3) }, { name: "Thumbnails/thumbnail.png", data: THUMB }]));
   const store = mkStore(provider);
   // 80B 尾片只够 EOCD，装不下 CD 和大 layer entry → 库须 pullRange 二次拉 CD + entry。
-  const peek = await store.file("big.ora", { isZip: true }).getPeek({ bytesLength: 80, zipEntry: "Thumbnails/thumbnail.png" });
+  const peek = await store.file("big.ora", { isZip: true }).getPeek({ source: "local", bytesLength: 80, zipEntry: "Thumbnails/thumbnail.png" });
   assert(!!peek, "CD/entry 溢出尾片 → 经 pullRange 二次拉仍取到（不再退占位）");
   assert(bytesEq(new Uint8Array(await peek!.arrayBuffer()), THUMB), "二次拉后字节仍是 thumbnail");
 });
@@ -162,7 +162,7 @@ test("[getPeek] 加密容器（外层 zip 有 'peek' entry）→ 按名返回密
   // 加密容器外层形状：[<GUID> payload, "peek" 密文旁路]（app 拿 ENC_PEEK_MIME → 手动 decryptPeek）。
   provider._seed("secret.ora.zip", buildStoreZip([{ name: "3f2504e0-uuid", data: new Uint8Array(40).fill(1) }, { name: "peek", data: cipher }]));
   const store = mkStore(provider);
-  const peek = await store.file("secret.ora", { isZip: true }).getPeek({ bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
+  const peek = await store.file("secret.ora", { isZip: true }).getPeek({ source: "local", bytesLength: 4096, zipEntry: "Thumbnails/thumbnail.png" });
   assert(!!peek, "加密容器应按名命中外层 'peek' entry");
   eq(peek!.type, "application/x-sync-store-enc-peek", "返回密文标记 ENC_PEEK_MIME（app 手动解）");
   assert(bytesEq(new Uint8Array(await peek!.arrayBuffer()), cipher), "返回的是 peek entry 的密文字节（库不解密）");

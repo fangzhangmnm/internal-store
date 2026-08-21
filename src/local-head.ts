@@ -35,7 +35,10 @@ export interface LocalHead {
   // ── 读 ──
   ifMatchFor(name: string): string | null;     // push 的 If-Match（封装 bypass 守卫）
   seenBase(name: string): string | null;       // open/refresh「云端动没动」比对
-  isDirty(name: string): boolean;               // **本 tab** 视角（驱动 If-Match/episode；W2 要求它 per-tab）
+  isDirtyThisTab(name: string): boolean;        // **本 tab** 谱系视角（驱动 If-Match/episode；W2 要求它 per-tab）。
+  //   ⚠ 改名自 isDirty（2026-08-21 拍板）：短名曾被多处拿去回答「全局有没有未推字节」的安全问题
+  //   （converge/freshness/删除警告……），per-tab 视角看不见别 tab 的 durable dirty → §A 失守。
+  //   全局问题一律用 isDirtyAnywhere；本方法只喂谱系/episode。
   isDirtyAnywhere(name: string): boolean;      // 任何 tab 有未推字节吗（durable ∨ 内存）——**驱逐守卫专用**
   // ── 写（状态迁移）──
   recordEdit(name: string): void;              // 唯一标脏：原子 dirty + 头一次捕获 _parent←_base
@@ -51,7 +54,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   const _dirtyMem = new Map<string, boolean>();       // per-tab 活 dirty 视图（覆盖 kv durable）
   const dirtyKey = (n: string) => `${keyPrefix}.dirty:${n}`;
 
-  function isDirty(name: string): boolean {
+  function isDirtyThisTab(name: string): boolean {
     if (_dirtyMem.has(name)) return _dirtyMem.get(name)!;   // per-tab 活视图优先
     return kv.get(dirtyKey(name)) === "1";                  // durable 兜底（reload 后）
   }
@@ -69,7 +72,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   //   旧版 offload 用 isDirty 守门：B 编辑 → A 的内存仍是 false → 守卫放行 → hardDelete 掉 B 的未推字节。
   //   §A「dirty 永不被驱逐」在这里直接失守。
   function isDirtyAnywhere(name: string): boolean {
-    return kv.get(dirtyKey(name)) === "1" || isDirty(name);
+    return kv.get(dirtyKey(name)) === "1" || isDirtyThisTab(name);
   }
   function _setDirty(name: string, d: boolean): void {
     _dirtyMem.set(name, d);
@@ -81,7 +84,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   }
 
   function ifMatchFor(name: string): string | null {
-    if (isDirty(name)) {
+    if (isDirtyThisTab(name)) {
       if (_parent.has(name)) return _parent.get(name)!;    // 正常：派生自捕获的 parent（可为 null=新文件）
       // dirty 但没捕获 parent：base 已知 → 谱系断裂（bypass）→ 响亮抛；base 未知 → 真·新文件首推不带 If-Match
       const b = _base.has(name) ? _base.get(name)! : null;
@@ -92,7 +95,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   }
 
   function recordEdit(name: string): void {
-    if (!isDirty(name)) {                                  // clean→dirty 边沿：头一次捕获（episode 内幂等）
+    if (!isDirtyThisTab(name)) {                                  // clean→dirty 边沿：头一次捕获（episode 内幂等）
       _parent.set(name, _base.has(name) ? _base.get(name)! : null);
     }
     _setDirty(name, true);
@@ -100,7 +103,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
 
   function markSeen(name: string, etag: string | null): void {
     _base.set(name, etag);
-    if (isDirty(name) && !_parent.has(name)) _parent.set(name, etag);   // reload re-capture：闭合唯一缺 parent 窗口
+    if (isDirtyThisTab(name) && !_parent.has(name)) _parent.set(name, etag);   // reload re-capture：闭合唯一缺 parent 窗口（谱系=per-tab）
   }
 
   function markSynced(name: string, etag: string | null): void {
@@ -160,5 +163,5 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
     setCloudEtag?.(name, null);
   }
 
-  return { ifMatchFor, seenBase, isDirty, isDirtyAnywhere, recordEdit, markSeen, markSynced, onPushed, forget };
+  return { ifMatchFor, seenBase, isDirtyThisTab, isDirtyAnywhere, recordEdit, markSeen, markSynced, onPushed, forget };
 }

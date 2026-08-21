@@ -186,7 +186,7 @@ describe("dir-index-cache · listing 单元级 scope 守卫", () => {
     const listing = createListing({
       cloud: { async listFolder() { return { files: [], folders: [], complete: true }; }, async listAll() { return { files: [], folders: [], complete: true }; }, getETag: () => null },
       local: { async appKeys() { return []; } },
-      head: { seenBase: () => null, isDirty: () => false },
+      head: { seenBase: () => null, isDirtyAnywhere: () => false },
     });
     const snap = await listing.listFolder("A", { signedIn: false, online: false }, {
       staleCloud: { files: [{ name: "A/ok.mp3" }, { name: "B/evil.mp3" }, { name: "A/deep/x.mp3" }, { name: "root.mp3" }], folders: [] },

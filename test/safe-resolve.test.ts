@@ -59,7 +59,7 @@ test("tryHeal：云端字节==本地推的 → 自愈 true + 清脏（B5）", as
   head.recordEdit("f");
   const sr = createSafeResolve({ cloud, local, head, validateAdopt: () => true });
   assert(await sr.tryHeal("f", enc("B")), "字节相等 → 自愈");
-  assert(!head.isDirty("f"), "自愈后清脏");
+  assert(!head.isDirtyThisTab("f"), "自愈后清脏");
   assert(!(await sr.tryHeal("f", enc("C"))), "字节不等 → 不自愈");
 });
 
@@ -81,7 +81,7 @@ test("resolveConflict 派发：takeCloud/keepMine/cancel", async () => {
 
   const cancel = await sr.resolveConflict("f", "cancel");
   eq(cancel.status, "cancelled", "cancel 什么都不动");
-  assert(head.isDirty("f"), "cancel 后仍 dirty");
+  assert(head.isDirtyThisTab("f"), "cancel 后仍 dirty");
 
   const take = await sr.resolveConflict("f", "takeCloud");
   eq(take.resolution, "takeCloud", "takeCloud → safePull");

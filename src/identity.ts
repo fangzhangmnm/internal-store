@@ -24,7 +24,7 @@ type PushFn = (name: string, opts: { encode: () => BytesSource | Promise<BytesSo
 export interface IdentityCfg {
   cloud: Pick<CloudSync, "fetchMeta" | "rename" | "getETag" | "pull" | "trash">;
   local?: Pick<LocalCache, "exists" | "get" | "save" | "hardDelete">;
-  head: Pick<LocalHead, "isDirty" | "markSeen" | "markSynced" | "forget" | "recordEdit" | "seenBase">;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "markSeen" | "markSynced" | "forget" | "recordEdit" | "seenBase">;
   doPush: PushFn;   // 未串行版（identity 已在自己 serialize/serialize2 段内，调串行 push 会同名自锁）
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   serialize2: <T>(a: string, b: string, fn: () => Promise<T>) => Promise<T>;
@@ -75,7 +75,7 @@ export function createIdentity(cfg: IdentityCfg) {
   async function rename(oldName: string, newName: string, opts: RenameOpts = {}): Promise<IdResult> {
     const { encode, getEditVersion, cloud: doCloud = true, busy = _busy, skipOccupiedCheck } = opts;
     if (!oldName || !newName || oldName === newName) return { status: "noop" };
-    return serialize2(oldName, newName, () => busy("重命名…", async () => {
+    return serialize2(oldName, newName, () => busy("file.renaming", async () => {
       if (!skipOccupiedCheck) await assertNameFree(newName, doCloud);   // 目标占用 → 抛 collision（改字节前）。tryMove 已 nameOccupied 预检 → skip，避免重复 fetchMeta
 
       const hasLocal = local ? await local.exists(oldName) : false;
@@ -103,7 +103,7 @@ export function createIdentity(cfg: IdentityCfg) {
       try {
         const before = await probeOld(oldName);
         // synced 或没本地字节可推（纯云端）→ 服务端 move，etag 顺延。
-        if (before.known && before.meta && (!head.isDirty(oldName) || bytes == null)) {
+        if (before.known && before.meta && (!head.isDirtyAnywhere(oldName) || bytes == null)) {   // anywhere：别 tab 的未推编辑在场时走「推字节」路（server-move 会把 forget 顺带清掉它的 push 义务）
           await cloud.rename(oldName, newName, { baseEtag: before.meta.etag });   // If-Match：别设备在我们判定「synced」之后推了新版 → 412，不静默改它的名
           head.markSeen(newName, cloud.getETag(newName)); head.forget(oldName);
           return { status: "renamed", where: "cloud-move", newName };
@@ -168,7 +168,7 @@ export function createIdentity(cfg: IdentityCfg) {
   // 首取：云端 item → 本地（无冲突，本地本来没有）。
   async function acquire(cloudName: string, opts: AcquireOpts = {}): Promise<IdResult> {
     const { localName = cloudName, adopt, busy = passBusy } = opts;
-    return busy("拉取中…", () => serialize(localName, async () => {
+    return busy("file.pulling", () => serialize(localName, async () => {
       const r = await cloud.pull(cloudName);
       if (!r) return { status: "absent" };
       if (local) await local.save(localName, r.blob);

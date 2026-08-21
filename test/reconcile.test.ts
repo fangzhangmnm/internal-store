@@ -42,7 +42,7 @@ function rig(opts: { online?: boolean; graceMs?: number } = {}) {
   const seen = new Map<string, string>([["orphan.pdf", "e"], ["live.pdf", "e"], ["dirty.pdf", "e"]]);  // localfile.pdf 从没 synced
   const dirty = new Set(["dirty.pdf"]);
   const cleared: string[] = [], forgotten: string[] = [], trashed: string[] = [];
-  const head = { seenBase: (n: string) => (seen.has(n) ? seen.get(n)! : null), isDirty: (n: string) => dirty.has(n), forget: (n: string) => forgotten.push(n) };
+  const head = { seenBase: (n: string) => (seen.has(n) ? seen.get(n)! : null), isDirtyAnywhere: (n: string) => dirty.has(n), forget: (n: string) => forgotten.push(n) };
   let listResult: { files: { path: string }[]; folders: string[]; complete: boolean } | "throw" = { files: [{ path: "live.pdf" }], folders: [], complete: true };
   const cloud = { listAll: async () => { if (listResult === "throw") throw new Error("x"); return listResult; }, clearState: (n: string) => { cleared.push(n); } };
   let clock = 100000;
@@ -125,7 +125,7 @@ test("[reconcile] activeFileName skip：打开的 clean cloud-gone doc 绝不被
   // 直接建带 activeFileName 的 reconcile：orphan.pdf 是活动 doc → 就算跨 grace 也不 trash。
   const trashed: string[] = [];
   const local = { appKeys: async () => ["orphan.pdf", "live.pdf"], trash: async (n: string) => { trashed.push(n); return `trash/${n}`; } };
-  const head = { seenBase: (n: string) => (n === "orphan.pdf" ? "e" : "e"), isDirty: () => false, forget: () => {} };
+  const head = { seenBase: (n: string) => (n === "orphan.pdf" ? "e" : "e"), isDirtyAnywhere: () => false, forget: () => {} };
   const cloud = { listAll: async () => ({ files: [{ path: "live.pdf" }], folders: [], complete: true }), clearState: () => {} };
   let clock = 0;
   const pending = createPendingGone(memKv(), 0);

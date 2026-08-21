@@ -35,7 +35,7 @@ test("happy push 新文件 → cloud 收字节 + 推后干净", async () => {
   head.recordEdit("f");
   const r = await push("f", { encode: () => enc("NEW") });
   eq(r.status, "pushed", "pushed");
-  assert(!head.isDirty("f"), "推后干净");
+  assert(!head.isDirtyThisTab("f"), "推后干净");
   eq(await asStr((await cloud.pull("f"))?.blob), "NEW", "云端有 NEW");
 });
 
@@ -54,7 +54,7 @@ test("真分叉 + onConflict=cancel → cancelled + 仍 dirty", async () => {
   head.markSeen("f", "STALE"); head.recordEdit("f");   // parent=STALE（陈旧）
   const r = await push("f", { encode: () => enc("MINE"), onConflict: () => "cancel" });
   eq(r.status, "cancelled", "cancel 派发");
-  assert(head.isDirty("f"), "cancel 后留 dirty");
+  assert(head.isDirtyThisTab("f"), "cancel 后留 dirty");
   eq(await asStr((await cloud.pull("f"))?.blob), "V1", "云端没被覆盖");
 });
 
@@ -64,7 +64,7 @@ test("lost-response 自愈 → healed + 干净（云端==本地推的）", async
   head.markSeen("f", "STALE"); head.recordEdit("f");
   const r = await push("f", { encode: () => enc("SAME") });   // If-Match=STALE → 412 → heal
   eq(r.status, "healed", "自愈");
-  assert(!head.isDirty("f"), "自愈后干净");
+  assert(!head.isDirtyThisTab("f"), "自愈后干净");
 });
 
 // ── F0 红线：cloud.push 返 {item:null}（有 baseEtag，落地**未确认**）────────────────────────
@@ -89,7 +89,7 @@ test("[F0] push 收到 {item:null} → deferred + 保 dirty（绝不报 pushed�
   const r = await push("f", { encode: () => enc("EDIT") });
   eq(r.status, "deferred", "落地未确认 → deferred，不得是 pushed");
   eq(r.dirtyAfter, true, "dirtyAfter=true（仍算未推）");
-  assert(head.isDirty("f"), "★dirty 必须保住——清了就会被 offload 吃掉");
+  assert(head.isDirtyThisTab("f"), "★dirty 必须保住——清了就会被 offload 吃掉");
 });
 
 test("[F0] 承接：deferred 之后 offload 拒绝驱逐（reason=dirty）", async () => {
@@ -151,5 +151,5 @@ test("谱系断裂撞名 · surfaceCollision + 用户取消 → 云端不动、�
   const r = await push("f", { encode: () => enc("MINE"), surfaceCollision: true, onConflict: () => "cancel" });
   eq(r.status, "cancelled", "取消");
   eq(await asStr((await cloud.pull("f"))?.blob), "CLOUD-VER", "云端原样");
-  assert(head.isDirty("f"), "本地保持 dirty（字节没丢，下次还能再推）");
+  assert(head.isDirtyThisTab("f"), "本地保持 dirty（字节没丢，下次还能再推）");
 });

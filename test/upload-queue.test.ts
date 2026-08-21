@@ -27,7 +27,7 @@ function rig(o: Opts) {
   const r = createUploadReplay({
     kv,
     local: { exists: async (n: string) => localSet.has(n) },
-    head: { isDirty: (n: string) => dirty.has(n), seenBase: (n: string) => seen.get(n) ?? null },
+    head: { isDirtyAnywhere: (n: string) => dirty.has(n), seenBase: (n: string) => seen.get(n) ?? null },
     isOnline: () => o.online !== false,
     serialize: (_n: string, fn: () => Promise<unknown>) => fn() as Promise<any>,
     pushLocal,

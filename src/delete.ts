@@ -15,7 +15,7 @@ const passBusy: Busy = (_l, fn) => fn();
 export interface DeleteCfg {
   cloud: Pick<CloudSync, "fetchMeta" | "trash" | "getETag">;
   local?: Pick<LocalCache, "exists" | "trash" | "hardDelete">;
-  head: Pick<LocalHead, "isDirty" | "forget">;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "forget">;
   kv: Kv;
   busy?: Busy;
 }
@@ -72,7 +72,7 @@ export function createDelete(cfg: DeleteCfg) {
   async function del(name: string, opts: DelOpts = {}): Promise<DelResult> {
     const { isOnline = () => true, confirm, onDirtyWarn, busy = _busy } = opts;
     if (confirm && !(await confirm({ title: "删除", body: name, danger: true }))) return { status: "cancelled" };
-    if (head.isDirty(name) && onDirtyWarn && !(await onDirtyWarn({ name }))) return { status: "cancelled" };
+    if (head.isDirtyAnywhere(name) && onDirtyWarn && !(await onDirtyWarn({ name }))) return { status: "cancelled" };
 
     const localPresent = local ? await local.exists(name) : false;
     // ★一次删除 = 一个 deleteEventId，两条腿（本地 .trash / 云端 .trash）**共用**它。
@@ -91,11 +91,11 @@ export function createDelete(cfg: DeleteCfg) {
       head.forget(name);
       return { status: "trashed", where: "local", queuedCloudDelete, baseEtag, trashKey };
     }
-    return busy("删除中…", async () => {
+    return busy("file.deleting", async () => {
       let cloudPresent = false;
       try { cloudPresent = !!(await cloud.fetchMeta(name)); } catch (e) { reportStoreError(e, "log"); cloudPresent = false; }
       if (cloudPresent) {
-        const wasDirty = head.isDirty(name);                // ★trash 前取（trash 后谱系会被 forget）
+        const wasDirty = head.isDirtyAnywhere(name);        // ★trash 前取（trash 后谱系会被 forget）。anywhere：它路由 hardDelete vs 本地 .trash——别 tab 的未推字节 per-tab 看不见，误判 clean = 硬删世界唯一字节（§A）
         const trashed = await cloud.trash(name, deleteEventId);   // 先云端进 .trash（失败抛 → 本地不动）
         if (localPresent) {
           if (wasDirty) {

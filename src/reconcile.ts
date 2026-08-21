@@ -47,7 +47,7 @@ export function classifyCloudGone(
 export interface ReconcileCfg {
   cloud: Pick<CloudSync, "listAll" | "listFolder" | "clearState">;
   local: Pick<LocalCache, "appKeys" | "trash">;
-  head: Pick<LocalHead, "seenBase" | "isDirty" | "forget">;
+  head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere" | "forget">;
   pending: PendingGone;                 // 云端防抖（candidate-gone）标记
   now?: () => number;                   // 时钟（测试注入；默认 Date.now）
   isOnline?: () => boolean;
@@ -68,11 +68,11 @@ export function createReconcile(cfg: ReconcileCfg) {
     localNames = localNames.filter((n) => !isHidden(n));   // 隐藏项云端本就不列 → 别据「云端没有」误判 gone
     // 自愈/取消：candidate 重现（云端权威有）或已变 dirty（被编辑）→ 清标记。
     for (const name of localNames) {
-      if (pending.isPending(name) && (cloudNames.has(name) || head.isDirty(name))) pending.clear(name);
+      if (pending.isPending(name) && (cloudNames.has(name) || head.isDirtyAnywhere(name))) pending.clear(name);
     }
     const { demote } = classifyCloudGone(localNames, cloudNames, {
       seenBase: (n) => head.seenBase(n),
-      isDirty: (n) => head.isDirty(n),
+      isDirty: (n) => head.isDirtyAnywhere(n),   // 2026-08-21 修：per-tab 视角曾让 converge 把别 tab 的未推脏字节判成 clean 孤儿 → send trash（§A「dirty 永不被驱逐」失守）
       authoritative,
       skip: activeFileName ? (n) => n === activeFileName : undefined,
     });
