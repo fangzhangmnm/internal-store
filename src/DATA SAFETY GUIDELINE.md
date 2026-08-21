@@ -18,6 +18,30 @@ The canonical failure list (from `journals/20260604-potential-bugs.md`, `ai-docs
 
 | **An encrypted work's decrypted bytes reach a persistent layer** — the 7z container protects the cloud copy, but a plaintext derivative (ora bytes / layer bitmaps / a 256px thumbnail) written to IndexedDB, localStorage, a checkpoint, or an export file silently defeats the whole scheme: anyone with device access reads the artwork without the password, and the user believes it is encrypted | **Plaintext of an encrypted work lives in RAM only, never on any persistent layer.** `seal.sealForWrite` wraps *before* every local write (so IDB holds ciphertext too); missing password → `LockedError`, never a silent plaintext fallback; `unsealForRead` returns an in-memory Blob only; `getPeek` returns the **ciphertext** peek for encrypted files (app caches it as-is) — the store never decrypts for caching; checkpoints of an encrypted work store the ciphertext container; the local cache record has **no thumbnail/preview field at all** (a dead `.peek` field was removed 2026-07 after it was found writing plaintext 256px thumbnails to IDB) | this file (2026-07-18); `ai-docs/20260611-encryption.md`; `seal.ts` / `local-cache.ts` |
 
+| **A local write is reported as success but never reached disk** — IndexedDB fires the *request's* `onsuccess` **before** the transaction commits, so on a quota wall the real order is `req.success → tx.abort(QuotaExceededError)`. Resolving on `onsuccess` hands the app a success for bytes that were rolled back: the app clears its dirty flag, autosave stops retrying, and the exit-time "retry / discard" prompt is disarmed — the user's edit is gone with no error anywhere (not even an unhandled rejection) | **A write is successful only when its transaction commits.** `idb-store.reqTx` resolves on `t.oncomplete` and rejects on `t.onabort` (never on the bare request event); `rename`/`usage` were already shaped this way — do not fork them back. Regression guard = `tools/idb-tx-commit-check.mjs`, which drives the **real built `dist/idb-store.js`** under a CDP-shrunk quota and fails if a rolled-back write ever resolves | **v0.3.1** (2026-08-21, reproduced with a control group); see WeebPaint `ai-docs/20260821-storage-eviction-investigation.md` §B.2 |
+
 **One-line invariants behind all of the above:** every push is `If-Match` · every delete/overwrite is **move-aside** (`.trash`/`.backup`, same-tier, never cross-network) · authority is **stateful** (dirty→local, clean→cloud) · identity is **path/name** (format-agnostic; in-file GUID superseded 2026-06-07) · **decrypted plaintext never touches a persistent layer** · the **deep storage module** enforces these, never the UI.
+
+
+### A.1 Scope limit — what §A does **not** cover
+
+§A governs **this library's own decisions**. Two things sit outside it, and pretending otherwise would be
+the gaslighting the house rules forbid — so they are written down instead of quietly assumed away.
+
+1. **Browser-initiated eviction of the whole origin.** The red-line "un-pushed local edits are never
+   evicted" constrains *the store's* `offload` path (which does guard on `isDirtyAnywhere`). It cannot
+   constrain the browser: under storage pressure a UA may evict a non-persistent origin wholesale (LRU),
+   and WebKit additionally deletes script-writable storage for an origin with no user interaction in the
+   last seven days of browser use. **That bypasses every code path in this library, dirty or not.**
+   The only mitigations are outside the store: `navigator.storage.persist()` (MDN: eviction "skips over
+   origins that have been granted data persistence"), a cloud copy, and the user exporting a real file.
+   **The library does not call `persist()` itself** — when to ask is a product decision (Firefox shows a
+   permission prompt), so it belongs to the host app; see WeebPaint `src/storage-persist.ts` for the
+   reference shape. A host that ships without it is running on best-effort storage.
+2. **Anything the user's OS or another app does to the profile** (clearing site data, private windows,
+   profile deletion). Same reasoning: outside the module, so stated rather than implied.
+
+> as-of 2026-08-21 (v0.3.1). Source: WeebPaint `ai-docs/20260821-storage-eviction-investigation.md`
+> (§A platform matrix, escalation E3). If a later real-device run contradicts a claim here, trust the run.
 
 > _§A identity row + invariant corrected as-of 2026-06-19 (JRP review): the GUID-in-thumb identity (ADR-0011) was rolled back 2026-06-07; store is format-agnostic, identity = path/name, **no thumbnail required**. Trust code over stale doc._
