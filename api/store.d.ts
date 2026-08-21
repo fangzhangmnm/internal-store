@@ -894,11 +894,15 @@ export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 export declare interface StoreUI {
     /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
     busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
-    /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。 */
+    /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。
+     *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
+     *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
+     *    "push" = 保存上传 412 / 谱系断裂撞名时（keepMine=**立即**本地覆盖云端，loser 进 .backup）。 */
     resolveConflict: (ctx: {
         name: string;
         local: Blob | null;
         cloud: Blob | null;
+        occasion: "open" | "push";
     }) => Promise<ResolveChoice>;
     /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
     reportError: (err: unknown, level?: StoreErrorLevel) => void;

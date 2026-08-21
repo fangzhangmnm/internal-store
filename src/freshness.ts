@@ -59,9 +59,9 @@ export function createFreshness(cfg: FreshnessCfg) {
 
   // safePull 失败原因 → 用户能懂的短语（喂 reportStoreError；技术 reason 原样兜底）。
   const pullFailText = (reason: string): string =>
-    reason === "invalid-cloud-bytes" ? "云端内容校验未通过，可能是公共 Wi-Fi 登录页劫持或云端文件损坏"
+    reason === "invalid-cloud-bytes" ? "云端内容没通过校验，可能是公共 Wi-Fi 登录页劫持或文件损坏"
     : reason === "cloud-vanished" ? "云端文件刚刚被移动或删除"
-    : reason === "backup-failed" ? "本地备份失败，为保数据未敢覆盖"
+    : reason === "backup-failed" ? "本地留底失败，为保数据没有覆盖"
     : reason;
 
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {

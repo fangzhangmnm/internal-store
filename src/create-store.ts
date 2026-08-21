@@ -38,8 +38,11 @@ import { setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts
 export interface StoreUI {
   /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
   busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
-  /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。 */
-  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null }) => Promise<ResolveChoice>;
+  /** 冲突必 surface：consumer 必须给真 sheet，绝不静默 cancel。
+   *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
+   *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
+   *    "push" = 保存上传 412 / 谱系断裂撞名时（keepMine=**立即**本地覆盖云端，loser 进 .backup）。 */
+  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push" }) => Promise<ResolveChoice>;
   /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
   reportError: (err: unknown, level?: StoreErrorLevel) => void;
   // 加密密码**不走 ui**——非交互 crypt.getPassword（app 持内存密码 + 解锁循环在 busy 外，见 §5/§7）。故无 askPassword。
@@ -572,9 +575,10 @@ export function createStore(config: StoreConfig) {
   //   cloud 恒 null = **不预拉**（QA 2026-08-20）：现有宿主（WeebPaint/JRP）的 sheet 只用 name 不渲染 blob，
   //   预拉整份云端 = sheet 前双倍下载（takeCloud 时 safePull 反正会拉**最新**），且弹 sheet 前的长拉窗口
   //   会吞掉用户点「跳过到离线」。将来宿主要预览云端版 → escalate 改 StoreUI 契约（懒取），别回填这里。──
-  const onConflict = async ({ name }: { name: string }): Promise<ResolveChoice> => {
-    return ui.resolveConflict({ name, local: await local.get(name), cloud: null });
+  const onConflictFor = (occasion: "open" | "push") => async ({ name }: { name: string }): Promise<ResolveChoice> => {
+    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion });
   };
+  const onConflict = onConflictFor("push");   // save 的 push 412 / surfaceCollision 走这份；open 路径用 onConflictFor("open")
 
   // ── 加密：读侧原语 + at-rest transform（照搬前身引擎 store.ts，出处 = WebPaint ai-docs/11；不注入 codec → dormant）──
   //   非交互：无/错密码 → null / status:"locked"（绝不弹窗）。解锁循环是 app 在 busy 外的事（seal.withPassword 守）。
@@ -738,7 +742,7 @@ export function createStore(config: StoreConfig) {
             //   状态栏——快进没承诺过什么，captive portal 下别每次 open 都 banner）。本地照读，不丢字节。
             await fresh.open(name, {
               isOnline, probe: esc?.probe,
-              onNewer: onConflict,
+              onNewer: onConflictFor("open"),
               localDirty: () => sub.edits.localDirty(),
             }).catch((e) => ui.reportError(e));
           } finally { esc?.settle(); }

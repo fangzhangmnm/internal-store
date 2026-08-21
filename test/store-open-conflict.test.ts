@@ -25,14 +25,14 @@ function kvRaw() {
 function rig(choice: () => "keepMine" | "takeCloud" | "cancel", opts: { validateAdopt?: () => boolean } = {}) {
   const provider = createMockProvider();
   const local = createMockLocal();
-  const conflicts: Array<{ name: string; cloud: Blob | null }> = [];
+  const conflicts: Array<{ name: string; cloud: Blob | null; occasion: string }> = [];
   const errors: Array<{ e: unknown; level?: string }> = [];
   const origDownload = provider.download.bind(provider);
   let downloads = 0;
   provider.download = (id: string) => { downloads++; return origDownload(id); };
   const ui = {
     busy: <T>(_l: string, fn: () => Promise<T>) => fn(),
-    resolveConflict: async ({ name, cloud }: { name: string; cloud: Blob | null }) => { conflicts.push({ name, cloud }); return choice(); },
+    resolveConflict: async ({ name, cloud, occasion }: { name: string; cloud: Blob | null; occasion: string }) => { conflicts.push({ name, cloud, occasion }); return choice(); },
     reportError: (e: unknown, level?: string) => { errors.push({ e, level }); },
   } as never;
   const store = createStore({
@@ -50,6 +50,7 @@ test("[open-conflict] 事故同款：synced → 外部更新云端 → 本地又
   await f.save(enc("MINE-DIRTY"), { tryPush: false }); // 本机又编辑，只落本地 → dirty ∧ cloudMoved
   const blob = await f.open();
   eq(conflicts.length, 1, "gallery 点开必须当场 surface（修前 0 次、等保存 412 才弹）");
+  eq(conflicts[0].occasion, "open", "打开路径的弹窗带 occasion='open'（宿主据此换按钮集，grill 2026-08-21）");
   eq(conflicts[0].cloud, null, "sheet 前不预拉云端 blob（QA fix4：宿主不渲染 blob，预拉=双倍下载）");
   eq(await asStr(blob), "CLOUD-NEW", "takeCloud → open 返回云端新字节");
   eq(downloadCount(), 1, "全程云端内容只拉一次（safePull 拉最新；无 sheet 前预拉）");
@@ -110,6 +111,16 @@ test("[open-conflict] 缺陷 B 端到端：从未 synced(!base) ∧ 云端同名
   const blob = await f.open();
   eq(conflicts.length, 1, "!base ∧ dirty ∧ 云端有 → 必弹");
   eq(await asStr(blob), "MINE", "cancel → 留本地");
+});
+
+test("[open-conflict] 保存路径 412 弹窗带 occasion='push'（keepMine=立即本地覆盖云端的那套按钮）", async () => {
+  const { provider, store, conflicts } = rig(() => "cancel");
+  const f = store.file("h.ora", { isZip: false, mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  provider._seed("h.ora", "CLOUD-NEW");                // 云端被外部动过 → 下次 push If-Match 412
+  await f.save(enc("MINE-2"), { tryPush: true });      // 保存并上传 → 412 → 弹
+  assert(conflicts.length >= 1, "push 412 必弹");
+  eq(conflicts[conflicts.length - 1].occasion, "push", "保存路径 occasion='push'");
 });
 
 test("[open-conflict] in-sync 不弹不拉（无谓冲突不回归）", async () => {

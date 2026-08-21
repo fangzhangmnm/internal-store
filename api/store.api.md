@@ -594,6 +594,7 @@ export interface StoreUI {
         name: string;
         local: Blob | null;
         cloud: Blob | null;
+        occasion: "open" | "push";
     }) => Promise<ResolveChoice>;
 }
 
