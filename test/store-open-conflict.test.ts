@@ -20,35 +20,65 @@ function kvRaw() {
   return { get: (k: string) => (m.has(k) ? m.get(k)! : null), set: (k: string, v: string) => { m.set(k, String(v)); }, remove: (k: string) => { m.delete(k); }, keys: () => [...m.keys()] };
 }
 
-// rig：真 createStore + spy ui（resolveConflict 记录每次弹窗并按参数作答）。
-function rig(choice: () => "keepMine" | "takeCloud" | "cancel") {
+// rig：真 createStore + spy ui（resolveConflict 记录每次弹窗上下文并按参数作答；reportError 记 level；
+//   provider.download 计数 = 云端内容拉取次数）。
+function rig(choice: () => "keepMine" | "takeCloud" | "cancel", opts: { validateAdopt?: () => boolean } = {}) {
   const provider = createMockProvider();
   const local = createMockLocal();
-  const conflicts: string[] = [];
-  const errors: unknown[] = [];
+  const conflicts: Array<{ name: string; cloud: Blob | null }> = [];
+  const errors: Array<{ e: unknown; level?: string }> = [];
+  const origDownload = provider.download.bind(provider);
+  let downloads = 0;
+  provider.download = (id: string) => { downloads++; return origDownload(id); };
   const ui = {
     busy: <T>(_l: string, fn: () => Promise<T>) => fn(),
-    resolveConflict: async ({ name }: { name: string }) => { conflicts.push(name); return choice(); },
-    reportError: (e: unknown) => { errors.push(e); },
+    resolveConflict: async ({ name, cloud }: { name: string; cloud: Blob | null }) => { conflicts.push({ name, cloud }); return choice(); },
+    reportError: (e: unknown, level?: string) => { errors.push({ e, level }); },
   } as never;
   const store = createStore({
-    appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local,
+    appId: "wp", provider, ui, validateAdopt: opts.validateAdopt ?? (() => true), kv: kvRaw(), local,
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
-  return { provider, local, store, conflicts, errors };
+  return { provider, local, store, conflicts, errors, downloadCount: () => downloads };
 }
 
 test("[open-conflict] 事故同款：synced → 外部更新云端 → 本地又编辑(dirty) → open 当场弹；takeCloud=拉云端+本地备份", async () => {
-  const { provider, local, store, conflicts } = rig(() => "takeCloud");
+  const { provider, local, store, conflicts, downloadCount } = rig(() => "takeCloud");
   const f = store.file("夏音线稿.ora", { isZip: false, mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });          // 建谱系：push 成功 → synced（base=云 etag）
   provider._seed("夏音线稿.ora", "CLOUD-NEW");          // 外部写入方（OneDrive 桌面客户端）更新云端 → etag 变
   await f.save(enc("MINE-DIRTY"), { tryPush: false }); // 本机又编辑，只落本地 → dirty ∧ cloudMoved
   const blob = await f.open();
   eq(conflicts.length, 1, "gallery 点开必须当场 surface（修前 0 次、等保存 412 才弹）");
+  eq(conflicts[0].cloud, null, "sheet 前不预拉云端 blob（QA fix4：宿主不渲染 blob，预拉=双倍下载）");
   eq(await asStr(blob), "CLOUD-NEW", "takeCloud → open 返回云端新字节");
+  eq(downloadCount(), 1, "全程云端内容只拉一次（safePull 拉最新；无 sheet 前预拉）");
   const backups = local.listBackup ? await local.listBackup() : [];
   assert(backups.length >= 1, "dirty 被覆盖前必须先进 .backup（红线：绝不丢字节）");
+});
+
+test("[open-conflict] takeCloud 拉取失败（云端字节校验不过）→ warning surface + 本地保留（反煤气灯）", async () => {
+  const { provider, store, conflicts, errors } = rig(() => "takeCloud", { validateAdopt: () => false });
+  const f = store.file("e.ora", { isZip: false, mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  provider._seed("e.ora", "PORTAL-HTML");              // captive portal / 损坏云副本
+  await f.save(enc("MINE-DIRTY"), { tryPush: false });
+  const blob = await f.open();
+  eq(conflicts.length, 1, "弹过 sheet");
+  eq(await asStr(blob), "MINE-DIRTY", "拉取被校验拒绝 → 本地保留（绝不采纳坏字节）");
+  assert(errors.some((x) => x.level === "warning"), "用户选了 takeCloud 却没成 → 必须 warning surface（绝不让用户以为拿到云端版）");
+});
+
+test("[open-conflict] clean 快进拉取失败 → info（状态栏级，不 banner spam）+ 本地保留", async () => {
+  const { provider, store, conflicts, errors } = rig(() => "cancel", { validateAdopt: () => false });
+  const f = store.file("g.ora", { isZip: false, mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });          // synced、clean
+  provider._seed("g.ora", "PORTAL-HTML");
+  const blob = await f.open();
+  eq(conflicts.length, 0, "clean 不弹");
+  eq(await asStr(blob), "V1", "坏字节不采纳 → 本地保留");
+  assert(errors.some((x) => x.level === "info"), "快进失败 → info（captive portal 下每次 open 不该 banner）");
+  assert(!errors.some((x) => x.level === "warning" || x.level === "error"), "不升 warning/error");
 });
 
 test("[open-conflict] cancel → 留本地 dirty（弹过再留，不是没弹；后续 push 412 仍会 surface）", async () => {

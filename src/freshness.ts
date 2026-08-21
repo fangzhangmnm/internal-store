@@ -57,6 +57,13 @@ export interface FreshResult {
 export function createFreshness(cfg: FreshnessCfg) {
   const { cloud, head, safeResolve, busy: _busy = passBusy } = cfg;
 
+  // safePull 失败原因 → 用户能懂的短语（喂 reportStoreError；技术 reason 原样兜底）。
+  const pullFailText = (reason: string): string =>
+    reason === "invalid-cloud-bytes" ? "云端内容校验未通过，可能是公共 Wi-Fi 登录页劫持或云端文件损坏"
+    : reason === "cloud-vanished" ? "云端文件刚刚被移动或删除"
+    : reason === "backup-failed" ? "本地备份失败，为保数据未敢覆盖"
+    : reason;
+
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
     const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy } = opts;
     if (!isOnline()) return { source: "local", reason: "offline" };
@@ -87,14 +94,18 @@ export function createFreshness(cfg: FreshnessCfg) {
       //   对齐 listing.classifySyncState 的 `moved = cloudMoved || !everSynced`（同一事实不许两种结论）。
       //   旧版把 !base 判 in-sync = 静默保留陈旧本地（缺陷 B，20260820-open-time-conflict-surface-handoff）。
       const dirty = head.isDirty(name) || (localDirty ? localDirty() : false);
-      if (!dirty) {                                       // clean → 静默快进（无 sheet；safePull 因 clean 跳备份）
+      if (!dirty) {                                       // clean → 静默快进（无 sheet；safePull 因 clean 跳备份——!base 例外，谱系未知必备份）
         const r = await safeResolve.safePull(name, { adopt });
+        // 快进没承诺过什么 → 失败只 info（状态栏，不 banner；captive portal 下每次 open 都会走到这里）。
+        if (!r.ok) reportStoreError(new Error(`「${name}」云端有新版本但暂时取不到（${pullFailText(r.reason)}），已打开本地版本`), "info");
         return r.ok ? { source: "fast-forwarded", backupName: r.backupName } : { source: "local", reason: r.reason, error: r.error };
       }
       // dirty 分叉 → 交 ui（takeCloud=拉 / keepMine|cancel=留本地）
       const choice = onNewer ? await onNewer({ name, cloudEtag: meta.etag, baseEtag: base, cloudTime: meta.lastModified }) : "cancel";
       if (choice === "takeCloud") {
         const r = await safeResolve.safePull(name, { adopt });
+        // 用户显式选了「用云端」却没成 → warning（banner）：绝不让用户以为打开的是云端版（反煤气灯）。
+        if (!r.ok) reportStoreError(new Error(`「${name}」未能取回云端版本（${pullFailText(r.reason)}），本次打开的仍是本地版本`), "warning");
         return r.ok ? { source: "pulled", backupName: r.backupName } : { source: "local", reason: r.reason, backupName: r.backupName, error: r.error };
       }
       return { source: "local", reason: "kept" };

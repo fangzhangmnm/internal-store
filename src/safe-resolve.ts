@@ -22,7 +22,7 @@ import type { AdoptFn } from "./types.ts";
 export interface SafeResolveCfg {
   cloud: Pick<CloudSync, "pull" | "weakOverride">;
   local: Pick<LocalCache, "backup" | "save">;
-  head: Pick<LocalHead, "isDirty" | "markSynced">;
+  head: Pick<LocalHead, "isDirty" | "markSynced" | "seenBase">;
   localDirty?: () => boolean;                                  // 活动 doc 未落盘（substrate.edits.localDirty）
   // N2 采纳云字节前的校验闸——**必传，无 noop 默认**（store 格式盲，逻辑 app 给）。验的是**解密后的明文**
   //   （库对加密透明）：app 看到的是真明文文档，不是密文容器。挡 captive-portal HTML / 损坏云副本覆盖好本地。
@@ -61,7 +61,10 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
     try {
       let backupName: string | undefined;
       // clean 本地 = 可从云重取的已知版本，无未见内容可丢 → 跳 backup（ADR-0016，不 spam .backup）。
-      if (head.isDirty(name) || localDirty()) {
+      //   ⚠ 该论据的前提是**谱系已知**（seenBase 非 null：本地 == 云端某已知版）。!base（从未 synced /
+      //   durable 双轨丢失，如 localStorage 被清而 IDB 幸存——dirty 标志会同批丢）时本地字节出身不明，
+      //   「clean」不可信 → 覆盖前必 move-aside（§A：every overwrite is move-aside）。场景罕见，不构成 spam。
+      if (head.isDirty(name) || localDirty() || head.seenBase(name) == null) {
         try { backupName = await local.backup(name); }
         catch (e) { reportStoreError(e, "warning"); return { ok: false, reason: "backup-failed", error: e }; }   // dirty 备份失败→中止 pull（不覆盖），degraded surface
       }

@@ -53,13 +53,15 @@ test("open in-sync 重捕 _base：reload 后 dirty(内存 _base/_parent 空)→ 
   eq(head.ifMatchFor("f"), etag, "markSeen 后 push 的 If-Match = 当前云版 etag(不再 no-base 误报 collision)");
 });
 
-test("open clean → 静默快进（fast-forwarded，本地变云端版）", async () => {
+test("open clean → 静默快进（fast-forwarded，本地变云端版；已知谱系不 spam .backup）", async () => {
   const { cloud, local, head, open } = rig();
   await cloud.push("f", enc("CLOUD"));
-  head.markSeen("f", "OLD");                       // base 陈旧 ≠ 云端
+  head.markSeen("f", "OLD");                       // base 陈旧 ≠ 云端（谱系已知）
   const r = await open("f");
   eq(r.source, "fast-forwarded", "clean → 快进");
   eq(await asStr(await local.get("f")), "CLOUD", "本地变云端版");
+  const backups = local.listBackup ? await local.listBackup() : [];
+  eq(backups.length, 0, "clean ∧ 谱系已知 → 不备份（ADR-0016 不 spam）");
 });
 
 test("open dirty + takeCloud → pulled（先备份本地）", async () => {
@@ -130,7 +132,7 @@ test("open dirty ∧ !base ∧ 云端有 + cancel → 留本地（kept，不静�
   eq(await asStr(await local.get("f")), "MINE", "本地没动");
 });
 
-test("open clean ∧ !base ∧ 云端有 → 静默快进不弹", async () => {
+test("open clean ∧ !base ∧ 云端有 → 静默快进不弹；谱系未知覆盖前必 .backup", async () => {
   const { provider, local, open } = rigExternalCloud();
   provider._seed("f", "CLOUD");
   await local.save("f", enc("STALE"));                 // clean 陈旧副本（谱系丢失场景）
@@ -139,6 +141,10 @@ test("open clean ∧ !base ∧ 云端有 → 静默快进不弹", async () => {
   eq(asked, 0, "clean 不弹");
   eq(r.source, "fast-forwarded", "clean → 快进");
   eq(await asStr(await local.get("f")), "CLOUD", "本地变云端版");
+  // QA fix1（2026-08-20）：!base 时「clean」不可信（durable dirty 可能与 etag 同批丢失，如 localStorage
+  //   被清而 IDB 幸存）→ safePull 必须先 move-aside，绝不无备份覆盖出身不明的本地字节（§A）。
+  const backups = local.listBackup ? await local.listBackup() : [];
+  eq(backups.length, 1, "谱系未知 → 覆盖前必备份");
 });
 
 test("refresh clean ∧ !base ∧ 云端有 → 快进（对齐 open）", async () => {

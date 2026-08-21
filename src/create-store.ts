@@ -568,10 +568,12 @@ export function createStore(config: StoreConfig) {
     return { ok: true, where: r.where, oldKept: r.oldKept, oldUnknown: r.oldUnknown, oldCloudOrphan: r.oldCloudOrphan, cloudDeferred: r.cloudDeferred, oldName: from };
   });
 
-  // ── ui 映射：冲突回调把 local/cloud 字节取来喂 ui.resolveConflict（必填，绝不静默 cancel）──
+  // ── ui 映射：冲突回调喂 ui.resolveConflict（必填，绝不静默 cancel）。local 给本地字节（IDB，便宜）；
+  //   cloud 恒 null = **不预拉**（QA 2026-08-20）：现有宿主（WeebPaint/JRP）的 sheet 只用 name 不渲染 blob，
+  //   预拉整份云端 = sheet 前双倍下载（takeCloud 时 safePull 反正会拉**最新**），且弹 sheet 前的长拉窗口
+  //   会吞掉用户点「跳过到离线」。将来宿主要预览云端版 → escalate 改 StoreUI 契约（懒取），别回填这里。──
   const onConflict = async ({ name }: { name: string }): Promise<ResolveChoice> => {
-    const [localBlob, cloudPull] = await Promise.all([local.get(name), cloud.pull(name).catch(() => null)]);
-    return ui.resolveConflict({ name, local: localBlob, cloud: cloudPull?.blob ?? null });
+    return ui.resolveConflict({ name, local: await local.get(name), cloud: null });
   };
 
   // ── 加密：读侧原语 + at-rest transform（照搬前身引擎 store.ts，出处 = WebPaint ai-docs/11；不注入 codec → dormant）──
@@ -732,16 +734,13 @@ export function createStore(config: StoreConfig) {
             //   resolveConflict sheet（takeCloud=safePull 先备份再拉 / keepMine|cancel=留本地 dirty，之后 push 412 再 surface）。
             //   旧版没接 onNewer → freshness 默认 "cancel" = 静默保留陈旧本地（红线破口）。adopt 不接：open 的字节
             //   经下方 readLocal() 返回值流回 app（refresh 才需要 adopt 活替换已打开的 doc）。
-            const r = await fresh.open(name, {
+            //   拉取失败的 surface 在 freshness 内（分支感知：takeCloud 没成=warning banner、静默快进没成=info
+            //   状态栏——快进没承诺过什么，captive portal 下别每次 open 都 banner）。本地照读，不丢字节。
+            await fresh.open(name, {
               isOnline, probe: esc?.probe,
               onNewer: onConflict,
               localDirty: () => sub.edits.localDirty(),
-            }).catch((e) => { ui.reportError(e); return null; });
-            // FreshResult 不再丢弃：用户选了 takeCloud（或 clean 快进）但拉取失败（坏字节/备份失败/云端消失）
-            //   → 本地照读（不丢字节），但失败必 surface——绝不让「我选了用云端」静默变成「还是旧本地」。
-            if (r && (r.error != null || r.reason === "invalid-cloud-bytes" || r.reason === "cloud-vanished" || r.reason === "backup-failed")) {
-              ui.reportError(r.error ?? new Error(`打开时同步云端失败（${name}）：${r.reason}，已保留本地副本`), "warning");
-            }
+            }).catch((e) => ui.reportError(e));
           } finally { esc?.settle(); }
           return readLocal();
         }
