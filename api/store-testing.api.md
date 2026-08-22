@@ -79,10 +79,6 @@ export interface LocalCache {
         bytes: number;
         count: number;
     }>;
-    usageBreakdown?(): Promise<Record<string, {
-        bytes: number;
-        count: number;
-    }>>;
 }
 
 // @public

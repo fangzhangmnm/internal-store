@@ -38,7 +38,6 @@ import "./folder-delete.test.ts";
 import "./store-lost-response-claim.test.mjs";
 import "./migration.test.mjs";
 import "./store-narrow-waist.test.ts";
-import "./usage-breakdown.test.ts";   // files.usageBreakdown 分区口径 + 降级分支
 
 console.log("\n  @internal/store —— 云同步引擎契约测试\n");
 await run();

@@ -47,9 +47,6 @@ export function createLocalCache(dbName: string): LocalCache {
     async appKeys() { return files.keys(); },
     // files 分区占用（字节 + 件数）。**不含** trash/backup/collections 分区，也不含纯云端未缓存的文件。
     async usage() { return files.usage(); },
-    // 分区级占用：files/trash/backup/collections/dir-index-cache/staging… 一次 cursor 分桶。
-    //   宿主拿它如实展示「本机被占了多少」——trash/backup 同样吃浏览器配额，而用户在 UI 上看不见它们。
-    async usageBreakdown() { return bs.usageAll(); },
     // 覆盖前留底:复制到 backup 分区(yyyymmddhhmmss-guid 防撞;原件不动)。
     async backup(name: string) {
       const r = await files.get(name);

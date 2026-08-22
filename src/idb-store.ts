@@ -26,27 +26,12 @@ export function createIdbCache(dbName: string) {
     });
   }
 
-  // ⚠ **必须等事务 commit 才算成功**（2026-08-21 修，详 WeebPaint
-  //   ai-docs/20260821-storage-eviction-investigation.md §B.2 / escalation E1）。
-  //   旧版在 `req.onsuccess` 就 resolve、且没挂 `t.onabort`。而配额撞墙时 IDB 的真实事件顺序是
-  //     req.success → tx.abort(QuotaExceededError)
-  //   —— request 先报成功、事务之后才回滚。于是一次**根本没落盘**的写被 resolve 成功，一路向上
-  //   报给 app：`_dirty` 被清、autosave 不再重试、退出时的「重试/丢弃」循环被解除武装，
-  //   且那次 abort **不产生任何 unhandled rejection**（连 console 都没痕迹）= 静默丢用户编辑。
-  //   实测复现（带对照组）：tools/idb-tx-commit-check.mjs，跑的是**真实 dist 产物**。
-  //   兄弟方法 rename/usage 本来就等 `t.oncomplete` —— 它俩是这里的正确样板，别再分叉。
-  //   readonly 也一并等 commit：代价是可忽略的（oncomplete 紧随最后一个 request），
-  //   换来的是「resolve 了就是真的」这一条不分读写都成立。
   function reqTx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     return openDb().then((db) => new Promise<T>((resolve, reject) => {
       const t = db.transaction(STORE, mode);
       const req = run(t.objectStore(STORE));
-      let value: T;
-      let reqErr: unknown = null;
-      req.onsuccess = (): void => { value = req.result; };            // 只记结果，**不** resolve
-      req.onerror = (): void => { reqErr = req.error; };              // 不 preventDefault → 事务照常 abort
-      t.oncomplete = (): void => resolve(value);                      // 落盘确认，才算成功
-      t.onabort = (): void => reject(t.error ?? reqErr ?? new Error(`idb ${mode} transaction aborted`));
+      req.onsuccess = (): void => resolve(req.result);
+      req.onerror = (): void => reject(req.error);
     }));
   }
 
@@ -76,33 +61,6 @@ export function createIdbCache(dbName: string) {
         };
         t.oncomplete = (): void => resolve({ bytes, count });
         t.onerror = (): void => reject(t.error);
-      }));
-    },
-    /** 全库占用**按分区分桶**（key 的第一段 `<partition>/`），单次 cursor 走完。
-     *  为什么不是「对每个分区调一次 usage(prefix)」：那是 N 遍全表扫描，分区多了就是 N 倍 IO。
-     *  同 usage()：`Blob.size` 是引用属性，**不把字节读进内存**；只返标量，**不返任何名字**
-     *  （拿不到清单 → 不能当全库列举用，那是被否决的退化设计）。
-     *  裸键（无 `/`）归入 `""` 桶 —— 现实里只有历史遗留，别据此推断分区存在。 */
-    usageAll(): Promise<Record<string, { bytes: number; count: number }>> {
-      return openDb().then((db) => new Promise<Record<string, { bytes: number; count: number }>>((resolve, reject) => {
-        const t = db.transaction(STORE, "readonly");
-        const out: Record<string, { bytes: number; count: number }> = {};
-        const c = t.objectStore(STORE).openCursor();
-        c.onsuccess = (): void => {
-          const cur = c.result;
-          if (!cur) return;                                  // 走完 → 等 oncomplete
-          if (typeof cur.key === "string") {
-            const slash = cur.key.indexOf("/");
-            const part = slash < 0 ? "" : cur.key.slice(0, slash);
-            const rec = cur.value as CacheRecord | undefined;
-            const bucket = out[part] ?? (out[part] = { bytes: 0, count: 0 });
-            if (rec && rec.blob) { bucket.bytes += rec.blob.size || 0; bucket.count++; }
-          }
-          cur.continue();
-        };
-        t.oncomplete = (): void => resolve(out);
-        t.onerror = (): void => reject(t.error);
-        t.onabort = (): void => reject(t.error);
       }));
     },
     /** 原子改名(同一事务 get→put 新→del 旧):trash/restore/backup 用。源不存在则 noop。 */

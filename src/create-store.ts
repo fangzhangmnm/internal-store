@@ -950,11 +950,6 @@ export function createStore(config: StoreConfig) {
        *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
        *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
       usage: () => local.usage(),
-      // 分区级占用（files/trash/backup/collections/dir-index-cache/staging…）。宿主用它如实交代
-      //   「本机到底被占了多少」——trash/backup 同样吃浏览器配额，而它们在 UI 上通常看不见。
-      //   LocalCache 没实现（老 mock / 注入式）→ 退回只报 files 一桶，宿主无需分支。
-      usageBreakdown: async (): Promise<Record<string, { bytes: number; count: number }>> =>
-        local.usageBreakdown ? local.usageBreakdown() : { files: await local.usage() },
       /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
       ensureFolder: (path: string) => { roGuard("ensureFolder"); return ensureFolderLocalFirst(path); },
       /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */

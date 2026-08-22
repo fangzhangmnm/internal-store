@@ -193,10 +193,6 @@ export function createStore(config: StoreConfig): {
             bytes: number;
             count: number;
         }>;
-        usageBreakdown: () => Promise<Record<string, {
-            bytes: number;
-            count: number;
-        }>>;
         ensureFolder: (path: string) => Promise<void>;
         newFolder: (path: string) => Promise<void>;
         deleteFolder: (path: string) => Promise<void>;
@@ -376,10 +372,6 @@ export interface LocalCache {
         bytes: number;
         count: number;
     }>;
-    usageBreakdown?(): Promise<Record<string, {
-        bytes: number;
-        count: number;
-    }>>;
 }
 
 // @public
