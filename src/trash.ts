@@ -5,6 +5,7 @@
 //   purge：永久删（不可恢复）→ 强制 danger confirm。
 //   emptyTrash：批量彻底删，本地/云端一处清，逐项独立 try、失败汇总不静默；**强退=cancel，绝不自动续**。
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { snapshotStampOf } from "./move-aside.ts";        // 恢复撞名的快照时刻抽取（案卷 §8）
 import type { CloudItem, CloudSync, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
@@ -76,7 +77,11 @@ export function createTrash(cfg: TrashCfg) {
       // both 行策略：本地先恢复到**原名**；云端腿随后 cloud.restore 撞名自动 (2)（复用其重试）→ 两份都在、不覆盖。
       if (trashKey && local) { const n = await local.restore(trashKey); if (n) { name = n; restoredLocal = true; } }
       if (fromCloud && cloudItemId != null) {
-        const ritem = await cloud.restore(cloudItemId, (name || targetName)!, { encrypted }) as { eTag?: string | null };
+        // snapshotStamp：撞名改名恢复时用**快照自己的时刻**命名（案卷 §8）。本地腿在场时从 trashKey 抽；
+        //   纯云端恢复拿不到（不额外打元数据往返）→ cloud.restore 退恢复时刻。本地腿已改名时 name 已带戳，
+        //   云端腿跟同名落点 → 两腿收敛同一个名字。
+        const snap = trashKey ? snapshotStampOf(trashKey.replace(/^[a-z]+\//, "")) : null;
+        const ritem = await cloud.restore(cloudItemId, (name || targetName)!, { encrypted, snapshotStamp: snap }) as { eTag?: string | null };
         restoredCloud = true;
         // 采纳恢复出的云 item etag（restore 是 move → 新 etag）→ 之后 push 有 base，不对自己的文件弹假撞名。
         const rname = name || targetName;

@@ -9,7 +9,7 @@
 
 import { createPartitionedBlobStore } from "./blob-partition.ts";
 import { createIdbCache } from "./idb-store.ts";
-import { asideStamp } from "./move-aside.ts";
+import { asideStamp, restoreTargetName, snapshotStampOf } from "./move-aside.ts";
 import type { Bytes, LocalCache, TrashEntry } from "./types.ts";
 
 // trashKey/backupKey 内层 = "<yyyymmddhhmmss-guid>:<name>" → 还原 name（去一段盖戳前缀）。
@@ -64,8 +64,12 @@ export function createLocalCache(dbName: string): LocalCache {
     async restore(trashKey: string) {
       const { part, inner } = splitKey(trashKey);
       const orig = stripStamp(inner);
-      await (part === "backup" ? backupP : trashP).moveTo(inner, "files", orig);
-      return orig;
+      // 案卷 §8（2026-08-25）：旧版无条件 moveTo = idb.rename 落点覆盖——恢复正打开的同名会被下次保存
+      //   静默盖掉（trash 份已 move 走 = 恢复字节真丢）、恢复撞未推 dirty 会吞编辑。落点占用 → 改名恢复
+      //   （快照时刻戳，绝不覆盖 files 分区既有字节）。
+      const target = await restoreTargetName(orig, (n) => files.exists(n), snapshotStampOf(inner), Date.now());
+      await (part === "backup" ? backupP : trashP).moveTo(inner, "files", target);
+      return target;
     },
     async purgeTrash(trashKey: string) {
       const { part, inner } = splitKey(trashKey);

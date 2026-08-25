@@ -10,7 +10,7 @@
 //   分片末响应无 item→拉权威 etag 不崩不缓存 null（H7）· trash=move-aside 加 [ts] 后缀（A8/C2）·
 //   restore 撞名 (2)(3) 防覆盖。
 
-import { asideStamp } from "./move-aside.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
+import { asideStamp, restoreStampDisplay } from "./move-aside.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
 import { isHidden } from "./is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import type { Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
@@ -284,14 +284,18 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   //   opts.eTag：源 item 的 If-Match。⚠ 412 和 409 含义不同，**不能都当撞名重试**：
   //     409 = 目标位置已有同名 → 换个候选名重试（下面的循环）。
   //     412 = 回收站里那个源 item 已经变了（别设备恢复/清空了它）→ 换名重试毫无意义，直接抛。
-  async function restore(itemId: string, targetName: string, opts: { encrypted?: boolean; eTag?: string | null } = {}): Promise<CloudItem> {
+  //   撞名候选（2026-08-25 与本地腿对齐，案卷 §8）：`base [yyyymmdd-hhmmss]`（快照自己的时刻，
+  //   opts.snapshotStamp 由 trash.ts 从 trashKey 抽给；拿不到退恢复时刻）→ 仍撞补 `-2`/`-3`…；
+  //   旧版 `(2)(3)` 序号已废（user：backup 的时间分辨率语义）。
+  async function restore(itemId: string, targetName: string, opts: { encrypted?: boolean; eTag?: string | null; snapshotStamp?: string | null } = {}): Promise<CloudItem> {
     const clean = targetName;
     const folder = clean.includes("/") ? clean.slice(0, clean.lastIndexOf("/")) : "";
     const base = baseName(clean);
     const mkName = opts.encrypted && encFileName ? encFileName : fileName;   // 加密件恢复保留 .zip 容器扩展名
     const folderId = await provider.ensureFolder(folder);
+    const disp = restoreStampDisplay(opts.snapshotStamp, now());
     for (let attempt = 1; attempt < 100; attempt++) {
-      const candidate = attempt === 1 ? base : `${base} (${attempt})`;
+      const candidate = attempt === 1 ? base : attempt === 2 ? `${base} [${disp}]` : `${base} [${disp}-${attempt - 1}]`;
       try {
         return await provider.move(itemId, folderId, { newName: mkName(candidate), conflictBehavior: "fail", eTag: opts.eTag ?? null });
       } catch (e) {
@@ -300,7 +304,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
         throw e;                               // 412（源变了）/ 其它 → 抛，别拿换名去掩盖
       }
     }
-    return await provider.move(itemId, folderId, { newName: mkName(`${base} [${now()}]`), conflictBehavior: "fail", eTag: opts.eTag ?? null });
+    return await provider.move(itemId, folderId, { newName: mkName(`${base} [${asideStamp(now())}]`), conflictBehavior: "fail", eTag: opts.eTag ?? null });   // 100 连撞的病态兜底：guid 必不撞
   }
 
   //   eTag：硬删是不可逆的，必须 If-Match（v435）。窄 TOCTOU 但后果最重：别设备在 list 与 delete 之间

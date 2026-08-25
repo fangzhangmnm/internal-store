@@ -4,6 +4,7 @@ import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createCloudSync, memKv } from "../src/cloud-sync.ts";
 import { createLocalHead } from "../src/local-head.ts";
 import { createTrash } from "../src/trash.ts";
+import { toU8 } from "../src/substrate.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -96,4 +97,40 @@ test("restore 加密件：云端腿按 encrypted 落 encFileName（.zip 容器�
   eq(r.status, "restored", "恢复");
   assert(await provider.getItemByPath("A.ora.zip"), "恢复回 encFileName（A.ora.zip），不是明文 A.ora");
   assert(!(await provider.getItemByPath("A.ora")), "没落到明文路径");
+});
+
+// ── 恢复撞名=改名不覆盖（案卷 §8 第三案，2026-08-25 user 拍板：快照时刻戳、两腿对齐）
+//    added by Claude Fable 5 ──
+test("restore 落点被占（正打开/活文件/dirty）→ 改名恢复[快照时刻]，占用者分毫不动", async () => {
+  const { local, restore } = rig();
+  await local.save("f", enc("SNAPSHOT"));
+  const tk = await local.trash("f", "20260823221500-guid1");   // 快照时刻在 key 里
+  await local.save("f", enc("LIVE"));                          // 同名占用者（= 正打开的文档/活文件/未推 dirty）
+  const r = await restore({ trashKey: tk });
+  eq(r.status, "restored", "恢复成功");
+  eq(r.name, "f [20260823-221500]", "改名恢复：戳=快照自己的时刻（backup 时间分辨率语义）");
+  eq(new TextDecoder().decode(await toU8(await local.get("f"))), "LIVE", "占用者原字节分毫不动（修前被覆盖=下次保存吞掉恢复）");
+  eq(new TextDecoder().decode(await toU8(await local.get("f [20260823-221500]"))), "SNAPSHOT", "恢复的快照落新名，字节完好");
+});
+
+test("restore both 撞占用：本地先改名，云端腿跟同名落点 → 两腿收敛", async () => {
+  const { cloud, local, restore } = rig();
+  await local.save("f", enc("SNAP"));
+  await cloud.push("f", enc("SNAP"));
+  const tk = await local.trash("f", "20260823221500-guid2");
+  const moved = await cloud.trash("f", "20260823221500-guid2") as { id: string };
+  await local.save("f", enc("LIVE")); await cloud.push("f", enc("LIVE"));   // 两端同名占用者
+  const r = await restore({ trashKey: tk, fromCloud: true, cloudItemId: moved.id, targetName: "f" });
+  eq(r.name, "f [20260823-221500]", "两腿同一个改名落点");
+  eq(new TextDecoder().decode(await toU8(await local.get("f"))), "LIVE", "本地占用者不动");
+  eq(await (await cloud.pull("f"))!.blob.text(), "LIVE", "云端占用者不动");
+  eq(await (await cloud.pull("f [20260823-221500]"))!.blob.text(), "SNAP", "云端快照落同名新落点");
+});
+
+test("restore 落点空闲 → 原名恢复（行为不变，不 spam 改名）", async () => {
+  const { local, restore } = rig();
+  await local.save("g", enc("X"));
+  const tk = await local.trash("g", "20260823221500-guid3");
+  const r = await restore({ trashKey: tk });
+  eq(r.name, "g", "路径空闲 → 原名");
 });

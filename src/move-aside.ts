@@ -33,3 +33,38 @@ function guid() {
 
 /** move-aside 防撞标：`<yyyymmddhhmmss>-<guid>`。ms 由调用方给（cloud-sync 注入时钟便于测试；local 用 Date.now）。 */
 export function asideStamp(ms: number) { return `${yyyymmddhhmmss(ms)}-${guid()}`; }
+
+// ── 恢复撞名策略（案卷 20260825-cloud-override-adopt-noop-case.md §8，2026-08-25 user 拍板）────
+// 落点被占（活文件 / 正打开的文档 / 未推 dirty）→ **绝不覆盖**（§A：every overwrite is move-aside 的对偶：
+// restore 也不许 clobber），改名恢复。戳 = **快照自己的时刻**（user 语义：「backup 的时间分辨率」——
+// 恢复出来的是"那个时间点的版本"，名字就该写那个时间点），取 aside stamp 前 14 位；拿不到才退恢复时刻。
+// 本地腿（local-cache）/ mock（mock-local）/ 云端腿（cloud-sync.restore 候选名）三处共用，防沙箱与真机漂移。
+// added by Claude Fable 5, 2026-08-25.
+
+/** aside stamp（`<yyyymmddhhmmss>-<guid>`）开头抽 14 位快照时刻；抽不到 → null。 */
+export function snapshotStampOf(s: string | null | undefined): string | null {
+  const m = s ? /^(\d{14})-/.exec(s) : null;
+  return m ? m[1] : null;
+}
+
+/** 恢复撞名的展示戳 `yyyymmdd-hhmmss`：优先快照时刻（stamp14），缺失退 fallbackMs（恢复时刻）。 */
+export function restoreStampDisplay(stamp14: string | null | undefined, fallbackMs: number): string {
+  const s = stamp14 && /^\d{14}$/.test(stamp14) ? stamp14 : yyyymmddhhmmss(fallbackMs);
+  return `${s.slice(0, 8)}-${s.slice(8)}`;
+}
+
+/** 恢复落点名：orig 空闲 → 原名；被占 → `base [yyyymmdd-hhmmss].ext`（仍占再补 `-2`/`-3`…）。 */
+export async function restoreTargetName(
+  orig: string,
+  occupied: (name: string) => Promise<boolean> | boolean,
+  stamp14: string | null | undefined,
+  fallbackMs: number,
+): Promise<string> {
+  if (!(await occupied(orig))) return orig;
+  const disp = restoreStampDisplay(stamp14, fallbackMs);
+  const dot = orig.lastIndexOf(".");
+  const mk = (suf: string) => (dot > 0 ? `${orig.slice(0, dot)} [${suf}]${orig.slice(dot)}` : `${orig} [${suf}]`);
+  let target = mk(disp);
+  for (let i = 2; await occupied(target); i++) target = mk(`${disp}-${i}`);
+  return target;
+}

@@ -118,6 +118,7 @@ export declare interface CloudSync {
     restore(cloudItemId: string, name: string, opts?: {
         encrypted?: boolean;
         eTag?: string | null;
+        snapshotStamp?: string | null;
     }): Promise<unknown>;
     /** 彻底删一条云端 trash。 */
     purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;

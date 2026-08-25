@@ -13,6 +13,7 @@
 
 import type { Bytes } from "../substrate.ts";
 import type { LocalCache, TrashEntry } from "../types.ts";
+import { restoreTargetName, snapshotStampOf } from "../move-aside.ts";
 
 /** 本地 trash 条目内部形状。 */
 export interface TrashItem {
@@ -87,9 +88,12 @@ export function createMockLocal(): MockLocal {
     async restore(trashKey: string) {
       const e = trash.get(trashKey);
       if (!e) return null as unknown as string;   // 同上：缺 key 回 null
-      items.set(e.name, e.bytes);
+      // 与真 local-cache 同策略（案卷 §8；沙箱必须与真机同严）：落点占用 → 改名恢复（快照时刻戳），绝不覆盖。
+      const inner = trashKey.replace(/^[a-z]+\//, "");
+      const target = await restoreTargetName(e.name, (n) => items.has(n), snapshotStampOf(inner), Date.now());
+      items.set(target, e.bytes);
       trash.delete(trashKey);
-      return e.name;
+      return target;
     },
     async purgeTrash(trashKey: string) {
       if (trashKey.startsWith(".backup-local/")) items.delete(trashKey);   // 备份腿（splitKey 在真实现走 backupP.del；mock 备份就住 items）

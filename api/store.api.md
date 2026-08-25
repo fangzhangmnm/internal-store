@@ -107,6 +107,7 @@ export interface CloudSync {
     restore(cloudItemId: string, name: string, opts?: {
         encrypted?: boolean;
         eTag?: string | null;
+        snapshotStamp?: string | null;
     }): Promise<unknown>;
     setDirty(name: string, dirty: boolean): void;
     setETag(name: string, etag: string | null): void;
