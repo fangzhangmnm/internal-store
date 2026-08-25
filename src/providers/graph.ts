@@ -384,7 +384,11 @@ export async function copyItemToFolder(itemId: string, targetFolderId: string, n
     throw new Error(`Graph copy ${itemId}: 202 without Location monitor`);
   }
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-  for (let attempt = 1; attempt <= 40; attempt++) {   // ~30s 上限；超时抛错（此时原位未动，调用方安全中止）
+  // 轮询预算 ~5min（250ms 起步、封顶 2s；慢网 RTT 自然拉长，无妨）——copy 是**服务端内部复制**，
+  //   字节不走用户带宽，轮询本身每次几百字节；预算随手放宽是免费的（completed 即退），只兜病态情形。
+  //   大文件时代（background upload 规划）服务端 copy 耗时随体积涨，30s 不够（2026-08-25 user review 放宽）。
+  //   超时仍安全：抛在 replace 之前，原位原版完好、dirty 保住可重试（弃单 copy 迟到完成 = .backup 无害赘份）。
+  for (let attempt = 1; attempt <= 170; attempt++) {
     let mr: Response;
     try { mr = await fetch(monitor); }
     catch (e) { throw new CloudNetworkError(`Graph copy monitor: network fetch failed (${String(e)})`, e); }
@@ -395,9 +399,9 @@ export async function copyItemToFolder(itemId: string, targetFolderId: string, n
       const ir = await graphFetch("GET", `/me/drive/items/${rid}`);
       return await ir.json() as GraphDriveItem;
     }
-    await sleep(Math.min(250 * attempt, 1000));
+    await sleep(Math.min(250 * attempt, 2000));
   }
-  throw new Error(`Graph copy ${itemId}: monitor timeout (~30s)`);
+  throw new Error(`Graph copy ${itemId}: monitor timeout (~5min)`);
 }
 
 export async function renameItem(itemId: string, newName: string, eTag: string | null = null): Promise<GraphDriveItem> {
