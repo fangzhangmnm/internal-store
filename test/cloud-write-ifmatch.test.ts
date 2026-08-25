@@ -50,19 +50,22 @@ test("rename 正常路径（base 是最新）仍然成功 + 采纳服务端新 e
   assert(cloud.getETag("g.ora") && cloud.getETag("g.ora") !== fresh, "新名锚在服务端返回的新 etag 上，不是旧的");
 });
 
-test("weakOverride 的 loser stash 带 If-Match（不把用户没见过的那版当 loser 搬走）", async () => {
-  // hook 在 move 真正执行前插一版 → 精确模拟「_find 之后、move 之前云端被别设备推了」。
+test("weakOverride 并发窗口守卫（O3 版）：没见过的新版绝不被覆盖/搬走", async () => {
+  // 2026-08-25 O3 copy-then-replace 后语义更新（原测试 hook 在 move 上；O3 无 move）：
+  //   stash 从 move 改为 copy——**什么都不搬走**，「把没见过的那版当 loser 搬走」在结构上不可表示；
+  //   防线移到 replace 的 If-Match：_find 之后云端被别设备推了 → CAS 412，新版原地完好。
+  //   hook 在 copy 真正执行前插一版 → 精确模拟「_find 之后、copy/replace 之前云端被推了」。
   let bumped = false;
   let cloud2: ReturnType<typeof createCloudSync>;
   const provider = createMockProvider({
     hook: async (op) => {
-      if (op === "move" && !bumped) { bumped = true; await cloud2.push("f.ora", enc("V2-CONCURRENT")); }
+      if (op === "copy" && !bumped) { bumped = true; await cloud2.push("f.ora", enc("V2-CONCURRENT")); }
     },
   });
   cloud2 = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });
   await cloud2.push("f.ora", enc("V1"));
-  assert(await is412(() => cloud2.weakOverride("f.ora", enc("MINE"))), "并发窗口内云端变了 → 412，不静默把新版当 loser");
-  eq(await (await cloud2.pull("f.ora"))!.blob.text(), "V2-CONCURRENT", "★ 那版还在原地，没被当 loser 搬进 .backup");
+  assert(await is412(() => cloud2.weakOverride("f.ora", enc("MINE"))), "并发窗口内云端变了 → replace If-Match 412");
+  eq(await (await cloud2.pull("f.ora"))!.blob.text(), "V2-CONCURRENT", "★ 那版还在原地（copy 不搬走任何东西，replace 被 412 挡下）");
 });
 
 test("purge 带 If-Match：陈旧 eTag → 412（硬删不可逆，绝不按 id 盲删）", async () => {

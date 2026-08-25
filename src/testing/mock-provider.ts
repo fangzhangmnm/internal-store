@@ -333,6 +333,28 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
       return toItem(n);
     },
 
+    // 服务端复制（O3 原语，2026-08-25）：源原位不动；目标同名 → 409（对齐 graph copy conflictBehavior:fail）。
+    async copy(id: string, targetFolderId: string, newName: string) {
+      await hook("copy", { id, targetFolderId, newName });
+      const fault = consumeFault("copy");
+      if (fault && fault.kind !== "lostResponse") throw faultError(fault);
+      const n = byId.get(id);
+      if (!n || n.isFolder) throw httpError(404, `item 不存在: ${id}`);
+      const folder = byId.get(targetFolderId);
+      if (!folder || !folder.isFolder) throw httpError(404, `目标 folder 不存在: ${targetFolderId}`);
+      if (newName.includes("/")) throw httpError(400, "newName 不能含 /");
+      const destPath = folder.path ? `${folder.path}/${newName}` : newName;
+      if (byPath.has(destPath)) throw httpError(409, `目标已存在: ${destPath}`);
+      const node: MockNode = {
+        id: nextId(), name: newName, path: destPath, isFolder: false,
+        eTag: newEtag(), content: n.content ? n.content.slice() : null, contentType: n.contentType,
+        lastModifiedDateTime: stamp(),
+      };
+      byPath.set(destPath, node); byId.set(node.id, node);
+      if (fault && fault.kind === "lostResponse") throw faultError(fault);
+      return toItem(node);
+    },
+
     async rename(id: string, newName: string, eTag: string | null = null) {
       await hook("rename", { id, newName });
       const fault = consumeFault("rename");

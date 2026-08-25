@@ -29,7 +29,8 @@ export function graphFromProvider(provider) {
     downloadItemRange: (id, offset, length) => provider.downloadRange(id, offset, length),
     uploadFileToApproot: (path, blob, ct, opts = {}) =>
       provider.upload(path, blob, { contentType: ct, ...opts }).then(toGraphItem),
-    deleteItem: (id) => provider.delete(id),
+    deleteItem: (id, eTag) => provider.delete(id, eTag),
+    copyItemToFolder: (id, folderId, newName) => provider.copy(id, folderId, newName).then(toGraphItem),
     ensureSubfolder: (name) => provider.ensureFolder(name),
     moveItemToFolder: (id, folderId, opts) => provider.move(id, folderId, opts).then(toGraphItem),
     renameItem: (id, newName, eTag) => provider.rename(id, newName, eTag).then(toGraphItem),

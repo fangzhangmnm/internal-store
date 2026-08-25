@@ -92,6 +92,9 @@ export interface CloudProvider {
   deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
   /** 移动到目标文件夹。 */
   move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+  /** 服务端复制一份到目标文件夹（源**原位不动**）。目标同名 → 409。O3 copy-then-replace（2026-08-25，
+   *  weakOverride 去 ghost 窗口）的原语：先 copy loser 进 .backup，再 If-Match CAS replace 原位。 */
+  copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
   /** 改名。 */
   rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
 }

@@ -311,20 +311,27 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
 
   // weak-override（ADR-0009 / share-file-model）：用本地覆盖云端，但**云端 loser 先 stash 进 .backup 不丢**。
   // 永不 lossy（Work 禁 hard-override / destructive pull；这是 never-lose 的覆盖）。返 { item, backedUp }。
+  // O3 copy-then-replace（2026-08-25 user 拍板，案卷 20260825-cloud-override-adopt-noop-case.md §4(a)）：
+  //   旧版 = move 进 .backup 再无 If-Match 上传——move 与 upload 之间断网 → 原 path ghost；path 空窗期第三
+  //   设备新建同名还会被 replace 无备份盲覆盖。新版 = 先服务端 **copy** loser 进 .backup（原位不动），再拿
+  //   copy 时捕获的 etag 做 **If-Match CAS replace**（「我覆盖的正是我刚备份的那一版」）。任何一步失败 →
+  //   原位原版完好，ghost 不可表示；窗口内云端又动了 → 412 抛、上层重新 surface（.backup 多出的那份 copy
+  //   留着——多备不删，§A 绝不删字节）。全库最后一个裸 replace 就此收编（全库 If-Match 家规 2026-08-25）。
   async function weakOverride(name: string, bytes: Bytes, opts: { encrypted?: boolean } = {}): Promise<WeakOverrideResult> {
     const path = (encFileName && opts.encrypted) ? encFileName(name) : fileName(name);
     const cur = await _find(name);
     let backedUp = null;
+    let item: CloudItem | null;
     if (cur.item) {
       const folderId = await provider.ensureFolder(backupFolder);
       const stamped = stampedName(name, cur.enc);   // ts-counter 防同名多次备份撞（旧版同 ms 会 fail 抛错）；loser 保留其扩展名
-      // If-Match（v435）：_find 与本次 move 之间别设备可能又推了一版。没有它就会把「用户从没见过的
-      //   那一版」当作 loser 搬进 .backup（不丢，但错位）。412 → 抛，让上层重新 surface。
-      await provider.move(cur.item.id, folderId, { newName: stamped, conflictBehavior: "fail", eTag: cur.item.eTag });
+      await provider.copy(cur.item.id, folderId, stamped);
       backedUp = `${backupFolder}/${stamped}`;
+      item = await provider.upload(path, bytes, { contentType, eTag: cur.item.eTag, conflictBehavior: "replace" });
+    } else {
+      // 无既有 → 创建门（不存在才准建；撞上窗口里第三设备的新建 → 409，绝不盲覆盖）。
+      item = await provider.upload(path, bytes, { contentType, conflictBehavior: "fail" });
     }
-    // 原 path 现已空 → force-push 本地（无 If-Match）。
-    let item: CloudItem | null = await provider.upload(path, bytes, { contentType, conflictBehavior: "replace" });
     if (!item || !item.eTag) { const f = await provider.getItemByPath(path).catch((e) => { reportStoreError(e, "log"); return null; }); if (f && f.eTag) item = f; }
     if (item && item.eTag) { setETag(name, item.eTag); setDirty(name, false); }
     return { item, backedUp };

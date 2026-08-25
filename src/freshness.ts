@@ -38,6 +38,11 @@ export interface RefreshOpts {
   localDirty?: () => boolean;
   /** N10：真要拉内容（动过+clean）才触发，app 给非阻塞 status。 */
   onReplaceStart?: () => void;
+  /** 逃生 probe（对齐 open 的 E8，user 即超时）：与快进下载 race，probe 先到 → 返 {status:"escaped"}，
+   *  本地/谱系分毫不动（换字节/markSynced 全在 safePull 尾段，逃生时还没发生）。语义（2026-08-25 拍板）：
+   *  逃生 = 用户 consent **显式分叉**（换世界线不等待），app 据 "escaped" 把当前画面另存新身份；
+   *  迟到完成的下载 = 原名缓存的静默刷新（无 adopt，画布不碰），无害且有益。 */
+  probe?: Promise<unknown>;
   /** busy 遮罩注入。 */
   busy?: Busy;
 }
@@ -114,7 +119,7 @@ export function createFreshness(cfg: FreshnessCfg) {
 
   // 事件驱动干净快进：dirty → no-op（绝不在事件里弹 sheet；后续 push 的 412 会 surface 真分叉）。
   async function refresh(name: string, opts: RefreshOpts = {}): Promise<FreshResult> {
-    const { isOnline = () => true, adopt, localDirty, onReplaceStart, busy = passBusy } = opts;
+    const { isOnline = () => true, adopt, localDirty, onReplaceStart, probe, busy = passBusy } = opts;
     if (!isOnline()) return { status: "offline" };
     if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡
     return busy("cloud.checking", async () => {
@@ -126,7 +131,15 @@ export function createFreshness(cfg: FreshnessCfg) {
       if (base != null && meta.etag === base) return { status: "in-sync" };
       if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡  // fetchMeta 期间用户动了笔 → 放弃
       if (onReplaceStart) onReplaceStart();
-      const r = await safeResolve.safePull(name, { adopt });
+      // 逃生 race（2026-08-25）：probe 先到 → "escaped"（分叉 consent）。safePull 继续在后台跑完 = 原名
+      //   缓存静默刷新（这里没传 adopt 时画布不碰；错误 funnel 到 log，不打扰已走人的用户）。
+      const pulling = safeResolve.safePull(name, { adopt });
+      if (probe) {
+        const winner = await Promise.race([pulling.then((r) => ({ r })), Promise.resolve(probe).then(() => null)]);
+        if (winner == null) { pulling.catch((e) => reportStoreError(e, "log")); return { status: "escaped" }; }
+        return winner.r.ok ? { status: "fast-forwarded" } : { status: "ff-failed", reason: winner.r.reason };
+      }
+      const r = await pulling;
       return r.ok ? { status: "fast-forwarded" } : { status: "ff-failed", reason: r.reason };
     });
   }

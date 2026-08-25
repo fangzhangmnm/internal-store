@@ -102,3 +102,39 @@ test("[cloud-sync] deleteEmptyFolder：不存在的夹 → status=already-gone�
   const { cloud } = rig();
   eq((await cloud.deleteEmptyFolder("Nope")).status, "already-gone", "本就没有 → 幂等成功");
 });
+
+// ── O3 copy-then-replace（2026-08-25 user 拍板，雷(a) 去 ghost 窗口）added by Claude Fable 5 ──
+test("weakOverride O3：copy 备份成功但上传失败 → 原位原版完好（ghost 不可表示）", async () => {
+  const { provider, cloud } = rig();
+  await cloud.push("f", enc("CLOUD"));
+  provider.injectFault({ op: "upload", status: 503 });        // copy 之后的 replace 上传挂掉
+  let err = null;
+  try { await cloud.weakOverride("f", enc("MINE")); } catch (e) { err = e; }
+  assert(!!err, "上传失败要抛（dirty 留给上层保）");
+  eq(await cloudStr(cloud, "f"), "CLOUD", "原位仍是原版（旧版 move-then-create 在这里已是 ghost）");
+});
+
+test("weakOverride O3：窗口内第三设备又推了一版 → If-Match 412，最新版不被覆盖", async () => {
+  const { provider, cloud } = rig();
+  await cloud.push("f", enc("CLOUD"));
+  // copy 完成后、replace 之前，第三设备推新版（包一层 copy 在窗口内插写）
+  const origCopy = provider.copy.bind(provider);
+  provider.copy = async (id: string, folderId: string, newName: string) => {
+    const r = await origCopy(id, folderId, newName);
+    provider._seed("f", "THIRD-DEVICE");
+    return r;
+  };
+  let err = null;
+  try { await cloud.weakOverride("f", enc("MINE")); } catch (e) { err = e; }
+  eq((err as { status?: number } | null)?.status, 412, "CAS 覆盖：云端动过 → 412 抛（上层重新 surface）");
+  eq(await cloudStr(cloud, "f"), "THIRD-DEVICE", "第三设备的新版毫发无损");
+});
+
+test("weakOverride O3：正常路径 → loser 进 .backup + 云端换成本地版 + 新 etag", async () => {
+  const { cloud } = rig();
+  await cloud.push("f", enc("CLOUD"));
+  const r = await cloud.weakOverride("f", enc("MINE"));
+  assert(!!r.backedUp && r.backedUp.startsWith(".backup/"), "loser 备份进 .backup");
+  eq(await cloudStr(cloud, "f"), "MINE", "云端已是本地版");
+  assert(!!(r.item && r.item.eTag), "拿到新 etag（CAS replace 成功）");
+});

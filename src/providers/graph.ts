@@ -214,6 +214,10 @@ interface UploadFileOpts {
   eTag?: string | null;
 }
 export async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
+  // 【运行时护栏，user 2026-08-25 拍板「全库以后只能用 If-Match」】盲覆盖在最深处不可表示：
+  //   replace 必须带 If-Match eTag（CAS 覆盖）；新建走 conflictBehavior:"fail"（不存在才准建，CAS 等价物）。
+  //   配套语法检测 = test/ifmatch-guard.test.ts（扫源码裸 replace）。深模块强制，UI/调用方守不守都拦得住。
+  if (conflictBehavior === "replace" && !eTag) throw new Error(`[graph] blind overwrite forbidden: conflictBehavior:"replace" requires If-Match eTag (${path})`);
   const headers: Record<string, string> = { "Content-Type": contentType };
   if (eTag) headers["If-Match"] = eTag;
   if (blob.size <= SIMPLE_UPLOAD_LIMIT) {
@@ -363,6 +367,39 @@ export async function moveItemToFolder(itemId: string, targetFolderId: string, {
 }
 
 // 改名 only（不移动）
+// 服务端复制（O3 copy-then-replace 原语，2026-08-25）：源原位不动，复制一份到目标文件夹。
+//   Graph copy 是**异步任务**：POST 返 202 + Location 监控 URL，轮询到 completed 再按 resourceId 取回 item。
+//   监控 URL 是预授权的（带 Authorization 反而可能 401）→ 裸 fetch，网络层 throw 同款翻 CloudNetworkError。
+//   conflictBehavior 显式钉 fail：目标同名 → 409（绝不静默覆盖 .backup 里的既有备份）。
+export async function copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<GraphDriveItem> {
+  const res = await graphFetch(
+    "POST",
+    `/me/drive/items/${itemId}/copy?@microsoft.graph.conflictBehavior=fail`,
+    { body: { parentReference: { id: targetFolderId }, name: newName } },
+  );
+  const monitor = res.headers.get("Location");
+  if (!monitor) {   // 罕见：个别实现同步完成直接回 item
+    const j = await res.json().catch(() => null) as GraphDriveItem | null;
+    if (j && j.id) return j;
+    throw new Error(`Graph copy ${itemId}: 202 without Location monitor`);
+  }
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  for (let attempt = 1; attempt <= 40; attempt++) {   // ~30s 上限；超时抛错（此时原位未动，调用方安全中止）
+    let mr: Response;
+    try { mr = await fetch(monitor); }
+    catch (e) { throw new CloudNetworkError(`Graph copy monitor: network fetch failed (${String(e)})`, e); }
+    const j = await mr.json().catch(() => null) as { status?: string; resourceId?: string; id?: string } | null;
+    if (j?.status === "failed") throw new Error(`Graph copy ${itemId}: server reported failed`);
+    const rid = j?.resourceId ?? (j?.status === "completed" ? j?.id : null);
+    if (rid) {
+      const ir = await graphFetch("GET", `/me/drive/items/${rid}`);
+      return await ir.json() as GraphDriveItem;
+    }
+    await sleep(Math.min(250 * attempt, 1000));
+  }
+  throw new Error(`Graph copy ${itemId}: monitor timeout (~30s)`);
+}
+
 export async function renameItem(itemId: string, newName: string, eTag: string | null = null): Promise<GraphDriveItem> {
   const headers: Record<string, string> = {};
   if (eTag) headers["If-Match"] = eTag;

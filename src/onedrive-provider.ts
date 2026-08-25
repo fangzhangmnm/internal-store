@@ -24,6 +24,8 @@ export interface GraphTransport {
   deleteItem(itemId: string, eTag?: string | null): Promise<void>;
   /** 移动到目标文件夹。 */
   moveItemToFolder(itemId: string, targetFolderId: string, opts?: { eTag?: string | null; newName?: string | null; conflictBehavior?: "replace" | "fail" | "rename" }): Promise<RawGraphItem>;
+  /** 服务端复制到目标文件夹（源原位不动；同名 409）。 */
+  copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<RawGraphItem>;
   /** 改名。 */
   renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
   /** 取 approot 文件夹 id。 */
@@ -87,11 +89,14 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider {
       const body = blob instanceof Blob ? blob : new Blob([blob], { type: contentType });
       return graph.uploadFileToApproot(path, body, contentType, { conflictBehavior, eTag }).then(toItem) as Promise<CloudItem>;
     },
-    delete: (id: string) => graph.deleteItem(id),   // 文件硬删（无条件）
+    // 文件硬删。⚠ 2026-08-25 修：旧版 `(id) => graph.deleteItem(id)` 把 eTag 吞了——purge 的 If-Match
+    //   （v435 立的硬删守卫）从没到过 Graph，mock 比真机严（mock 校验 If-Match、真机根本没收到）。透传。
+    delete: (id: string, eTag?: string) => graph.deleteItem(id, eTag),
     // 删空夹（唯一文件夹删除面）：护栏在 folder-delete 深模块，If-Match folder etag best-effort。
     deleteEmptyFolder: (path: string) => deleteEmptyFolderVia(getItemByPath, list, (id, etag) => graph.deleteItem(id, etag), path),
     ensureFolder: (path: string) => graph.ensureSubfolder(path),
     move: (id: string, folderId: string, opts: MoveOpts = {}) => graph.moveItemToFolder(id, folderId, opts).then(toItem) as Promise<CloudItem>,
+    copy: (id: string, folderId: string, newName: string) => graph.copyItemToFolder(id, folderId, newName).then(toItem) as Promise<CloudItem>,
     rename: (id: string, newName: string, eTag?: string | null) => graph.renameItem(id, newName, eTag).then(toItem) as Promise<CloudItem>,
     getApprootId: () => graph.getApprootId(),
   };

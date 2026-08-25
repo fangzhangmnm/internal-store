@@ -166,3 +166,36 @@ test("open 离线 → 秒开本地（不弹、不碰 fetchMeta）不回归", asy
   eq(r.reason, "offline", "离线直读本地");
   eq(await asStr(await local.get("f")), "MINE", "本地没动");
 });
+
+// ── refresh 逃生 probe（2026-08-25 拍板：逃生 = 显式分叉 consent）added by Claude Fable 5 ──
+test("refresh 逃生：probe 先到 → escaped；本地字节/谱系分毫不动；迟到的下载完成 = 无害缓存刷新", async () => {
+  const { cloud, local, head, refresh } = rig();
+  await cloud.push("f", enc("V1"));
+  await local.save("f", enc("V1"));
+  head.markSynced("f", cloud.getETag("f"));
+  const base0 = head.seenBase("f");
+  await cloud.push("f", enc("V2"));                       // 云端前进 → clean FF 条件成立
+  let started = false;
+  const r = await refresh("f", {
+    onReplaceStart: () => { started = true; },
+    probe: Promise.resolve(),                             // 用户立刻点了「先继续画」
+  });
+  eq(r.status, "escaped", "probe 先到 → escaped（app 据此分叉）");
+  assert(started, "onReplaceStart 已触发（遮罩已升起过）");
+  eq(await asStr(await local.get("f")), "V1", "逃生瞬间本地字节未动");
+  eq(head.seenBase("f"), base0, "谱系未推进（escaped ≠ 已见新版）");
+  // 迟到完成的下载：detached safePull 跑完 = 原名缓存静默刷新（本测试放行事件循环后校验，无 adopt 画布无从被碰）
+  await new Promise((res) => setTimeout(res, 20));
+  eq(await asStr(await local.get("f")), "V2", "迟到下载落地 = 缓存刷新（无害且有益）");
+});
+
+test("refresh 无 probe：行为不变（fast-forwarded）", async () => {
+  const { cloud, local, head, refresh } = rig();
+  await cloud.push("f", enc("V1"));
+  await local.save("f", enc("V1"));
+  head.markSynced("f", cloud.getETag("f"));
+  await cloud.push("f", enc("V2"));
+  const r = await refresh("f", {});
+  eq(r.status, "fast-forwarded");
+  eq(await asStr(await local.get("f")), "V2");
+});

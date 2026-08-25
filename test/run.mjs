@@ -21,6 +21,7 @@ import "./zip-peek.test.mjs";
 import "./push.test.ts";
 import "./safe-resolve.test.ts";
 import "./graph-network-error.test.ts";   // 2026-08-25 网络层翻译（CloudNetworkError）
+import "./ifmatch-guard.test.ts";   // 2026-08-25 全库 If-Match 语法护栏
 import "./delete.test.ts";
 import "./trash.test.ts";
 import "./trash-merge.test.ts";
