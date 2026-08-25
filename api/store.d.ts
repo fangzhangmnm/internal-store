@@ -78,6 +78,9 @@ export declare interface CloudProvider {
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     /** 移动到目标文件夹。 */
     move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+    /** 服务端复制一份到目标文件夹（源**原位不动**）。目标同名 → 409。O3 copy-then-replace（2026-08-25，
+     *  weakOverride 去 ghost 窗口）的原语：先 copy loser 进 .backup，再 If-Match CAS replace 原位。 */
+    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
     /** 改名。 */
     rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
 }
@@ -492,6 +495,8 @@ export declare interface GraphTransport {
         newName?: string | null;
         conflictBehavior?: "replace" | "fail" | "rename";
     }): Promise<RawGraphItem>;
+    /** 服务端复制到目标文件夹（源原位不动；同名 409）。 */
+    copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<RawGraphItem>;
     /** 改名。 */
     renameItem(itemId: string, newName: string, eTag?: string | null): Promise<RawGraphItem>;
     /** 取 approot 文件夹 id。 */
@@ -766,6 +771,11 @@ export declare interface RefreshOpts {
     localDirty?: () => boolean;
     /** N10：真要拉内容（动过+clean）才触发，app 给非阻塞 status。 */
     onReplaceStart?: () => void;
+    /** 逃生 probe（对齐 open 的 E8，user 即超时）：与快进下载 race，probe 先到 → 返 {status:"escaped"}，
+     *  本地/谱系分毫不动（换字节/markSynced 全在 safePull 尾段，逃生时还没发生）。语义（2026-08-25 拍板）：
+     *  逃生 = 用户 consent **显式分叉**（换世界线不等待），app 据 "escaped" 把当前画面另存新身份；
+     *  迟到完成的下载 = 原名缓存的静默刷新（无 adopt，画布不碰），无害且有益。 */
+    probe?: Promise<unknown>;
     /** busy 遮罩注入。 */
     busy?: Busy;
 }

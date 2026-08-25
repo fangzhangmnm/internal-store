@@ -51,6 +51,7 @@ export class CloudNetworkError extends Error {
 
 // @public
 export interface CloudProvider {
+    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
     delete(id: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     download(id: string): Promise<Blob>;
@@ -310,6 +311,7 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider;
 
 // @public
 export interface GraphTransport {
+    copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<RawGraphItem>;
     deleteItem(itemId: string, eTag?: string | null): Promise<void>;
     downloadItemBlob(itemId: string): Promise<Blob>;
     downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
@@ -500,6 +502,7 @@ export interface RefreshOpts {
     isOnline?: () => boolean;
     localDirty?: () => boolean;
     onReplaceStart?: () => void;
+    probe?: Promise<unknown>;
 }
 
 // @public

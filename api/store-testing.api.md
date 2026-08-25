@@ -23,6 +23,7 @@ export interface CloudItem {
 
 // @public
 export interface CloudProvider {
+    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
     delete(id: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     download(id: string): Promise<Blob>;
