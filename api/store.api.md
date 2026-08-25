@@ -42,6 +42,13 @@ export interface CloudItem {
     size: number;
 }
 
+// @public (undocumented)
+export class CloudNetworkError extends Error {
+    constructor(message: string, cause?: unknown);
+    // (undocumented)
+    readonly cause?: unknown;
+}
+
 // @public
 export interface CloudProvider {
     delete(id: string, eTag?: string): Promise<void>;
@@ -512,6 +519,7 @@ export interface RestoreOpts {
 export type SaveResult = {
     pushed: boolean;
     reason?: string;
+    resolution?: "keepMine" | "takeCloud";
 };
 
 // @public

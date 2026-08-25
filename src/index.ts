@@ -7,6 +7,7 @@
 //   要用的东西这里没导出 → 说明公开面缺了，补这里的 export（并想清楚该不该暴露），别绕过封口。
 /** 创建 store 的唯一入口（薄组合根：provider → 装配深模块 → 暴露 file / collection / files 面）。 */
 export { createStore, ReadOnlyFilesError } from "./create-store.ts";
+export { CloudNetworkError } from "./errors.ts";   // 网络层失败的类型化封装（app 按 name 换 i18n 人话文案；2026-08-25）
 /** 主门牌类型：配置（StoreConfig）、UI bundle（StoreUI）、文件对象（RawFile/ZipFile）、store 本体（Store）、at-rest 密文（EncryptedBlob）。 */
 export type { StoreConfig, StoreUI, RawFile, ZipFile, Store, EncryptedBlob, FileStream } from "./create-store.ts";
 /** 统一列举面（README §2）的类型：列举项（Item）、8-badge 同步状态（SyncState）、列举上下文（ListContext）。 */

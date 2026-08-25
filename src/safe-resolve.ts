@@ -38,9 +38,9 @@ export type ResolveStatus = "resolved" | "unresolved" | "cancelled";
 export interface ResolveConflictResult { status: ResolveStatus; resolution?: string; reason?: string; backupName?: string; backedUp?: string | null }
 
 export interface SafeResolve {
-  safePull(name: string, opts?: { adopt?: AdoptFn }): Promise<SafePullResult>;
+  safePull(name: string, opts?: { adopt?: AdoptFn; forceBackup?: boolean }): Promise<SafePullResult>;
   tryHeal(name: string, bytes: Bytes): Promise<boolean>;
-  weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null }>;
+  weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }>;
   resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn }): Promise<ResolveConflictResult>;
 }
 
@@ -56,7 +56,11 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
 
   // 安全拉取覆盖：先 backup（dirty 才备；失败即 abort，绝不 pull/覆盖）→ 拉 → 校验 → 覆盖 → 采纳后置 etag → adopt。
   // 持久态只在原子点改；强退任一 await 点可重入。
-  async function safePull(name: string, { adopt }: { adopt?: AdoptFn } = {}): Promise<SafePullResult> {
+  // forceBackup（2026-08-25 user 拍板，案卷 20260825-cloud-override-adopt-noop-case.md §5 前提）：
+  //   takeCloud 是「文件版本模型」的换世界线，不是 workspace 操作——被换掉的当前世界线**无条件**先进 .backup。
+  //   （clean-skip 的「本地可从云重取」论据在 takeCloud 场景恰恰失效过：本地随后覆写云端时，云端那版就不再兜底。）
+  //   freshness 的静默快进（clean fast-forward）不传它——ADR-0016 的不 spam .backup 决策不动。
+  async function safePull(name: string, { adopt, forceBackup = false }: { adopt?: AdoptFn; forceBackup?: boolean } = {}): Promise<SafePullResult> {
     onReplacing(true);
     try {
       let backupName: string | undefined;
@@ -64,7 +68,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
       //   ⚠ 该论据的前提是**谱系已知**（seenBase 非 null：本地 == 云端某已知版）。!base（从未 synced /
       //   durable 双轨丢失，如 localStorage 被清而 IDB 幸存——dirty 标志会同批丢）时本地字节出身不明，
       //   「clean」不可信 → 覆盖前必 move-aside（§A：every overwrite is move-aside）。场景罕见，不构成 spam。
-      if (head.isDirtyAnywhere(name) || localDirty() || head.seenBase(name) == null) {   // anywhere：任一 tab 有未推 → 覆盖前必 backup
+      if (forceBackup || head.isDirtyAnywhere(name) || localDirty() || head.seenBase(name) == null) {   // anywhere：任一 tab 有未推 → 覆盖前必 backup
         try { backupName = await local.backup(name); }
         catch (e) { reportStoreError(e, "warning"); return { ok: false, reason: "backup-failed", error: e }; }   // dirty 备份失败→中止 pull（不覆盖），degraded surface
       }
@@ -98,22 +102,28 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   }
 
   // keepMine：云端→.backup，再 force-push 本地（never-lose 覆盖）。本地胜、loser 进 .backup → 落地为 synced。
-  async function weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null }> {
+  async function weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }> {
     const r = await cloud.weakOverride(name, bytes, { encrypted: await looksEncrypted(bytes) });
-    head.markSynced(name, r.item?.eTag ?? null);
-    return { backedUp: r.backedUp };
+    // F0 红线同款 deferred guard（push.ts:73-77 的形状，2026-08-25 案卷 §4(b) 补）：provider 没回 item/eTag
+    //   = 落地未确认（响应丢失/分块吞 body）。旧版无条件 markSynced(name, null)——dirty 清、etag 清、badge
+    //   假 synced，且下次推 no-base fail 409。→ 不 markSynced（dirty/parent 原样保住），报 deferred；
+    //   下次 push If-Match 旧 base → 若上传其实落了则 412 → tryHeal 逐字节比对自愈（组合闭环）。
+    if (!(r.item && r.item.eTag)) return { backedUp: r.backedUp, deferred: true };
+    head.markSynced(name, r.item.eTag);
+    return { backedUp: r.backedUp, deferred: false };
   }
 
   // 3 选项派发（README.md §7）：takeCloud=safePull · keepMine=weakOverride · cancel=什么都不动（留 dirty）。
   async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn } = {}): Promise<ResolveConflictResult> {
     if (choice === "takeCloud") {
-      const r = await safePull(name, { adopt: ctx.adopt });
+      const r = await safePull(name, { adopt: ctx.adopt, forceBackup: true });   // 换世界线 → 当前世界线无条件进 .backup（user 2026-08-25 拍板）
       return r.ok
         ? { status: "resolved", resolution: "takeCloud", backupName: r.backupName }
         : { status: "unresolved", reason: r.reason, backupName: r.backupName };
     }
     if (choice === "keepMine" && ctx.bytes != null) {
       const r = await weakOverride(name, ctx.bytes);
+      if (r.deferred) return { status: "unresolved", reason: "deferred", backedUp: r.backedUp };   // 落地未确认 ≠ 已化解：dirty 保住，下次推自愈（tryHeal）
       return { status: "resolved", resolution: "keepMine", backedUp: r.backedUp };
     }
     return { status: "cancelled" };

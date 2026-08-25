@@ -157,8 +157,11 @@ export type TryMoveResult =
 
 /** save 的结果：本地一定落了（没落会抛），云端**不一定**上去了。pushed:true = 云端已确认落地（拿到新 etag）；
  *  pushed:false = 只落了本地，reason：not-attempted(tryPush:false) / offline-or-error / deferred(落地未确认)
- *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。 */
-export type SaveResult = { pushed: boolean; reason?: string };
+ *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。
+ *  resolution（save 途中弹了冲突面且用户做了选择时才有）：**"takeCloud" = 本地 IDB 已被云端版本覆盖**——
+ *  打开中的文档此刻是陈旧世界线，调用方必须整体重载（复用自己的 open→adopt 管线），否则下次保存会把
+ *  用户选择保留的云端版本静默覆写回去（2026-08-25 案卷 §1 的事故根因）。"keepMine" = 本地已强推为云端新版，无需动作。 */
+export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepMine" | "takeCloud" };
 
 /** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
 export interface FileStream {
@@ -726,17 +729,21 @@ export function createStore(config: StoreConfig) {
         if (opts?.tryPush === false) return { pushed: false, reason: "not-attempted" };   // 只落本地（autosave/consent-safe，ADR-0016/0018：opaque Work 的 push 必 consent-gated）
         // surfaceCollision：**编辑既有文件**时，谱系断裂撞名走冲突面而非抛 collision（push.ts 的长注释解释了为什么两者相反）。
         //   mode:"new" 的首存不给 —— 那里撞名是「别的设备建了同名不同物」，抛错两份都留是 §A 身份行的保证。
-        let pushed = false, reason: string | undefined;
+        let pushed = false, reason: string | undefined, resolution: SaveResult["resolution"];
         try {
           const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new" });
           // 只有拿到新 etag 的落地才算推上去了。deferred(落地未确认)/unresolved/cancelled 一律不算——
           //   把它们当成功正是 F0 红线要拦的那类「落地未确认当落地成功」。
           pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
           if (!pushed) reason = r.status;
+          // resolution 透传（2026-08-25 案卷 §1 修）：takeCloud 时本地 IDB 已换成云端版本——**这不是 push
+          //   成功的一种，是世界线切换**。调用方（editor-session）必须据此整体重载打开中的文档；吞掉这个
+          //   事实 = 恢复「画布陈旧 + UI 报 synced → 下次保存静默覆写云端」的原始事故。
+          if (r.status === "resolved" && (r.resolution === "takeCloud" || r.resolution === "keepMine")) resolution = r.resolution;
         } catch (e) { ui.reportError(e); reason = "error"; }
         // ADR-0018：离线「新上传」补推——push 没成(仍 dirty) ∧ 从没 synced(seenBase null) → 入队，回线 drainUploadQueue 补推。
         if (head.isDirtyThisTab(name) && head.seenBase(name) == null) uploadReplay.enqueue(name);   // per-tab：问的是「**我这次** push 没落地吗」（episode 账）
-        return { pushed, reason };
+        return { pushed, reason, resolution };
       },
       async open() {
         await migrationReady;

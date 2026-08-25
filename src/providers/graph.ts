@@ -18,6 +18,8 @@
 //   graph 层不绑 MSAL：页面 = createOneDriveProvider 自动注入 auth.getToken；SW = 注入凭据桥读端
 //   （sw/bridge createBridgeTokenSource）。SW 网关此前手搓的一份 Graph 实现随之退役（双实现 drift
 //   的现世报见下方 getDownloadUrl 的 $select 雷注）。
+import { CloudNetworkError } from "../errors.ts";
+
 let _tokenSource: (() => Promise<string>) | null = null;
 export function configureGraphTokenSource(fn: () => Promise<string>): void { _tokenSource = fn; }
 async function getToken(): Promise<string> {
@@ -90,7 +92,12 @@ async function graphFetch(method: string, pathOrUrl: string, { headers = {}, bod
       if (!init.headers["Content-Type"]) init.headers["Content-Type"] = "application/json";
     }
   }
-  const response = await fetch(url, init);
+  // 网络层 throw（断网/DNS/iOS 网络切换，Safari 报裸 `TypeError: Load failed`）→ 翻成类型化
+  //   CloudNetworkError（status 恒 undefined = 仍可重试）。只在 fetch 自身 throw 处包装——这里的
+  //   TypeError 必是网络层；上层泛判 instanceof TypeError 会把自家 bug 误装成「网络问题」，禁止。
+  let response: Response;
+  try { response = await fetch(url, init); }
+  catch (e) { throw new CloudNetworkError(`Graph ${method} ${pathOrUrl}: network fetch failed (${String(e)})`, e); }
   if (!response.ok) {
     let detail = "";
     try { detail = await response.text(); } catch (_) {}
@@ -238,14 +245,19 @@ export async function uploadFileToApproot(path: string, blob: Blob, contentType 
   while (offset < blob.size) {
     const end = Math.min(offset + CHUNK, blob.size) - 1;
     const chunk = blob.slice(offset, end + 1);
-    const r = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Length": String(chunk.size),
-        "Content-Range": `bytes ${offset}-${end}/${blob.size}`,
-      },
-      body: chunk,
-    });
+    let r: Response;
+    try {
+      r = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Length": String(chunk.size),
+          "Content-Range": `bytes ${offset}-${end}/${blob.size}`,
+        },
+        body: chunk,
+      });
+    } catch (e) {   // 分块 PUT 打的是 uploadUrl（不走 graphFetch）→ 同款网络层翻译（保存路径最常断在这）
+      throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${blob.size}): network fetch failed (${String(e)})`, e);
+    }
     if (!r.ok && r.status !== 202) {
       const err: GraphError = new Error(`chunked upload failed ${r.status}`);
       err.status = r.status;

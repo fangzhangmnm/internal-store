@@ -51,6 +51,11 @@ export declare interface CloudItem {
     "@microsoft.graph.downloadUrl"?: string;
 }
 
+export declare class CloudNetworkError extends Error {
+    readonly cause?: unknown;
+    constructor(message: string, cause?: unknown);
+}
+
 /** 低层云端传输契约。生产用 OneDriveProvider（包 Graph），测试用 MockProvider。 */
 export declare interface CloudProvider {
     /** 列举文件夹的子项。 */
@@ -786,10 +791,14 @@ export declare interface RestoreOpts {
 
 /** save 的结果：本地一定落了（没落会抛），云端**不一定**上去了。pushed:true = 云端已确认落地（拿到新 etag）；
  *  pushed:false = 只落了本地，reason：not-attempted(tryPush:false) / offline-or-error / deferred(落地未确认)
- *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。 */
+ *  / unresolved|cancelled(冲突面用户没解决) —— 文件仍 dirty，等下次推。
+ *  resolution（save 途中弹了冲突面且用户做了选择时才有）：**"takeCloud" = 本地 IDB 已被云端版本覆盖**——
+ *  打开中的文档此刻是陈旧世界线，调用方必须整体重载（复用自己的 open→adopt 管线），否则下次保存会把
+ *  用户选择保留的云端版本静默覆写回去（2026-08-25 案卷 §1 的事故根因）。"keepMine" = 本地已强推为云端新版，无需动作。 */
 export declare type SaveResult = {
     pushed: boolean;
     reason?: string;
+    resolution?: "keepMine" | "takeCloud";
 };
 
 /** staging 覆盖快照（A5 透明面，2026-08-18 user 批「关键是透明清晰」）——只读 staging 账本，

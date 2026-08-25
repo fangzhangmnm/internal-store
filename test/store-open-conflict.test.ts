@@ -131,3 +131,30 @@ test("[open-conflict] in-sync 不弹不拉（无谓冲突不回归）", async ()
   eq(conflicts.length, 0, "云端没动 → 不弹");
   eq(await asStr(blob), "V1", "读本地");
 });
+
+// ── 保存路径的化解结果透传（2026-08-25 案卷 20260825-cloud-override-adopt-noop-case.md §1）──
+//   事故根因：save 途中 takeCloud 化解后，resolution 被吞成 pushed=true → 调用方不知道 IDB 已换成
+//   云端版本 → 画布陈旧 + UI 报 synced → 下次保存把用户选择保留的云端版本静默覆写回去。
+//   added by Claude Fable 5, 2026-08-25.
+test("[save-resolution] 保存 412 → takeCloud：save 返回 resolution='takeCloud' + 本地=云端版 + 备份必在", async () => {
+  const { provider, local, store } = rig(() => "takeCloud");
+  const f = store.file("wl.ora", { isZip: false, mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  provider._seed("wl.ora", "CLOUD-NEW");               // 外部更新云端
+  const r = await f.save(enc("MINE"), { tryPush: true });   // 保存 → 412 → sheet → takeCloud
+  eq(r.pushed, true, "takeCloud 化解后两端一致 → pushed=true（无待推）");
+  eq(r.resolution, "takeCloud", "resolution 必须透传（修前被吞 = 事故根因）");
+  eq(await asStr(await local.get("wl.ora")), "CLOUD-NEW", "本地 IDB 已是云端版（≠内存画布，调用方须重载）");
+  const backups = local.listBackup ? await local.listBackup() : [];
+  assert(backups.length >= 1, "换世界线 → 被换掉的本地版本必进 .backup");
+});
+
+test("[save-resolution] 保存 412 → keepMine：resolution='keepMine'（本地胜，无需重载）", async () => {
+  const { provider, store } = rig(() => "keepMine");
+  const f = store.file("km.ora", { isZip: false, mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  provider._seed("km.ora", "CLOUD-NEW");
+  const r = await f.save(enc("MINE"), { tryPush: true });
+  eq(r.pushed, true, "keepMine 强推落地 → pushed=true");
+  eq(r.resolution, "keepMine", "resolution 透传（调用方判定无需重载）");
+});

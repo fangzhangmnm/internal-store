@@ -20,6 +20,7 @@ import "./zip-peek.test.mjs";
 // 红线对抗 battery（If-Match/parentBase/conflict→backup/move-aside/…）
 import "./push.test.ts";
 import "./safe-resolve.test.ts";
+import "./graph-network-error.test.ts";   // 2026-08-25 网络层翻译（CloudNetworkError）
 import "./delete.test.ts";
 import "./trash.test.ts";
 import "./trash-merge.test.ts";
