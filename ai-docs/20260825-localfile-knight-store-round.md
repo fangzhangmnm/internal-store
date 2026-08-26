@@ -62,11 +62,11 @@
 
 ## 6. MASTER / share-file-model 宪法修订案（草案，⚠ 逐条待 user 过目后才动家族 doc）
 
-1. **IDB 永不为家**（§A 新一行）：IDB 三种合法角色 = 图库缓存（clean 可弃）/ crash-shadow（best-effort）/ device-local 登记（registry/句柄）。「dirty 永不被驱逐」限定为**我方逻辑**承诺；浏览器整源驱逐不在控制内（A1/A6）——契约 = dirty 窗口最小化（退出自动推）+ attach gallery 时 persist() + 按最坏假设设计。
+1. **IDB 里永远不放任何东西的正本**（§A 新一行）。它只干三件事：图库的本地缓存（丢了从源重拿）、崩溃备份（尽力而为）、这台设备自己的记事本（链接过哪些图库、句柄）。「dirty 永不被驱逐」这条红线管的是**我们自己的代码**——绝不主动清没推完的画；但**浏览器**有权存储紧张时把整个库端掉，这拦不住（A1/A6）。真正的保命三件套：让「没推上去」的时间越短越好（退出自动推）、挂上图库就向浏览器申请「别清我」（persist()）、写代码永远假设 IDB 明天就没了。
 2. **share-file-model Home 表修订**：「accountless 文件家住 IDB、never evict」一行 superseded——accountless 的家 = 用户文件系统（文件 / folder gallery）；ScratchPad 孤儿 workbench 行保留（其角色即 crash-shadow）。
 3. **folder provider 红线映射**（§A 新节）：etag→(mtime,size)+懒仲裁 hash（hash 永不升格身份）；If-Match→读-比-写（TOCTOU 毫秒窗文档化，唯一并发写手=云盘客户端）；删除=.trash→源内子文件夹（资源管理器可见）；**synced-folder 跨机仲裁委托云盘客户端（冲突副本档位，低于 Graph If-Match）——档位差异必须文档化**。
 4. **一源一历史 + 拷贝即分叉**（文件级与 gallery 级统一）：禁止任何源内身份标记（0607 判决延伸到 gallery 尺度）；registry（per-gallery、device-local、永不同步）≠ 0607 否决的 registry（per-file、跨设备同步）——ADR 记区分。
-5. **provider item `ref` 语义**：opaque reference 非身份，同 session 无外部改动有效，改名/移动可换；身份=path。改名裂卡 = wart E 同族接受。
+5. **provider 的 `ref` 就是张行李牌**（原 `id` 字段更名）：拿到后这一趟能用（下载/删除/移动都凭它），但它**不代表这个文件是谁**——文件是谁永远看路径。文件被改名/移动后旧牌可能作废，作废就按路径重查一张。OneDrive 的牌恰好很耐用（改名不作废），那是白送的，代码不许依赖。副作用照旧：在外面改文件名，图库里裂成「旧卡消失+新卡出现」——path 身份一直有的已知小疣（wart E），数据不丢，接受不修。
 6. **多实例**：`${appId}.${databaseId}` 每源一实例一库；锁/键一律带源命名空间。
 7. 指针行：无地环境轴、一画一家、两模式详 WeebPaint `ai-docs/20260825-localfile-knight-grill-verdicts.md`（app 级宪法，家族 doc 只挂指针不复制）。
 
