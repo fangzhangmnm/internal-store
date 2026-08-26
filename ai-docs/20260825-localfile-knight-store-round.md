@@ -53,7 +53,8 @@
 - **方案 B（session 句柄表）破坏面**：SW 跨 JS 上下文拿不到页面的句柄表（整条 SW 链只能退化成按名兜底）；**失败模式更危险**——旧 key 在新 session 可能被复用 → 解析到**别的文件**而不是干净失败；另需句柄表 GC（watchFolder 每刷新全量发 item，表无限涨）。
 - 共同隐含契约（folder provider 必须满足）：同 session 无外部改名时同文件 id 恒定（contract test 钉着）；文件夹 id 与文件 id 同命名空间（ensureFolder/getApprootId 返回值要能当 move/copy 的目标参数）。
 
-**选型建议（AI 推荐，⚠ 待 user 拍板）：方案 A，path-as-id**——「改名即换 id」文档化；与 store 宪法（身份=path）同构，B 全弃。配套三件：SW 网关失效重解析、404 错误族收敛、契约文档 id 语义节。
+**选型（user 2026-08-25 拍板）：方案 A，path-as-id**——「改名即换 id」文档化；与 store 宪法（身份=path）同构，B 弃。配套三件：SW 网关失效重解析、404 错误族收敛、契约文档语义节。
+**改名（user 同点拍板）：`id` 字段更名为 `ref`**——名字必须说明行李牌性（opaque reference：同 session 无外部改动时有效；**非身份**；改名/移动后可换；身份=path）。CloudItem.ref + provider 全方法参数同改，OneDrive provider 的 ref 恰好稳定=Graph id（那是地板之上的赠品，消费方不得依赖）。随 0.4.0 exports 批次一起过目。本地磁盘改名裂卡=既有 wart E 同族（低概率、分叉自愈），文档化不修。
 
 ## 5. 后续
 
