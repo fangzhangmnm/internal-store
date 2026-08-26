@@ -219,7 +219,7 @@ test("[narrow-waist] cloud-sync backupFolder 默认 .backup（weakOverride 把�
     const { provider, store } = mkStore(dumpKv());
     await store.file("R.ora", { isZip: true, mode: "new" }).save(_enc("V1"), { tryPush: true });   // local+cloud+synced
     assert(await provider.getItemByPath("R.ora"), "云端有");
-    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.id);               // 模拟云端 gone
+    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.ref);               // 模拟云端 gone
     assert(!(await provider.getItemByPath("R.ora")), "云端没了");
     const r = await store.file("R.ora", { isZip: true, mode: "existing" }).reupload();
     assert(r.status !== "no-local", `重传返回 ${r.status}`);
@@ -228,7 +228,7 @@ test("[narrow-waist] cloud-sync backupFolder 默认 .backup（weakOverride 把�
   test("[reupload] 乌龙撞名（空 path 其实云端已有异内容）→ 抛（app surface conflict）", async () => {
     const { provider, store } = mkStore(dumpKv());
     await store.file("R.ora", { isZip: true, mode: "new" }).save(_enc("V1"), { tryPush: true });
-    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.id);               // 本地以为云端 gone
+    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.ref);               // 本地以为云端 gone
     provider._seed("R.ora", "OTHER-DEVICE-DATA");                                                   // 但别设备已在同名放了异内容
     let threw = false;
     try { await store.file("R.ora", { isZip: true, mode: "existing" }).reupload(); } catch { threw = true; }

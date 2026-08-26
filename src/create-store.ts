@@ -148,6 +148,11 @@ export class ReadOnlyFilesError extends Error {
   constructor(op: string) { super(`只读镜像：files 面不可写（${op}）`); this.name = "ReadOnlyFilesError"; }
 }
 
+/** store.dispose() 之后再调任何面 → 抛此错（app surface；这不是失败，是契约——切库/登出后旧句柄必须响亮死，绝不静默半工作）。 */
+export class StoreDisposedError extends Error {
+  constructor(op?: string) { super(`store 已 dispose${op ? `（${op}）` : ""}，拒绝后续调用`); this.name = "StoreDisposedError"; }
+}
+
 /** tryMove 结果式返回（不抛，UI 渲染 where 标签）。ok:true 时**仍可能有话要说**（别只看 ok 就报「已重命名（含云端）」）：
  *  oldKept=谱系不明降级 save-as、云端旧名原地留着；oldUnknown=云端旧名状态取不到（「取不到」≠「没有」）；
  *  oldCloudOrphan=旧名进 .trash 失败成云端孤儿；cloudDeferred=云端推失败、新名只在本地待推。 */
@@ -277,6 +282,18 @@ export function createStore(config: StoreConfig) {
   const { provider, ui, appId, databaseId = "defaultStore", kv: rawKv = localStorageKv(), validateAdopt, autoCacheOpenedFile = true } = config;
   // A4 只读镜像：files 写路径统一门（读/离线副本面不走这道门）。
   const roGuard = (op: string): void => { if (config.readOnlyFiles) throw new ReadOnlyFilesError(op); };
+  // dispose 门（0.4.0，2026-08-25 拍板 §1.2）：dispose 后一切面**响亮拒**（绝不静默半工作）。
+  //   rejectAfterDispose 把对象上每个方法包一层调用时检查 → **dispose 前已握着的** file/collection
+  //   对象照样被拒（检查在调用时刻读 _disposed，不在创建时刻）。
+  let _disposed = false;
+  function rejectAfterDispose<T extends object>(obj: T): T {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj))
+      out[k] = typeof v === "function"
+        ? (...a: unknown[]): unknown => { if (_disposed) throw new StoreDisposedError(k); return (v as (...a: unknown[]) => unknown)(...a); }
+        : v;
+    return out as T;
+  }
   if (!appId) throw new Error("createStore: appId 必填——同 origin 兄弟 PWA 隔离的红线（每个 app 建自己的 IDB 库）");
   // 深模块统一错误上报接上 ui.reportError（深模块 import reportStoreError 直接调，不必线穿 ui）。store 侧不 log。
   setStoreErrorReporter((err, level) => ui.reportError(err, level));
@@ -327,8 +344,8 @@ export function createStore(config: StoreConfig) {
   const sessions = createDownloadSessions({
     staging: stagingStore,
     fetchMeta: async (name) => { const m = await cloud.fetchMeta(name); return m ? { etag: m.etag, size: m.size, item: m.item } : null; },
-    // 分片直连 provider.downloadRange（item.id 已在开会话时解析——不每分片重走 metadata 往返）。
-    range: async (item, offset, length) => toU8Raw(await provider.downloadRange((item as { id: string }).id, offset, length)),
+    // 分片直连 provider.downloadRange（item.ref 已在开会话时解析——不每分片重走 metadata 往返）。
+    range: async (item, offset, length) => toU8Raw(await provider.downloadRange((item as { ref: string }).ref, offset, length)),
     // promote 落地：对齐 identity.acquire 语义（serialize 锁 + markSynced）；已有副本/dirty 绝不覆盖（§A）。
     adoptLocal: (name, blob, etag) => sub.serialize(name, async () => {
       if (await local.exists(name)) return false;     // 用户其间正常 open 过 → 已有副本，收摊不覆盖
@@ -425,7 +442,9 @@ export function createStore(config: StoreConfig) {
   }
   function writeDirIndexCache(folder: string, live: CloudFolderPrefetch): void {
     if (!local.putDirIndexCache || !live.complete) return;
-    const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), id: c.id }));   // id：将来 SW 网关按名解析 item 免 Graph 往返
+    // 持久键名**保持 `id`**（schema v1 不动，非持久化结构变更）——值 = CloudItem.ref（SW 网关按名解析免 Graph
+    //   往返；ref 陈了网关有失效重解析兜底，gateway.ts）。字段更名 ref 只在内存/exports 层（2026-08-25 拍板）。
+    const files = live.files.filter((c) => !isHidden(c.name)).map((c) => ({ name: c.name, eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), id: c.ref }));
     const folders = live.folders.filter((f) => !isHidden(f));
     // fire-and-forget：快照写失败只 log，绝不影响帧交付。
     void local.putDirIndexCache(folder, JSON.stringify({ v: SNAP_V, folder, savedAt: Date.now(), files, folders })).catch((e) => ui.reportError(e, "log"));
@@ -553,6 +572,12 @@ export function createStore(config: StoreConfig) {
     }
     return mergeTrash(localItems, cloudItems, live);
   }
+
+  // dirty 名单（0.4.0 dirty facet 的枚举腿）：durable dirty 轨 = local-head 的相对键 `files.dirty:<name>`（值 "1"）。
+  //   durable 是 dirty=true 的**完备**记录（recordEdit/onPushed(dirtyAfter) 都写穿 kv）→ 扫 kv 即全账；
+  //   注入的 kv 无 keys()（老 mock）→ 空名单（facet 静默降级，与 dir-index-cache 可选面同姿态）。
+  const DIRTY_PREFIX = "files.dirty:";
+  const dirtyNames = (): string[] => kv.keys().filter((k) => k.startsWith(DIRTY_PREFIX) && kv.get(k) === "1").map((k) => k.slice(DIRTY_PREFIX.length));
 
   // ── 单飞守卫（port 自前身引擎 store.ts，2026-06-21 起红线）：用户态写流同一时刻只一个，
   //   并发的第二个**直接拒**（throw STORE_BUSY），调用方 catch→报状态。与 ui.busy 正交、更硬
@@ -862,9 +887,10 @@ export function createStore(config: StoreConfig) {
   function file(name: string, opts: { isZip: false; mode: "new" | "existing" }): RawFile;
   function file(name: string, opts: { isZip: boolean; mode: "new" | "existing" }): RawFile | ZipFile;
   function file(name: string, opts: { isZip: boolean; mode: "new" | "existing" }): RawFile | ZipFile {
+    if (_disposed) throw new StoreDisposedError("file");
     assertValidFileName(name, appId);
     const raw = makeRaw(name, opts.mode);
-    if (!opts.isZip) return raw;
+    if (!opts.isZip) return rejectAfterDispose(raw);
     // getPeek：库内部解 zip 的 central directory，**按文件名**抓 entry 字节（格式盲、内容盲）。
     //   加密容器：外层明文 zip 带名为 CONTAINER_PEEK_ENTRIES 的旁路 entry（"peek"）——按名命中即
     //     返其**密文**字节(ENC_PEEK_MIME，不解密，供 app 缓存层原样存密文=明文不落 IDB)。明文 ora 无此名 entry 不误命中。
@@ -893,7 +919,7 @@ export function createStore(config: StoreConfig) {
       if (!(await looksEncryptedContainer(asBlob))) return null;   // 明文件 → null（brand 的运行时真相由这一行保证）
       return asBlob as EncryptedBlob;
     };
-    return Object.assign(raw, { getPeek, decryptPeek: decryptPeekFn, getEncryptedBlob }) as ZipFile;
+    return rejectAfterDispose(Object.assign(raw, { getPeek, decryptPeek: decryptPeekFn, getEncryptedBlob }) as ZipFile);
   }
 
   // ── collection / settings ──
@@ -928,10 +954,11 @@ export function createStore(config: StoreConfig) {
    *  opts.getInitData：仅当这份 collection 的 json 不存在（新库）时调，填初始值（uat=1；store 内容无关，app 域构造 [{id, value}]）。
    *  **单例**：app schema 的全局单例命名空间——同名第二次返**同一对象**，opts 以首次为准（后续调忽略 opts 差异）。 */
   function collection(name: string, opts: { manual?: boolean; local?: boolean; getInitData?: CollectionConfig["getInitData"] } = {}): Collection {
+    if (_disposed) throw new StoreDisposedError("collection");
     assertValidCollectionName(name);
     const cached = _collections.get(name);
     if (cached) return cached;
-    const coll = createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, cloudless: opts.local, getInitData: opts.getInitData });
+    const coll = rejectAfterDispose(createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, cloudless: opts.local, getInitData: opts.getInitData }));
     if (!opts.local) registerScaffold(name);   // synced：store 自动在云端 idempotent 建出 .${appId}/<name>.json；local-only 不上云、不 scaffold
     _collections.set(name, coll);
     return coll;
@@ -947,9 +974,37 @@ export function createStore(config: StoreConfig) {
     //   内化检测，不靠「先 list 目标夹」；全库 listAll 仅库内 reconcile 用）。──
     /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
      *  **唯一列举面 = files.watchFolder（订阅当前夹）**：立即本地帧、云端到了同一 cb 再闪。 */
-    files: {
+    files: rejectAfterDispose({
       /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
       nameOccupied: (name: string): Promise<boolean> => nameOccupied(name).then((o) => o != null),
+      // ── dirty facet（0.4.0，2026-08-25 拍板 §1.3：聚合门面，别散一地）。绿灯门「先推完」按钮的读数与执行体。
+      //   底层「不开文档推 dirty 项」路径此前**不存在**（uploadReplay 只管 never-synced float；已同步的
+      //   dirty 只有下次 save 才补推）——按拍板「缺则此门面即其新家」，建在 pushLocalBytes（vetted push）之上。
+      dirty: rejectAfterDispose({
+        /** 有未推字节的文件**数**。⚠ 只返标量、永不返名字（与 usage 红线同口径——不是列举面，列举唯一面 =
+         *  watchFolder）；bool 用 `count() > 0` 白送。口径 = durable dirty 轨（任何 tab 的未推都算）。 */
+        count: async (): Promise<number> => dirtyNames().length,
+        /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
+         *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/加密锁定/落地未确认都算失败留 dirty，
+         *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
+         *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
+        pushAll: async (): Promise<{ pushed: number; failed: string[] }> => {
+          roGuard("dirty.pushAll");
+          await migrationReady;
+          let pushed = 0; const failed: string[] = [];
+          for (const name of dirtyNames()) {
+            const st = await sub.serialize(name, async (): Promise<"pushed" | "clean" | "failed"> => {
+              if (!head.isDirtyAnywhere(name)) return "clean";          // 其间已被推干净/删除 → 不重推不计数
+              try {
+                const r = await pushLocalBytes(name);                   // vetted push（seal + If-Match + F0 deferred 不算成功）
+                return (r.status === "pushed" || r.status === "healed") ? "pushed" : "failed";
+              } catch (e) { ui.reportError(e, "warning"); return "failed"; }   // 冲突/撞名/网络 → 留 dirty 报名字
+            });
+            if (st === "pushed") pushed++; else if (st === "failed") failed.push(name);
+          }
+          return { pushed, failed };
+        },
+      }),
       /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
       watchFolder,
       //   一次本地 IDB cursor（无网络），但仍是全表走一遍 → app 只在图库打开/刷新时调，别挂每帧。
@@ -998,12 +1053,12 @@ export function createStore(config: StoreConfig) {
       /** **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），
        *  绝不自动/轮询——全树 listAll 是重活。 */
       reconcileAll: (opts?: { activeFileName?: string }) => reconcileMod.reconcile(opts),
-    },
+    }),
     //   设计约束：① 不做重复的计算 ② 不做不必要的计算。
     /** **裸字节**级的加密面（文件还没进 store、无 name 可查时用）。有 name 的场景一律走 file.*
      *  （isEncrypted / encrypt / decrypt / verifyPassword / getPeek / decryptPeek / getEncryptedBlob）——
      *  那些能用便宜的 peek 路径，别走这里。 */
-    encryption: {
+    encryption: rejectAfterDispose({
       /** 是不是加密容器。**只嗅魔数/尾窗**，不派生密钥、不解密（便宜，可用于分流）。 */
       isEncryptedBlob: (blob: Blob | Uint8Array): Promise<boolean> => looksEncryptedContainer(blob),
 
@@ -1023,6 +1078,21 @@ export function createStore(config: StoreConfig) {
       /** 这块 blob 是不是**密文 peek**（getPeek 对加密件返回的那种）。纯类型判定，零计算。
        *  取代把 ENC_PEEK_MIME 这个魔法常量导出给 app —— app 要问的是语义，不是常量值。 */
       isEncryptedPeekBlob: (blob: Blob | null | undefined): boolean => !!blob && blob.type === ENC_PEEK_MIME,
+    }),
+    // ── dispose（0.4.0，2026-08-25 拍板 §1.2）：停 watcher → drain in-flight push → 断 IDB 连接 → 拒后续。──
+    /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
+     *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；
+     *  {drain:false} = 快速拆除，in-flight 操作会因连接关闭响亮失败、dirty 账还在下次补推）→ 关 IDB 连接。
+     *  幂等。之后任何面（含 dispose 前已握着的 file/collection 对象）→ 抛 StoreDisposedError。
+     *  ⚠ 不含 provider/auth 的登出（那是 app 侧 auth 的事）；错误上报单例 reporter 不重置（多实例共汇一处）。 */
+    async dispose(opts?: { drain?: boolean }): Promise<void> {
+      if (_disposed) return;
+      _disposed = true;                              // 先拒新调用（drain 才可能收敛）
+      folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效
+      if (opts?.drain !== false) await sub.drain();  // 等所有 serialize 链尾（push/local 写都在链上）
+      local.close?.();                               // 断 IDB（三个 cache 可能同/异实例，close 幂等）
+      if (collectionLocal !== local) collectionLocal.close?.();
+      (stagingStore as { close?: () => void }).close?.();
     },
     // 无 _internal —— app 绝不碰 head/cloud/sub（库内测试直接 import 对应模块）。
   };

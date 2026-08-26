@@ -22,6 +22,6 @@ export async function deleteEmptyFolderVia(
   try { children = await list(path); }
   catch { return { status: "list-failed" }; }                   // 列举失败 = 确认不了空 → **绝不当空放行**（守卫击穿红线）
   if (children.length) return { status: "non-empty" };          // 有内容 → 不删（online 拒、drain 取消）
-  await deleteById(item.id, item.eTag);                          // 证实空 → 删（If-Match folder etag best-effort）
+  await deleteById(item.ref, item.eTag);                          // 证实空 → 删（If-Match folder etag best-effort）
   return { status: "deleted" };
 }

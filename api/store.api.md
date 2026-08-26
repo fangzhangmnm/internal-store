@@ -34,11 +34,11 @@ export interface CloudItem {
     contentType?: string;
     downloadUrl?: string;
     eTag: string;
-    id: string;
     isFolder?: boolean;
     lastModifiedDateTime: string | number;
     name: string;
     path: string;
+    ref: string;
     size: number;
 }
 
@@ -51,18 +51,26 @@ export class CloudNetworkError extends Error {
 
 // @public
 export interface CloudProvider {
-    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
-    delete(id: string, eTag?: string): Promise<void>;
+    copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
+    delete(ref: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
-    download(id: string): Promise<Blob>;
-    downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    download(ref: string): Promise<Blob>;
+    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
     ensureFolder(path: string): Promise<string>;
-    getApprootId(): Promise<string>;
+    getApprootRef(): Promise<string>;
     getItemByPath(path: string): Promise<CloudItem | null>;
     list(folder?: string): Promise<CloudItem[]>;
-    move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
-    rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
+    rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+}
+
+// @public (undocumented)
+export class CloudStaleRefError extends Error {
+    constructor(ref: string, message?: string, cause?: unknown);
+    // (undocumented)
+    readonly cause?: unknown;
+    readonly ref: string;
 }
 
 // @public
@@ -96,7 +104,7 @@ export interface CloudSync {
         bytes: Bytes;
         item: CloudItem;
     } | null>;
-    purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
+    purge(cloudRef: string, eTag?: string | null): Promise<unknown>;
     push(name: string, bytes: Bytes | Blob, opts?: {
         baseEtag?: string | null;
         encrypted?: boolean;
@@ -104,7 +112,7 @@ export interface CloudSync {
     rename(oldName: string, newName: string, opts?: {
         baseEtag?: string | null;
     }): Promise<unknown>;
-    restore(cloudItemId: string, name: string, opts?: {
+    restore(cloudRef: string, name: string, opts?: {
         encrypted?: boolean;
         eTag?: string | null;
         snapshotStamp?: string | null;
@@ -197,6 +205,13 @@ export function createStore(config: StoreConfig): {
     }) => Collection;
     files: {
         nameOccupied: (name: string) => Promise<boolean>;
+        dirty: {
+            count: () => Promise<number>;
+            pushAll: () => Promise<{
+                pushed: number;
+                failed: string[];
+            }>;
+        };
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void) => () => void;
         usage: () => Promise<{
             bytes: number;
@@ -223,6 +238,9 @@ export function createStore(config: StoreConfig): {
         tryDecryptEncryptedBlob: (blob: Blob, pw: string) => Promise<Blob | null>;
         isEncryptedPeekBlob: (blob: Blob | null | undefined) => boolean;
     };
+    dispose(opts?: {
+        drain?: boolean;
+    }): Promise<void>;
 };
 
 // @public
@@ -363,6 +381,7 @@ export interface ListContext {
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
+    close?(): void;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
     getDirIndexCache?(folder: string): Promise<string | null>;
@@ -409,6 +428,7 @@ export interface OneDriveAuth {
 export interface OneDriveConfig {
     authority?: string;
     clientId?: string;
+    homeAccountId?: string;
     msalUrl?: string | null;
     scopes?: string[];
 }
@@ -423,7 +443,7 @@ export interface PullResult {
 // @public
 export interface PurgeOpts {
     busy?: Busy;
-    cloudItemId?: string | null;
+    cloudRef?: string | null;
     confirm?: (ctx: {
         title: string;
         body: string;
@@ -512,7 +532,7 @@ export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 // @public
 export interface RestoreOpts {
     busy?: Busy;
-    cloudItemId?: string | null;
+    cloudRef?: string | null;
     encrypted?: boolean;
     fromCloud?: boolean;
     targetName?: string;
@@ -585,6 +605,11 @@ export interface StoreConfig {
 }
 
 // @public
+export class StoreDisposedError extends Error {
+    constructor(op?: string);
+}
+
+// @public
 export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
 // @public
@@ -631,7 +656,7 @@ export interface TrashEntry {
 
 // @public
 export interface TrashItem {
-    cloudItemId: string | null;
+    cloudRef: string | null;
     conflictLive: boolean;
     encrypted: boolean;
     localKey: string | null;

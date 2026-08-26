@@ -19,6 +19,7 @@ export function memLS() {
 export function graphFromProvider(provider) {
   const toGraphItem = (it) => it && ({
     ...it,
+    id: it.ref,   // RawGraphItem 是 Graph 域形状（wire 上就叫 id）；clean CloudItem.ref → 桥上翻回 id
     file: it.isFolder ? undefined : {},
     folder: it.isFolder ? {} : undefined,
   });
@@ -34,7 +35,7 @@ export function graphFromProvider(provider) {
     ensureSubfolder: (name) => provider.ensureFolder(name),
     moveItemToFolder: (id, folderId, opts) => provider.move(id, folderId, opts).then(toGraphItem),
     renameItem: (id, newName, eTag) => provider.rename(id, newName, eTag).then(toGraphItem),
-    getApprootId: () => provider.getApprootId(),
+    getApprootId: () => provider.getApprootRef(),
   };
 }
 

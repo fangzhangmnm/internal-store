@@ -13,27 +13,27 @@ export interface CloudItem {
     contentType?: string;
     downloadUrl?: string;
     eTag: string;
-    id: string;
     isFolder?: boolean;
     lastModifiedDateTime: string | number;
     name: string;
     path: string;
+    ref: string;
     size: number;
 }
 
 // @public
 export interface CloudProvider {
-    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
-    delete(id: string, eTag?: string): Promise<void>;
+    copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
+    delete(ref: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
-    download(id: string): Promise<Blob>;
-    downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    download(ref: string): Promise<Blob>;
+    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
     ensureFolder(path: string): Promise<string>;
-    getApprootId(): Promise<string>;
+    getApprootRef(): Promise<string>;
     getItemByPath(path: string): Promise<CloudItem | null>;
     list(folder?: string): Promise<CloudItem[]>;
-    move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
-    rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
+    rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
 
@@ -61,6 +61,7 @@ export interface FolderDeleteResult {
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
+    close?(): void;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
     getDirIndexCache?(folder: string): Promise<string | null>;

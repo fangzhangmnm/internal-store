@@ -20,8 +20,14 @@ export interface Kv {
 // ---- 云端低层（CloudProvider）：list/get/download/upload/delete/ensureFolder/move/rename ----
 /** 一个云端文件/文件夹的元信息（provider 各方法返回的统一形状）。 */
 export interface CloudItem {
-  /** 云端 item id。 */
-  id: string;
+  // ★ ref 语义（原名 `id`，2026-08-25 user 拍板更名；ai-docs/20260825-localfile-knight-store-round.md §4）：
+  //   **一张行李牌，不是身份**。拿到后这一趟能用（download/delete/move/copy/rename 都凭它），
+  //   契约下限 = 同 session、无外部改名/移动时对同一文件恒定；文件被改名/移动后旧牌**可以作废**，
+  //   作废就按路径重查一张（消费方绝不持久化 ref、绝不跨操作长期关联——身份永远 = path，listing.ts 红线）。
+  //   OneDrive 的牌恰好很耐用（Graph id 改名不作废）——那是地板之上的赠品，代码不许依赖。
+  //   文件夹 ref 与文件 ref 同命名空间（ensureFolder/getApprootRef 返回值可当 move/copy 的目标参数）。
+  /** 云端 item 引用（行李牌：本 session 有效的 opaque reference，**非身份**；身份=path，见上）。 */
+  ref: string;
   /** 文件名。 */
   name: string;
   /** 云端路径。 */
@@ -76,27 +82,27 @@ export interface CloudProvider {
   list(folder?: string): Promise<CloudItem[]>;
   /** 按路径取 item；缺 → null。 */
   getItemByPath(path: string): Promise<CloudItem | null>;
-  /** 取 approot 文件夹 id。 */
-  getApprootId(): Promise<string>;
+  /** 取 approot 文件夹 ref（与文件 ref 同命名空间，可当 move/copy 目标参数）。 */
+  getApprootRef(): Promise<string>;
   /** 下载文件内容。 */
-  download(id: string): Promise<Blob>;
+  download(ref: string): Promise<Blob>;
   /** byte-range 下载。 */
-  downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+  downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
   /** 上传文件字节。 */
   upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
   /** 确保文件夹存在。 */
   ensureFolder(path: string): Promise<string>;
   /** 文件硬删（trash purge）。eTag=If-Match（硬删不可逆，必带）。**文件夹删除不走它**——走 deleteEmptyFolder（护栏在 provider）。 */
-  delete(id: string, eTag?: string): Promise<void>;
+  delete(ref: string, eTag?: string): Promise<void>;
   /** 删**空**文件夹（唯一文件夹删除面）：provider 内部证实空才删（Graph 无 native「删空夹」→ list-then-delete，带 If-Match folder etag best-effort）。 */
   deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
   /** 移动到目标文件夹。 */
-  move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+  move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
   /** 服务端复制一份到目标文件夹（源**原位不动**）。目标同名 → 409。O3 copy-then-replace（2026-08-25，
    *  weakOverride 去 ghost 窗口）的原语：先 copy loser 进 .backup，再 If-Match CAS replace 原位。 */
-  copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
+  copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
   /** 改名。 */
-  rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+  rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
 }
 
 // ---- 本地持久层（LocalCache）：store.local 契约（**内容无关**，存任意 binary blob）----
@@ -145,6 +151,8 @@ export interface LocalCache {
   getDirIndexCache?(folder: string): Promise<string | null>;
   /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
   putDirIndexCache?(folder: string, json: string): Promise<void>;
+  /** 关底层持久连接 + 拒后续（store.dispose 用）。可选：注入的 mock 不实现 → dispose 跳过（无连接可关）。 */
+  close?(): void;
 }
 
 // ---- cloud-sync（session 级同步 over CloudProvider）：Store 消费的「cloud 后端」 ----
@@ -197,10 +205,11 @@ export interface CloudSync {
   weakOverride(name: string, bytes: Bytes, opts?: { encrypted?: boolean }): Promise<WeakOverrideResult>;
   /** 移进云端 .trash。deleteEventId 同上——两条腿必须是同一个，否则回收站里一次删除会裂成两行/误配。 */
   trash(name: string, deleteEventId: string, opts?: { baseEtag?: string | null }): Promise<unknown>;
-  /** enc.encrypted：trash 里的字节是加密容器（.zip 尾）→ 恢复必须落 encFileName（否则加密件被恢复到明文路径 = 打不开）。 */
-  restore(cloudItemId: string, name: string, opts?: { encrypted?: boolean; eTag?: string | null; snapshotStamp?: string | null }): Promise<unknown>;
-  /** 彻底删一条云端 trash。 */
-  purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
+  /** enc.encrypted：trash 里的字节是加密容器（.zip 尾）→ 恢复必须落 encFileName（否则加密件被恢复到明文路径 = 打不开）。
+   *  cloudRef 失效（该项已被别处恢复/清空，404）→ 抛 CloudStaleRefError（「已被别处动过」错误族，errors.ts）。 */
+  restore(cloudRef: string, name: string, opts?: { encrypted?: boolean; eTag?: string | null; snapshotStamp?: string | null }): Promise<unknown>;
+  /** 彻底删一条云端 trash。ref 失效（404）同 restore → CloudStaleRefError。 */
+  purge(cloudRef: string, eTag?: string | null): Promise<unknown>;
   /** 列举云端文件。 */
   list(): Promise<CloudItem[]>;
   /** 全树列举；complete=false → 列表不完整、不权威（partial 守卫：绝不据此判 cloud-gone）。 */

@@ -73,8 +73,8 @@ test("purge 带 If-Match：陈旧 eTag → 412（硬删不可逆，绝不按 id 
   await cloud.push("f.ora", enc("V1"));
   const item = await cloud.trash("f.ora", "evt1") as { id: string; eTag: string };
   const stale = item.eTag;
-  await provider.rename(item.id, "renamed-by-other.ora");        // 别设备动了回收站里那项 → etag 变
-  assert(await is412(() => cloud.purge(item.id, stale)), "陈旧 eTag → 412，不硬删");
+  await provider.rename(item.ref, "renamed-by-other.ora");        // 别设备动了回收站里那项 → etag 变
+  assert(await is412(() => cloud.purge(item.ref, stale)), "陈旧 eTag → 412，不硬删");
 });
 
 test("remove()（活文件硬删、绕过 move-aside）已从契约上删除", () => {

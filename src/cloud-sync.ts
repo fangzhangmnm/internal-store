@@ -13,6 +13,7 @@
 import { asideStamp, restoreStampDisplay } from "./move-aside.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
 import { isHidden } from "./is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
 import type { Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
 
 export class CloudConflictError extends Error {
@@ -158,7 +159,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     try {
       const n = Math.min(_ADOPT_TAIL_N, size);
       const offset = Math.max(0, (fresh.size || size) - n);
-      const raw = await provider.downloadRange(fresh.id, offset, n);
+      const raw = await provider.downloadRange(fresh.ref, offset, n);
       const cloudTail = raw instanceof Uint8Array ? raw
         : raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer())
         : new Uint8Array(raw);
@@ -182,7 +183,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
         if (other) {
           if (other.eTag !== baseEtag) throw new CloudConflictError(`云端已有更新版本 "${name}"`, name);
           const newBase = baseName(path);
-          const renamed = await provider.rename(other.id, newBase, baseEtag);   // If-Match 守卫的翻转
+          const renamed = await provider.rename(other.ref, newBase, baseEtag);   // If-Match 守卫的翻转
           baseEtag = renamed.eTag;
         }
       }
@@ -224,7 +225,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   async function pull(name: string): Promise<PullResult | null> {
     const { item } = await _find(name);
     if (!item) return null;
-    const blob = await provider.download(item.id);
+    const blob = await provider.download(item.ref);
     return { blob, item, suggestedName: name };
   }
 
@@ -239,7 +240,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const { item } = await _find(name);
     if (!item) return null;
     const offset = Math.max(0, (item.size || 0) - n);
-    const raw = await provider.downloadRange(item.id, offset, Math.min(n, item.size || n));
+    const raw = await provider.downloadRange(item.ref, offset, Math.min(n, item.size || n));
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());
@@ -255,7 +256,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const off = Math.max(0, Math.min(offset, size));
     const len = Math.max(0, Math.min(length, size - off));
     if (len === 0) return { bytes: new Uint8Array(0), item };
-    const raw = await provider.downloadRange(item.id, off, len);
+    const raw = await provider.downloadRange(item.ref, off, len);
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());
@@ -274,7 +275,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     if (!item) { clearState(name); return null; }
     const folderId = await provider.ensureFolder(trashFolder);
     const stamped = stampedName(name, enc, deleteEventId);   // basename + deleteEventId（trash 内丢 folder context；防同名撞）；保留加密扩展名
-    const moved = await provider.move(item.id, folderId, { newName: stamped, conflictBehavior: "fail", eTag: opts.baseEtag ?? item.eTag });
+    const moved = await provider.move(item.ref, folderId, { newName: stamped, conflictBehavior: "fail", eTag: opts.baseEtag ?? item.eTag });
     clearState(name);
     return moved;
   }
@@ -287,7 +288,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   //   撞名候选（2026-08-25 与本地腿对齐，案卷 §8）：`base [yyyymmdd-hhmmss]`（快照自己的时刻，
   //   opts.snapshotStamp 由 trash.ts 从 trashKey 抽给；拿不到退恢复时刻）→ 仍撞补 `-2`/`-3`…；
   //   旧版 `(2)(3)` 序号已废（user：backup 的时间分辨率语义）。
-  async function restore(itemId: string, targetName: string, opts: { encrypted?: boolean; eTag?: string | null; snapshotStamp?: string | null } = {}): Promise<CloudItem> {
+  async function restore(cloudRef: string, targetName: string, opts: { encrypted?: boolean; eTag?: string | null; snapshotStamp?: string | null } = {}): Promise<CloudItem> {
     const clean = targetName;
     const folder = clean.includes("/") ? clean.slice(0, clean.lastIndexOf("/")) : "";
     const base = baseName(clean);
@@ -297,20 +298,30 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     for (let attempt = 1; attempt < 100; attempt++) {
       const candidate = attempt === 1 ? base : attempt === 2 ? `${base} [${disp}]` : `${base} [${disp}-${attempt - 1}]`;
       try {
-        return await provider.move(itemId, folderId, { newName: mkName(candidate), conflictBehavior: "fail", eTag: opts.eTag ?? null });
+        return await provider.move(cloudRef, folderId, { newName: mkName(candidate), conflictBehavior: "fail", eTag: opts.eTag ?? null });
       } catch (e) {
         const status = (e as { status?: number })?.status;
         if (status === 409) continue;          // 目标撞名 → 换候选名
+        // 404 =「已被别处动过」错误族（2026-08-25 拍板配套；预存小洞：list→点击窗口里别设备已恢复/清空该项）。
+        //   OneDrive 下 ref 稳定 → 404 必是「东西没了」；path-as-id provider 下改名/移动同样落这。app 提示刷新。
+        if (status === 404) throw new CloudStaleRefError(cloudRef, `回收站项已被别处动过（恢复/清空），请刷新：${targetName}`, e);
         throw e;                               // 412（源变了）/ 其它 → 抛，别拿换名去掩盖
       }
     }
-    return await provider.move(itemId, folderId, { newName: mkName(`${base} [${asideStamp(now())}]`), conflictBehavior: "fail", eTag: opts.eTag ?? null });   // 100 连撞的病态兜底：guid 必不撞
+    return await provider.move(cloudRef, folderId, { newName: mkName(`${base} [${asideStamp(now())}]`), conflictBehavior: "fail", eTag: opts.eTag ?? null });   // 100 连撞的病态兜底：guid 必不撞
   }
 
   //   eTag：硬删是不可逆的，必须 If-Match（v435）。窄 TOCTOU 但后果最重：别设备在 list 与 delete 之间
-  //   把这项从 .trash 恢复出去 → 我方按 id 硬删掉那个**已经活过来的**文件。调用方手上本来就有 it.eTag。
-  async function purge(itemId: string, eTag?: string | null): Promise<void> {
-    await provider.delete(itemId, eTag ?? undefined);
+  //   把这项从 .trash 恢复出去 → 我方按 ref 硬删掉那个**已经活过来的**文件。调用方手上本来就有 it.eTag。
+  //   （OneDrive ref 跨 move 稳定 → 这一手真会指到活文件——If-Match 旧 eTag 412 拦下，正是此守卫的存在理由。）
+  async function purge(cloudRef: string, eTag?: string | null): Promise<void> {
+    try { await provider.delete(cloudRef, eTag ?? undefined); }
+    catch (e) {
+      // 404 → 该项已被别处彻底删/动过：目的（trash 里没有它）已达成一半，但**不能**谎报 purged——
+      //   若是被别处「恢复」，文件正活着；统一进「已被别处动过」错误族，app 提示刷新列表。
+      if ((e as { status?: number })?.status === 404) throw new CloudStaleRefError(cloudRef, "回收站项已被别处动过（已删或已恢复），请刷新", e);
+      throw e;
+    }
   }
 
   // weak-override（ADR-0009 / share-file-model）：用本地覆盖云端，但**云端 loser 先 stash 进 .backup 不丢**。
@@ -329,7 +340,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     if (cur.item) {
       const folderId = await provider.ensureFolder(backupFolder);
       const stamped = stampedName(name, cur.enc);   // ts-counter 防同名多次备份撞（旧版同 ms 会 fail 抛错）；loser 保留其扩展名
-      await provider.copy(cur.item.id, folderId, stamped);
+      await provider.copy(cur.item.ref, folderId, stamped);
       backedUp = `${backupFolder}/${stamped}`;
       item = await provider.upload(path, bytes, { contentType, eTag: cur.item.eTag, conflictBehavior: "replace" });
     } else {
@@ -417,10 +428,10 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const newBase = mkName(newName.includes("/") ? newName.slice(newName.lastIndexOf("/") + 1) : newName);
     let moved: CloudItem | null;
     if (oldFolder === newFolder) {
-      moved = await provider.rename(item.id, newBase, opts.baseEtag ?? item.eTag);
+      moved = await provider.rename(item.ref, newBase, opts.baseEtag ?? item.eTag);
     } else {
-      const targetId = newFolder ? await provider.ensureFolder(newFolder) : await provider.getApprootId();
-      moved = await provider.move(item.id, targetId, { newName: newBase, conflictBehavior: "fail", eTag: opts.baseEtag ?? item.eTag });
+      const targetId = newFolder ? await provider.ensureFolder(newFolder) : await provider.getApprootRef();
+      moved = await provider.move(item.ref, targetId, { newName: newBase, conflictBehavior: "fail", eTag: opts.baseEtag ?? item.eTag });
     }
     // S1 根因：OneDrive 的 rename/move 是 metadata PATCH → **etag 一定会变**。绝不把新名锚在旧 etag 上
     //   （旧 bug：setETag(new, getETag(old)) → base 永久过期 → 下次 open 必弹假「云端有新版本」）。

@@ -69,10 +69,12 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   const etagVerified = new Map<string, string>();       // name → 已做过陈分片核对的 eTag（SW 存活期，防每片重读 meta）
 
   // 身份解析：dir-index-cache（本地、零往返）优先，graph.getItemByPath 兜底。
-  async function resolve(name: string): Promise<Resolved | null> {
+  //   skipIndex（0.4.0，id→ref 拍板配套「SW 网关失效重解析」）：ref 失效（range 404）重解析时
+  //   跳过 dir-index-cache（那正是陈 ref 的来源）直接走 Graph 按名重查。
+  async function resolve(name: string, opts?: { skipIndex?: boolean }): Promise<Resolved | null> {
     const hit = resolveCache.get(name);
     if (hit) return hit;
-    try {
+    if (!opts?.skipIndex) try {
       const folder = name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "";
       const rec = await dirIdx.get(folder);
       if (rec) {
@@ -125,7 +127,20 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
       try { const c = await staging.get(`chunk:${name}:${i}`); if (c) { slog(`分片 ${i} ← staging`); return new Uint8Array(await c.blob.arrayBuffer()); } } catch { /* staging 坏 → 直连 */ }
       const off = i * chunkBytes;
       const len = Math.min(chunkBytes, item.size - off);
-      const bytes = new Uint8Array(await cloud!.downloadItemRange(item.id, off, len));
+      let bytes: Uint8Array;
+      try { bytes = new Uint8Array(await cloud!.downloadItemRange(item.id, off, len)); }
+      catch (e) {
+        // ref 失效重解析（0.4.0 拍板配套）：404 = 这张牌指的东西已不在（dir-index 陈 ref / 文件被改名移动）。
+        //   丢 resolve 缓存 → 跳过 dir-index 按名走 Graph 重查一张 → 同片重试一次；还不行才真失败。
+        if ((e as { status?: number })?.status !== 404) throw e;
+        slog(`分片 ${i} 404：ref 失效 → 按名重解析一次`);
+        resolveCache.delete(name); etagVerified.delete(name);
+        const again = await resolve(name, { skipIndex: true });
+        if (!again) throw e;
+        await ensureStagingFresh(name, again);   // 新版本 → 陈分片整组清
+        item = again;
+        bytes = new Uint8Array(await cloud!.downloadItemRange(item.id, off, Math.min(chunkBytes, item.size - off)));
+      }
       slog(`分片 ${i} ← 云端（${bytes.length}B）`);
       // tee 回 staging + 记账（best-effort；schema 与 download-session 一致）
       try {

@@ -234,6 +234,20 @@ export async function getToken(): Promise<string> {
 export function getActiveAccount(): Account { return activeAccount; }
 export function isSignedIn(): boolean { return !!activeAccount; }
 
+// 多账号防御（2026-08-25 user 拍板 §1.4，宣发前铺路）：provider 构造显式携带 homeAccountId 时，
+//   token 一律按**那个账号**取——store 内部永不问「现在谁登录着」。与 getToken 的差别：
+//   ① account 按 homeAccountId 显式解析（pca.getAccountByHomeId），不是全局 activeAccount；
+//   ② silent 失败**不动**全局 activeAccount（那是「当前登录 UI」的状态，钉死账号的失败不该把别的账号登出）。
+//   acquireTokenSilent 依旧显式带 account 参数（拍板 §1.4 ③——本文件所有取 token 处皆然，勿删）。
+export async function getTokenFor(homeAccountId: string): Promise<string> {
+  if (!pca) await initAuth();
+  if (!pca) throw new Error("Auth not initialized");
+  const account = pca.getAccountByHomeId(homeAccountId);
+  if (!account) throw new Error(`Account not signed in on this device: ${homeAccountId}`);
+  const result = await pca.acquireTokenSilent({ scopes: SCOPES, account });
+  return result.accessToken;
+}
+
 // 当从离线变成在线时调一次。boot 时 acquireTokenSilent 因网络抛错 → activeAccount
 // 留空 → 后面有网了 isSignedIn 也还是 false。这个函数显式 retry 一次 silent，
 // 成功就把 activeAccount 设上，UI 该刷新 / cloud list 该重拉的就跟着走。

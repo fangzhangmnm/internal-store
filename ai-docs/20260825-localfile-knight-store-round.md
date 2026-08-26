@@ -73,3 +73,11 @@
 ## 7. 实现顺序
 
 0.3.6（A2/A3 收敛）→ 0.4.0（dispose + dirty facet + `id`→`ref` + provider 多账号形状；exports 打包一次过目）→ folder provider → MASTER 修订落地（§6 获批后）。
+
+### 0.4.0 批实现记录（2026-08-26，Claude Fable 5；**已实现待审版**——版本号未花，等 user 过目 api/ diff）
+
+- **dispose(opts?: {drain?: boolean})**（§1.2）：先拒新调用（`StoreDisposedError`，含 dispose 前已握着的 file/collection 句柄——检查在调用时刻）→ 停 watcher → drain（默认 true，substrate.drain 等全部 serialize 链尾；`{drain:false}`=快拆，in-flight 因连接关闭响亮失败）→ 关 IDB（idb-store 连接 memo 化 + close()，LocalCache 契约加可选 `close?()`）。幂等。
+- **dirty facet**（§1.3）：`files.dirty.count()`（标量，与 usage 红线同口径）+ `pushAll()`→`{pushed, failed: string[]}`。**§1.3 未核项已核明：底层「不开文档推 dirty 项」路径此前不存在**（uploadReplay 只管 never-synced float）→ 门面即其新家，建在 pushLocalBytes（vetted push；F0 deferred 不算成功，冲突不级联弹面、名字进 failed）。枚举腿 = durable dirty 轨（`files.dirty:` kv 扫描）。
+- **id→ref**（§4 拍板 + 配套三件）：CloudItem.ref（行李牌 JSDoc 语义节）+ provider 全方法参数 + `getApprootId`→`getApprootRef` + CloudSync/TrashItem/RestoreOpts/PurgeOpts 的 `cloudItemId`→`cloudRef`。**dir-index-cache 持久 JSON 键名保持 `id` 不动**（schema v1 零变更，非持久化结构变更）；SW 网关配套「失效重解析」（range 404 → 丢缓存跳过 dir-index 走 Graph 按名重查一次）；404 收敛 = `CloudStaleRefError`（「已被别处动过」族，restore/purge 落地，预存小洞一起堵）。GraphTransport/RawGraphItem 保留 Graph 域 `id` 命名（wire 形状；OneDrive ref=Graph id 是赠品的文档化边界）。
+- **多账号形状**（§1.4 ①③库侧）：`OneDriveConfig.homeAccountId?` → token source 钉死该账号（auth.getTokenFor：`pca.getAccountByHomeId` + silent 带 account；失败不动全局 activeAccount）；已知局限 = graph token-source 模块级（同页第二 provider 覆盖前者，现状单 provider/页，真多账号并联归将来批次）。② registry 存账号 id = app 侧（WeebPaint），本批不动。
+- 测试：+5（drain/dispose 拒后续/dirty count/pushAll 成败/CloudStaleRefError），364 全绿；真浏览器夹具（连接 memo 后）复跑全过。api/ diff + pack 清单 = 审版材料。

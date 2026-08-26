@@ -140,7 +140,7 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
 
   function toItem(node: MockNode): CloudItem {
     return {
-      id: node.id,
+      ref: node.id,   // mock 的 ref = 内部铸的 node id（稳定，模拟 OneDrive 赠品；契约只承诺行李牌语义）
       name: node.name,
       path: node.path,
       size: node.content ? node.content.length : 0,
@@ -221,7 +221,7 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
       return n ? toItem(n) : null;
     },
 
-    async getApprootId() {
+    async getApprootRef() {
       return ROOT_ID;
     },
 

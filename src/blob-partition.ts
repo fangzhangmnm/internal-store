@@ -20,6 +20,8 @@ export interface PartitionView {
 
 export interface PartitionedBlobStore {
   partition(p: Partition): PartitionView;
+  /** 关底层 IDB 连接 + 拒后续（store.dispose 用；幂等）。 */
+  close(): void;
 }
 
 export function createPartitionedBlobStore(dbName: string): PartitionedBlobStore {
@@ -37,5 +39,5 @@ export function createPartitionedBlobStore(dbName: string): PartitionedBlobStore
       moveTo: (name, to, toName) => idb.rename(key(p, name), key(to, toName)),
     };
   }
-  return { partition: view };
+  return { partition: view, close: () => idb.close() };
 }

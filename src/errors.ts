@@ -18,3 +18,24 @@ export class CloudNetworkError extends Error {
     this.cause = cause;
   }
 }
+
+// CloudStaleRefError ——「已被别处动过」错误族（2026-08-25 user 拍板，随 id→ref 更名一起收敛；
+//   ai-docs/20260825-localfile-knight-store-round.md §4 配套三件之一）。edited by Claude Fable 5 (2026-08-26)
+//   语义：拿着一张 ref（行李牌）去操作，云端答 404 = 这张牌**指向的东西已不在原处**——
+//   典型场景 = 回收站 list→用户点击的窗口里，别的设备已把该项恢复/清空（预存小洞：旧版只处理 412 不处理 404）。
+//   契约：
+//   - 不是 bug、不是网络故障——是「别处动过了」的事实 surface；app 收到后应提示刷新列表重查。
+//   - 与 CloudConflictError（同一文件版本分叉，412）不同族：这里连对象都没了/换了，无「解决冲突」可言。
+//   - path-as-id 的 folder provider 下 ref=path，改名/移动即作废 → 此错误族是消费方唯一该捕的形状
+//     （绝不按 provider 类型分支判 404）。
+export class CloudStaleRefError extends Error {
+  /** 失效的那张 ref。 */
+  readonly ref: string;
+  override readonly cause?: unknown;
+  constructor(ref: string, message?: string, cause?: unknown) {
+    super(message ?? `cloud ref no longer valid (moved/removed elsewhere): ${ref}`);
+    this.name = "CloudStaleRefError";
+    this.ref = ref;
+    this.cause = cause;
+  }
+}

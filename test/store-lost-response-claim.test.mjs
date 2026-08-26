@@ -40,7 +40,7 @@ describe("cloud-sync.push — N6 认领尾部校验（防同名同大小异内�
 
     assert(threw && threw.name === "CloudNameCollisionError",
       "同名同大小异内容 → CloudNameCollisionError，绝不静默把别人的文件认作我方 push");
-    const cloudNow = await rdtxt(await env.provider.download((await env.provider.getItemByPath("猫.ora")).id));
+    const cloudNow = await rdtxt(await env.provider.download((await env.provider.getItemByPath("猫.ora")).ref));
     eq(cloudNow, OTHER, "云端没被覆盖（path-身份红线）");
     eq(env.cloud.isDirty("猫"), true, "我方字节保持 dirty（下次改名/重推，不静默丢失）");
   });

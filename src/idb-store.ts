@@ -32,13 +32,30 @@ export type IdbCache = ReturnType<typeof createIdbCache>;
 
 /** 建一个绑定到具体 IDB 库名的字节缓存(store 内部)。dbName 必须已带 app 命名空间(见上)。 */
 export function createIdbCache(dbName: string) {
+  // 连接 memo（0.4.0，dispose 需要可关的连接；顺带省掉每 op 一次 open 的往返）。
+  //   浏览器强关（onclose：用户清站点数据/存储压力）→ 清 memo，下一 op 自动重开。
+  //   close() 后拒后续（dispose 契约「断 IDB 连接、拒后续调用」的本层执行体）。
+  let _db: Promise<IDBDatabase> | null = null;
+  let _closed = false;
   function openDb(): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
+    if (_closed) return Promise.reject(new Error(`idb cache closed (disposed): ${dbName}`));
+    if (_db) return _db;
+    _db = new Promise((resolve, reject) => {
       const r = indexedDB.open(dbName, 1);
       r.onupgradeneeded = (): void => { r.result.createObjectStore(STORE); };
-      r.onsuccess = (): void => resolve(r.result);
-      r.onerror = (): void => reject(r.error);
+      r.onsuccess = (): void => {
+        r.result.onclose = (): void => { _db = null; };   // 浏览器强关 → 下一 op 重开
+        resolve(r.result);
+      };
+      r.onerror = (): void => { _db = null; reject(r.error); };
     });
+    return _db;
+  }
+  /** 关连接 + 拒后续调用（store.dispose 用）。幂等。 */
+  function close(): void {
+    _closed = true;
+    const p = _db; _db = null;
+    void p?.then((db) => db.close()).catch(() => { /* 打开本就失败 → 无可关 */ });
   }
 
   // ★ 全库唯一事务入口（形状纪律见文件头）。
@@ -69,6 +86,7 @@ export function createIdbCache(dbName: string) {
   }
 
   return {
+    close,
     get(name: string): Promise<CacheRecord | undefined> {
       return tx("readonly", (s) => { const r = s.get(name); return () => r.result as CacheRecord | undefined; });
     },

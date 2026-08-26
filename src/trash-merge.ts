@@ -4,7 +4,7 @@
 //   离线删 → 进本地 trash；在线删 synced → 进云端 trash；在线删 dirty → 两端都进（世界唯一字节留本地可恢复）。
 //   故同一逻辑删除可能在**一端或两端**留痕。本模块按**原名**归并两端，标 side:"local"|"cloud"|"both"。
 //
-// **只处理元数据**（trashKey / cloudItemId / 原名 / 时间戳 / 加密标志），**绝不碰 blob**（回收站 invariant：拿不到字节）。
+// **只处理元数据**（trashKey / cloudRef / 原名 / 时间戳 / 加密标志），**绝不碰 blob**（回收站 invariant：拿不到字节）。
 //
 // conflictLive（附录那条）：离线删排队 → 回线 replay 时云端已被别处改过 → edit-wins 取消云删 → 本地 trash 有、
 //   云端**还活着**（数据两存）。据传入的**权威** live 列表检出，标 conflictLive:true 供 UI surface（别丢）。
@@ -26,7 +26,7 @@ export interface TrashItem {
   /** 本地 trashKey（本地腿 restore/purge）。 */
   localKey: string | null;
   /** 云端 item id（云端腿 restore/purge）。 */
-  cloudItemId: string | null;
+  cloudRef: string | null;
 }
 
 // stamped 名 = `<base> [<deleteEventId>]`（明文）或同名尾接 `.zip`（加密容器，encFileName 追加）。
@@ -88,7 +88,7 @@ export function mergeTrash(
     //   一次删除 = 一个 id，两条腿共用（delete.ts 生成并传给两端）。id 相同 ⟺ 同一次删除。
     //   ⚠ 以前是「按时间戳排序后按下标配对」，那在**单腿删除交叉**时会出人命：
     //     离线删 A（只落本地腿）→ 之后在线删重建的 A（只落云腿）→ 下标配对把这两次无关的删除
-    //     配成一行 both → 用户点「彻底删除」时 purge 同时送 trashKey + cloudItemId，
+    //     配成一行 both → 用户点「彻底删除」时 purge 同时送 trashKey + cloudRef，
     //     一次删掉两个不相干的文件，UI 还只说删了一件。restore 同理会张冠李戴。
     //   配不上 = 就是两次独立的删除，各出各的行。**不做下标兜底**（那等于把 bug 留一条后门）。
     const usedCloud = new Set<number>();
@@ -100,15 +100,15 @@ export function mergeTrash(
       if (ci == null || usedCloud.has(ci)) { lonelyLocals.push(l); continue; }
       usedCloud.add(ci);
       const c = clouds[ci];
-      out.push({ name: l.entry.name, ts: l.ts ?? c.ts, side: "both", encrypted: c.encrypted, conflictLive: false, localKey: l.entry.trashKey, cloudItemId: c.item.id });
+      out.push({ name: l.entry.name, ts: l.ts ?? c.ts, side: "both", encrypted: c.encrypted, conflictLive: false, localKey: l.entry.trashKey, cloudRef: c.item.ref });
     }
     for (const l of lonelyLocals) {
       // 纯本地行才可能 conflictLive：本地 trash 有、原名却仍活在权威云端 = 离线删被 edit-wins 撤销 → 两存。
-      out.push({ name: l.entry.name, ts: l.ts, side: "local", encrypted: false, conflictLive: liveCloudNames.has(l.entry.name), localKey: l.entry.trashKey, cloudItemId: null });
+      out.push({ name: l.entry.name, ts: l.ts, side: "local", encrypted: false, conflictLive: liveCloudNames.has(l.entry.name), localKey: l.entry.trashKey, cloudRef: null });
     }
     clouds.forEach((c, i) => {
       if (usedCloud.has(i)) return;
-      out.push({ name: base, ts: c.ts, side: "cloud", encrypted: c.encrypted, conflictLive: false, localKey: null, cloudItemId: c.item.id });
+      out.push({ name: base, ts: c.ts, side: "cloud", encrypted: c.encrypted, conflictLive: false, localKey: null, cloudRef: c.item.ref });
     });
   }
   return out;

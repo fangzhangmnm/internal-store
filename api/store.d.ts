@@ -29,8 +29,8 @@ export declare type ChangeCb = (changedIds: string[]) => void;
 
 /** 一个云端文件/文件夹的元信息（provider 各方法返回的统一形状）。 */
 export declare interface CloudItem {
-    /** 云端 item id。 */
-    id: string;
+    /** 云端 item 引用（行李牌：本 session 有效的 opaque reference，**非身份**；身份=path，见上）。 */
+    ref: string;
     /** 文件名。 */
     name: string;
     /** 云端路径。 */
@@ -62,27 +62,34 @@ export declare interface CloudProvider {
     list(folder?: string): Promise<CloudItem[]>;
     /** 按路径取 item；缺 → null。 */
     getItemByPath(path: string): Promise<CloudItem | null>;
-    /** 取 approot 文件夹 id。 */
-    getApprootId(): Promise<string>;
+    /** 取 approot 文件夹 ref（与文件 ref 同命名空间，可当 move/copy 目标参数）。 */
+    getApprootRef(): Promise<string>;
     /** 下载文件内容。 */
-    download(id: string): Promise<Blob>;
+    download(ref: string): Promise<Blob>;
     /** byte-range 下载。 */
-    downloadRange(id: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
     /** 上传文件字节。 */
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
     /** 确保文件夹存在。 */
     ensureFolder(path: string): Promise<string>;
     /** 文件硬删（trash purge）。eTag=If-Match（硬删不可逆，必带）。**文件夹删除不走它**——走 deleteEmptyFolder（护栏在 provider）。 */
-    delete(id: string, eTag?: string): Promise<void>;
+    delete(ref: string, eTag?: string): Promise<void>;
     /** 删**空**文件夹（唯一文件夹删除面）：provider 内部证实空才删（Graph 无 native「删空夹」→ list-then-delete，带 If-Match folder etag best-effort）。 */
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     /** 移动到目标文件夹。 */
-    move(id: string, targetFolderId: string, opts?: MoveOpts): Promise<CloudItem>;
+    move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
     /** 服务端复制一份到目标文件夹（源**原位不动**）。目标同名 → 409。O3 copy-then-replace（2026-08-25，
      *  weakOverride 去 ghost 窗口）的原语：先 copy loser 进 .backup，再 If-Match CAS replace 原位。 */
-    copy(id: string, targetFolderId: string, newName: string): Promise<CloudItem>;
+    copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
     /** 改名。 */
-    rename(id: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+}
+
+export declare class CloudStaleRefError extends Error {
+    /** 失效的那张 ref。 */
+    readonly ref: string;
+    readonly cause?: unknown;
+    constructor(ref: string, message?: string, cause?: unknown);
 }
 
 /** cloud-sync 暴露给 store/app 的面（dirty/etag 状态 + push/pull/list/trash 等）。 */
@@ -114,14 +121,15 @@ export declare interface CloudSync {
     trash(name: string, deleteEventId: string, opts?: {
         baseEtag?: string | null;
     }): Promise<unknown>;
-    /** enc.encrypted：trash 里的字节是加密容器（.zip 尾）→ 恢复必须落 encFileName（否则加密件被恢复到明文路径 = 打不开）。 */
-    restore(cloudItemId: string, name: string, opts?: {
+    /** enc.encrypted：trash 里的字节是加密容器（.zip 尾）→ 恢复必须落 encFileName（否则加密件被恢复到明文路径 = 打不开）。
+     *  cloudRef 失效（该项已被别处恢复/清空，404）→ 抛 CloudStaleRefError（「已被别处动过」错误族，errors.ts）。 */
+    restore(cloudRef: string, name: string, opts?: {
         encrypted?: boolean;
         eTag?: string | null;
         snapshotStamp?: string | null;
     }): Promise<unknown>;
-    /** 彻底删一条云端 trash。 */
-    purge(cloudItemId: string, eTag?: string | null): Promise<unknown>;
+    /** 彻底删一条云端 trash。ref 失效（404）同 restore → CloudStaleRefError。 */
+    purge(cloudRef: string, eTag?: string | null): Promise<unknown>;
     /** 列举云端文件。 */
     list(): Promise<CloudItem[]>;
     /** 全树列举；complete=false → 列表不完整、不权威（partial 守卫：绝不据此判 cloud-gone）。 */
@@ -290,6 +298,19 @@ export declare function createStore(config: StoreConfig): {
     files: {
         /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
         nameOccupied: (name: string) => Promise<boolean>;
+        dirty: {
+            /** 有未推字节的文件**数**。⚠ 只返标量、永不返名字（与 usage 红线同口径——不是列举面，列举唯一面 =
+             *  watchFolder）；bool 用 `count() > 0` 白送。口径 = durable dirty 轨（任何 tab 的未推都算）。 */
+            count: () => Promise<number>;
+            /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
+             *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/加密锁定/落地未确认都算失败留 dirty，
+             *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
+             *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
+            pushAll: () => Promise<{
+                pushed: number;
+                failed: string[];
+            }>;
+        };
         /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void) => () => void;
         /** 本地已缓存文件的总占用（字节 + 件数），给 app 显示「本地存了多少」。**口径**：只量本库 files 分区，
@@ -345,6 +366,14 @@ export declare function createStore(config: StoreConfig): {
          *  取代把 ENC_PEEK_MIME 这个魔法常量导出给 app —— app 要问的是语义，不是常量值。 */
         isEncryptedPeekBlob: (blob: Blob | null | undefined) => boolean;
     };
+    /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
+     *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；
+     *  {drain:false} = 快速拆除，in-flight 操作会因连接关闭响亮失败、dirty 账还在下次补推）→ 关 IDB 连接。
+     *  幂等。之后任何面（含 dispose 前已握着的 file/collection 对象）→ 抛 StoreDisposedError。
+     *  ⚠ 不含 provider/auth 的登出（那是 app 侧 auth 的事）；错误上报单例 reporter 不重置（多实例共汇一处）。 */
+    dispose(opts?: {
+        drain?: boolean;
+    }): Promise<void>;
 };
 
 /** 宿主注入的 zip/7z codec（createStore config 注入；不提供 = 加密不可用）。 */
@@ -581,6 +610,8 @@ export declare interface LocalCache {
     getDirIndexCache?(folder: string): Promise<string | null>;
     /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
     putDirIndexCache?(folder: string, json: string): Promise<void>;
+    /** 关底层持久连接 + 拒后续（store.dispose 用）。可选：注入的 mock 不实现 → dispose 跳过（无连接可关）。 */
+    close?(): void;
 }
 
 /** provider.move 的选项。 */
@@ -627,6 +658,11 @@ export declare interface OneDriveConfig {
     scopes?: string[];
     /** vendored MSAL 脚本路径。 */
     msalUrl?: string | null;
+    /** 多账号防御（2026-08-25 拍板 §1.4 铺路）：给定 = 本 provider **钉死**这个账号取 token
+     *  （MSAL homeAccountId，登录后从 `auth.getActiveAccount().homeAccountId` 拿、由 app 存进自己的
+     *  gallery registry），store 内部永不问「现在谁登录着」；缺省 = 沿用全局 activeAccount（现状单账号）。
+     *  邻域约束不动：personal-account-only；翻 authority audience 必须连 authority 一起改（2026-08-23 拍板）。 */
+    homeAccountId?: string;
 }
 
 /** pull 的结果：拉到的字节 + 权威 item（H7：分片末响应无 item 时拉权威 etag）+ 建议落地名（撞名 caller 用）。 */
@@ -644,7 +680,7 @@ export declare interface PurgeOpts {
     /** 本地 trashKey（本地腿）。 */
     trashKey?: string | null;
     /** 云端 trash item id（云端腿）。 */
-    cloudItemId?: string | null;
+    cloudRef?: string | null;
     /** danger confirm 回调。 */
     confirm?: (ctx: {
         title: string;
@@ -789,7 +825,7 @@ export declare interface RestoreOpts {
     /** 走云端腿恢复。 */
     fromCloud?: boolean;
     /** 云端 trash item id（云端腿）。 */
-    cloudItemId?: string | null;
+    cloudRef?: string | null;
     /** 恢复的目标名。 */
     targetName?: string;
     /** 本地 trashKey（本地腿）。 */
@@ -906,6 +942,11 @@ export declare interface StoreConfig {
     readOnlyFiles?: boolean;
 }
 
+/** store.dispose() 之后再调任何面 → 抛此错（app surface；这不是失败，是契约——切库/登出后旧句柄必须响亮死，绝不静默半工作）。 */
+export declare class StoreDisposedError extends Error {
+    constructor(op?: string);
+}
+
 /** 错误上报分级：error=非预期失败；warning=可疑但非致命；info=值得让用户知道的瞬态；log=良性 offline/fallback。 */
 export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 
@@ -978,7 +1019,7 @@ export declare interface TrashItem {
     /** 本地 trashKey（本地腿 restore/purge）。 */
     localKey: string | null;
     /** 云端 item id（云端腿 restore/purge）。 */
-    cloudItemId: string | null;
+    cloudRef: string | null;
 }
 
 /** restore / purge / emptyTrash 的终态。 */

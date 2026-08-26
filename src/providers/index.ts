@@ -4,7 +4,7 @@
 import * as graph from "./graph.ts";
 import {
   configureOneDriveAuth,
-  isAuthConfigured, initAuth, signIn, signOut, getToken, isSignedIn,
+  isAuthConfigured, initAuth, signIn, signOut, getToken, getTokenFor, isSignedIn,
   getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState,
 } from "./auth.ts";
 import { graphToCloudProvider } from "../onedrive-provider.ts";
@@ -45,6 +45,11 @@ export interface OneDriveConfig {
   scopes?: string[];
   /** vendored MSAL 脚本路径。 */
   msalUrl?: string | null;
+  /** 多账号防御（2026-08-25 拍板 §1.4 铺路）：给定 = 本 provider **钉死**这个账号取 token
+   *  （MSAL homeAccountId，登录后从 `auth.getActiveAccount().homeAccountId` 拿、由 app 存进自己的
+   *  gallery registry），store 内部永不问「现在谁登录着」；缺省 = 沿用全局 activeAccount（现状单账号）。
+   *  邻域约束不动：personal-account-only；翻 authority audience 必须连 authority 一起改（2026-08-23 拍板）。 */
+  homeAccountId?: string;
 }
 /** config 驱动的完整 OneDrive CloudProvider（MSAL + Graph + 适配器）。**浏览器专属**；auth 流程只能真机验。
  *
@@ -60,7 +65,12 @@ export interface OneDriveConfig {
  */
 export function createOneDriveProvider(config: OneDriveConfig = {}): { provider: CloudProvider; auth: OneDriveAuth } {
   configureOneDriveAuth(config);                  // { clientId, scopes?, authority?, msalUrl? }
-  graph.configureGraphTokenSource(getToken);      // token-source 接缝：页面上下文 = MSAL（SW 上下文注入凭据桥读端）
+  // token-source 接缝：页面上下文 = MSAL（SW 上下文注入凭据桥读端）。
+  //   homeAccountId 给定 → 钉死该账号（getTokenFor）；缺省 → 全局 activeAccount（getToken）。
+  //   ⚠ 已知局限：graph token-source 是模块级——同页面建**第二个** provider 会覆盖第一个的 token 源
+  //   （现状全家族单 provider/页；真·多账号并联需 graph 实例化，将来另立批次）。
+  const hid = config.homeAccountId;
+  graph.configureGraphTokenSource(hid ? () => getTokenFor(hid) : getToken);
   return {
     provider: graphToCloudProvider(graph),        // CloudProvider（喂 createCloudSync）
     auth: { isAuthConfigured, initAuth, signIn, signOut, getToken, isSignedIn, getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState },

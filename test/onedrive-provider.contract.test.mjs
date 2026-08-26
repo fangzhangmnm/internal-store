@@ -18,9 +18,9 @@ describe("OneDriveProvider 适配", () => {
   it("upload → CloudItem(有 eTag)，getItemByPath 翻回", async () => {
     const { p } = odp();
     const it = await p.upload("a.ora", bytes("v1"), {});
-    assert(it.eTag && it.id);
+    assert(it.eTag && it.ref);
     eq(it.isFolder, false);
-    eq((await p.getItemByPath("a.ora")).id, it.id);
+    eq((await p.getItemByPath("a.ora")).ref, it.ref);
   });
 
   it("stale eTag → 412（透传 graph 的 status）", async () => {
@@ -39,13 +39,13 @@ describe("OneDriveProvider 适配", () => {
   it("download 往返", async () => {
     const { p } = odp();
     const it = await p.upload("a.ora", bytes("hello"), {});
-    eq(await txt(await p.download(it.id)), "hello");
+    eq(await txt(await p.download(it.ref)), "hello");
   });
 
   it("downloadRange 末尾 N 字节", async () => {
     const { p } = odp();
     const it = await p.upload("a.ora", bytes("ABCDEFGH"), {});
-    eq(new TextDecoder().decode(new Uint8Array(await p.downloadRange(it.id, null, 3))), "FGH");
+    eq(new TextDecoder().decode(new Uint8Array(await p.downloadRange(it.ref, null, 3))), "FGH");
   });
 
   it("ensureFolder + list 的 folder isFolder=true", async () => {
@@ -62,10 +62,10 @@ describe("OneDriveProvider 适配", () => {
     const { mock, p } = odp();
     const it = await p.upload("a.ora", bytes("v1"), {});
     const trash = await p.ensureFolder(".trash");
-    const moved = await p.move(it.id, trash, { newName: "a [1].ora", conflictBehavior: "fail" });
+    const moved = await p.move(it.ref, trash, { newName: "a [1].ora", conflictBehavior: "fail" });
     eq(moved.path, ".trash/a [1].ora");
     eq(await p.getItemByPath("a.ora"), null);
-    await p.delete(moved.id);
+    await p.delete(moved.ref);
     eq((await p.list(".trash")).length, 0);
   });
 

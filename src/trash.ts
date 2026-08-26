@@ -23,7 +23,7 @@ export interface RestoreOpts {
   /** 走云端腿恢复。 */
   fromCloud?: boolean;
   /** 云端 trash item id（云端腿）。 */
-  cloudItemId?: string | null;
+  cloudRef?: string | null;
   /** 恢复的目标名。 */
   targetName?: string;
   /** 本地 trashKey（本地腿）。 */
@@ -37,7 +37,7 @@ export interface PurgeOpts {
   /** 本地 trashKey（本地腿）。 */
   trashKey?: string | null;
   /** 云端 trash item id（云端腿）。 */
-  cloudItemId?: string | null;
+  cloudRef?: string | null;
   /** danger confirm 回调。 */
   confirm?: (ctx: { title: string; body: string; danger?: boolean }) => boolean | Promise<boolean>;
   /** busy 遮罩注入。 */
@@ -71,17 +71,17 @@ export function createTrash(cfg: TrashCfg) {
   const { cloud, local, head, busy: _busy = passBusy } = cfg;
 
   async function restore(opts: RestoreOpts = {}): Promise<TrashResult> {
-    const { fromCloud, cloudItemId, targetName, trashKey, encrypted, busy = _busy } = opts;
+    const { fromCloud, cloudRef, targetName, trashKey, encrypted, busy = _busy } = opts;
     return busy("trash.restoring", async () => {
       let name: string | null = targetName || null, restoredLocal = false, restoredCloud = false;
       // both 行策略：本地先恢复到**原名**；云端腿随后 cloud.restore 撞名自动 (2)（复用其重试）→ 两份都在、不覆盖。
       if (trashKey && local) { const n = await local.restore(trashKey); if (n) { name = n; restoredLocal = true; } }
-      if (fromCloud && cloudItemId != null) {
+      if (fromCloud && cloudRef != null) {
         // snapshotStamp：撞名改名恢复时用**快照自己的时刻**命名（案卷 §8）。本地腿在场时从 trashKey 抽；
         //   纯云端恢复拿不到（不额外打元数据往返）→ cloud.restore 退恢复时刻。本地腿已改名时 name 已带戳，
         //   云端腿跟同名落点 → 两腿收敛同一个名字。
         const snap = trashKey ? snapshotStampOf(trashKey.replace(/^[a-z]+\//, "")) : null;
-        const ritem = await cloud.restore(cloudItemId, (name || targetName)!, { encrypted, snapshotStamp: snap }) as { eTag?: string | null };
+        const ritem = await cloud.restore(cloudRef, (name || targetName)!, { encrypted, snapshotStamp: snap }) as { eTag?: string | null };
         restoredCloud = true;
         // 采纳恢复出的云 item etag（restore 是 move → 新 etag）→ 之后 push 有 base，不对自己的文件弹假撞名。
         const rname = name || targetName;
@@ -93,11 +93,11 @@ export function createTrash(cfg: TrashCfg) {
   }
 
   async function purge(opts: PurgeOpts = {}): Promise<TrashResult> {
-    const { trashKey, cloudItemId, confirm, busy = _busy } = opts;
+    const { trashKey, cloudRef, confirm, busy = _busy } = opts;
     if (confirm && !(await confirm({ title: "彻底删除", body: "不可恢复", danger: true }))) return { status: "cancelled" };
     return busy("trash.purging", async () => {
       if (trashKey && local && local.purgeTrash) await local.purgeTrash(trashKey);
-      if (cloudItemId != null) await cloud.purge(cloudItemId);
+      if (cloudRef != null) await cloud.purge(cloudRef);
       return { status: "purged" };
     });
   }
@@ -120,7 +120,7 @@ export function createTrash(cfg: TrashCfg) {
         items = items || [];
         for (let i = 0; i < items.length; i += concurrency) {   // bounded 并发，快约 N×
           await Promise.all(items.slice(i, i + concurrency).map(async (it) => {
-            try { await cloud.purge(it.id, it.eTag); purged++; }
+            try { await cloud.purge(it.ref, it.eTag); purged++; }
             catch (e) { reportStoreError(e, "warning"); failed.push({ name: it.name, where: "cloud", error: errMsg(e) }); }
           }));
         }
@@ -148,7 +148,7 @@ export function createTrash(cfg: TrashCfg) {
         items = items || [];
         for (let i = 0; i < items.length; i += concurrency) {
           await Promise.all(items.slice(i, i + concurrency).map(async (it) => {
-            try { await cloud.purge(it.id, it.eTag); purged++; }
+            try { await cloud.purge(it.ref, it.eTag); purged++; }
             catch (e) { reportStoreError(e, "warning"); failed.push({ name: it.name, where: "cloud", error: errMsg(e) }); }
           }));
         }

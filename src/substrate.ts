@@ -41,6 +41,9 @@ export interface Substrate {
   session: Coalescer;
   serialize<T>(name: string, fn: () => T | Promise<T>): Promise<T>;
   serialize2<T>(a: string, b: string, fn: () => T | Promise<T>): Promise<T>;
+  /** 等**当前所有** serialize 链尾 settle（dispose({drain}) 用）。前提：调用方已挡住新工作入口，
+   *  否则边 drain 边进新活等不完（有轮次上限护栏，绝不无限等）。 */
+  drain(): Promise<void>;
 }
 
 export interface Coalescer {
@@ -81,6 +84,19 @@ export function createSubstrate(): Substrate {
     return next;
   }
 
+  // drain：反复等链尾直到一轮下来没有新链尾出现（in-flight 的收尾动作可能又排了同名后续，如 push
+  //   落地后的补写）。调用方（dispose）已拒新用户态调用 → 收敛只差内部接力，几轮必尽；100 轮上限
+  //   是「有 bug 也绝不挂死 dispose」的护栏，触顶即放行（IDB close 会让漏网操作响亮失败，不静默）。
+  async function drain(): Promise<void> {
+    for (let round = 0; round < 100; round++) {
+      const tails = [..._chain.values()];
+      if (!tails.length) return;
+      await Promise.all(tails);
+      const after = new Set(_chain.values());
+      if (tails.length === after.size && tails.every((t) => after.has(t))) return;   // 一轮内无新链尾 → 已排空
+    }
+  }
+
   // ---- save 合流（④ coalescer）：连按 Ctrl+S/点保存不串 N 次。app 注入真·保存动作（configure）。
   //   - 没在跑 → 立刻跑
   //   - 在跑 + 期间没新编辑 + 同类型 → no-op（state 没变，省一次空转）
@@ -116,5 +132,5 @@ export function createSubstrate(): Substrate {
   }
   const session = createCoalescer();
 
-  return { edits, session, serialize, serialize2 };
+  return { edits, session, serialize, serialize2, drain };
 }

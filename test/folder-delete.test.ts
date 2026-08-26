@@ -3,8 +3,8 @@ import { test, eq, assert } from "./runner.mjs";
 import { deleteEmptyFolderVia } from "../src/folder-delete.ts";
 import type { CloudItem } from "../src/types.ts";
 
-const folder = (path: string, eTag = "e1"): CloudItem => ({ id: `id:${path}`, name: path, path, size: 0, eTag, lastModifiedDateTime: 0, isFolder: true });
-const fileItem = (path: string): CloudItem => ({ id: `id:${path}`, name: path, path, size: 1, eTag: "e", lastModifiedDateTime: 0, isFolder: false });
+const folder = (path: string, eTag = "e1"): CloudItem => ({ ref: `id:${path}`, name: path, path, size: 0, eTag, lastModifiedDateTime: 0, isFolder: true });
+const fileItem = (path: string): CloudItem => ({ ref: `id:${path}`, name: path, path, size: 1, eTag: "e", lastModifiedDateTime: 0, isFolder: false });
 
 test("[folder-delete] 空夹 → deleted（delete 调过，带 If-Match folder etag）", async () => {
   const deleted: Array<{ id: string; etag?: string | null }> = [];

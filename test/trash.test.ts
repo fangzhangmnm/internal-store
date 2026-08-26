@@ -37,7 +37,7 @@ test("restore both（本地+云端一起恢复）+ 采纳云 etag（N8：之后 
   await cloud.push("f", enc("DATA"));
   const trashed = await cloud.trash("f");                  // 云端进 .trash
   await local.save("f", enc("DATA")); const tk = await local.trash("f");   // 本地进 trash
-  const r = await restore({ trashKey: tk, fromCloud: true, cloudItemId: trashed!.id, targetName: "f" });
+  const r = await restore({ trashKey: tk, fromCloud: true, cloudRef: trashed!.ref, targetName: "f" });
   eq(r.status, "restored", "恢复"); assert(r.local && r.cloud, "本地+云端都恢复");
   assert(await local.exists("f"), "本地文件回来");
   assert(head.seenBase("f") != null, "采纳了恢复出的云 etag（base 有 → 下次 push 不弹假 collision，N8）");
@@ -93,7 +93,7 @@ test("restore 加密件：云端腿按 encrypted 落 encFileName（.zip 容器�
   await cloud.push("A.ora", enc("SECRET"), { encrypted: true });   // 加密件落 A.ora.zip
   assert(await provider.getItemByPath("A.ora.zip"), "加密件在 .zip 路径");
   const trashed = await cloud.trash("A.ora") as { id: string };    // 进 .trash，stamped 名保留 .zip 尾
-  const r = await restore({ fromCloud: true, cloudItemId: trashed.id, targetName: "A.ora", encrypted: true });
+  const r = await restore({ fromCloud: true, cloudRef: trashed.ref, targetName: "A.ora", encrypted: true });
   eq(r.status, "restored", "恢复");
   assert(await provider.getItemByPath("A.ora.zip"), "恢复回 encFileName（A.ora.zip），不是明文 A.ora");
   assert(!(await provider.getItemByPath("A.ora")), "没落到明文路径");
@@ -120,7 +120,7 @@ test("restore both 撞占用：本地先改名，云端腿跟同名落点 → �
   const tk = await local.trash("f", "20260823221500-guid2");
   const moved = await cloud.trash("f", "20260823221500-guid2") as { id: string };
   await local.save("f", enc("LIVE")); await cloud.push("f", enc("LIVE"));   // 两端同名占用者
-  const r = await restore({ trashKey: tk, fromCloud: true, cloudItemId: moved.id, targetName: "f" });
+  const r = await restore({ trashKey: tk, fromCloud: true, cloudRef: moved.ref, targetName: "f" });
   eq(r.name, "f [20260823-221500]", "两腿同一个改名落点");
   eq(new TextDecoder().decode(await toU8(await local.get("f"))), "LIVE", "本地占用者不动");
   eq(await (await cloud.pull("f"))!.blob.text(), "LIVE", "云端占用者不动");

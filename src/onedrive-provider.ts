@@ -60,7 +60,9 @@ export interface RawGraphItem {
 function toItem(it: RawGraphItem | null | undefined): CloudItem | null {
   if (!it) return null;
   return {
-    id: it.id,
+    // ref ← Graph item id：OneDrive 的 ref 恰好=Graph id（改名/移动不作废）——那是**赠品不是契约**，
+    //   消费方只能按 CloudItem.ref 的行李牌语义用（types.ts），绝不依赖其跨改名稳定性。
+    ref: it.id,
     name: it.name as string,
     size: it.size || 0,
     eTag: it.eTag as string,
@@ -80,8 +82,8 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider {
   return {
     list,
     getItemByPath,
-    download: (id: string) => graph.downloadItemBlob(id),
-    downloadRange: (id: string, offset: number, length: number) => graph.downloadItemRange(id, offset, length),
+    download: (ref: string) => graph.downloadItemBlob(ref),
+    downloadRange: (ref: string, offset: number, length: number) => graph.downloadItemRange(ref, offset, length),
     // graph.js 是 Blob 原生（按 .size 选简单/分块路径、用 .slice 切块）；lib 把字节归一成 Uint8Array。
     // 必须在这道接缝转回 Blob——Uint8Array.size===undefined → undefined<=4MB 为 false → 永远走分块、
     // while(0<undefined) 一个 chunk 都不传 → 上传 0 字节占位还回 etag（postmortem 2026-06-05 根因）。
@@ -91,13 +93,13 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider {
     },
     // 文件硬删。⚠ 2026-08-25 修：旧版 `(id) => graph.deleteItem(id)` 把 eTag 吞了——purge 的 If-Match
     //   （v435 立的硬删守卫）从没到过 Graph，mock 比真机严（mock 校验 If-Match、真机根本没收到）。透传。
-    delete: (id: string, eTag?: string) => graph.deleteItem(id, eTag),
+    delete: (ref: string, eTag?: string) => graph.deleteItem(ref, eTag),
     // 删空夹（唯一文件夹删除面）：护栏在 folder-delete 深模块，If-Match folder etag best-effort。
-    deleteEmptyFolder: (path: string) => deleteEmptyFolderVia(getItemByPath, list, (id, etag) => graph.deleteItem(id, etag), path),
+    deleteEmptyFolder: (path: string) => deleteEmptyFolderVia(getItemByPath, list, (ref, etag) => graph.deleteItem(ref, etag), path),
     ensureFolder: (path: string) => graph.ensureSubfolder(path),
-    move: (id: string, folderId: string, opts: MoveOpts = {}) => graph.moveItemToFolder(id, folderId, opts).then(toItem) as Promise<CloudItem>,
-    copy: (id: string, folderId: string, newName: string) => graph.copyItemToFolder(id, folderId, newName).then(toItem) as Promise<CloudItem>,
-    rename: (id: string, newName: string, eTag?: string | null) => graph.renameItem(id, newName, eTag).then(toItem) as Promise<CloudItem>,
-    getApprootId: () => graph.getApprootId(),
+    move: (ref: string, folderRef: string, opts: MoveOpts = {}) => graph.moveItemToFolder(ref, folderRef, opts).then(toItem) as Promise<CloudItem>,
+    copy: (ref: string, folderRef: string, newName: string) => graph.copyItemToFolder(ref, folderRef, newName).then(toItem) as Promise<CloudItem>,
+    rename: (ref: string, newName: string, eTag?: string | null) => graph.renameItem(ref, newName, eTag).then(toItem) as Promise<CloudItem>,
+    getApprootRef: () => graph.getApprootId(),
   };
 }
