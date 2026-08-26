@@ -7,7 +7,7 @@
 
 ## 1. 拍板记录（user 2026-08-25）
 
-1. **A2/A3 事务收敛**：`idb-store.ts` 三种事务形状 → 一个 helper：readwrite resolve 只认 `t.oncomplete`，reject 接 `t.onerror` + `t.onabort`（QuotaExceededError 走 reportStoreError）；readonly 同 helper。防回归：① 语法扫描测试（`db.transaction` 只许在 helper 内，抄 ifmatch-guard 手法）；② 真浏览器夹具从 tag `opus-round-20260821-before-rollback` 取 `tools/idb-tx-commit-check.mjs` 当参考重造（当晚变异测试判定诚实）；**不 vendor fake-indexeddb**（quota abort 模拟不可信，假绿危险）。GUIDELINE 重写正确版并记冤史。→ patch **0.3.6**（无 exports 变化）。
+1. **A2/A3 事务收敛**：`idb-store.ts` 三种事务形状 → 一个 helper：readwrite resolve 只认 `t.oncomplete`，reject 接 `t.onerror` + `t.onabort`（QuotaExceededError 走 reportStoreError）；readonly 同 helper。防回归：① 语法扫描测试（`db.transaction` 只许在 helper 内，抄 ifmatch-guard 手法）；② 真浏览器夹具从 tag `opus-round-20260821-before-rollback` 取 `tools/idb-tx-commit-check.mjs` 当参考重造（当晚变异测试判定诚实）；**不 vendor fake-indexeddb**（quota abort 模拟不可信，假绿危险）。GUIDELINE 重写正确版并记冤史。→ patch **0.3.6**（无 exports 变化）。**已落地 v0.3.6（2026-08-26，Claude Fable 5）**：tx() 唯一入口 + `test/idb-tx-guard.test.ts` + `tools/idb-tx-commit-check.mjs`（真浏览器两组全过；变异自检——dist 改回谎报形状夹具变红——通过）；api/ 零 diff。
 2. **`dispose({ drain: true })`**：停 watcher、drain in-flight push、断 IDB 连接、拒后续调用。exports 门牌变更。
 3. **dirty facet（聚合，别散一地）**：`files.dirty` 一个门面：`count(): Promise<number>`（只返标量，与 usage 红线同口径，bool=count>0 白送）+ `pushAll(): Promise<{ pushed: number; failed: string[] }>`（绿灯门「先推完」按钮的执行体；failed 返名字是**错误报告**不是列举面，量级=失败数）。⚠ pushAll 的底层「不开文档推 dirty 项」路径现状是否存在**未核**——实现前查明，缺则此门面即其新家。
 4. **多账号防御三件套（宣发前铺路，不做 UI）**：① provider 构造显式携带 homeAccountId，store 内部永不问「现在谁登录着」；② registry 的 onedrive 行存账号 id；③ MSAL 取 token 一律带 account 参数。邻域约束不动：personal-account-only、翻 audience 必须连 authority 一起改。
