@@ -43,9 +43,17 @@
 
 **id 选型（悬）**：方案 A = path-as-id（改名即换 id，语义文档化）vs 方案 B = session 句柄表（id=现铸 token→内存 Map 到句柄，跨 session 失效）。§4 审计定破坏面后拍。
 
-## 4. id 消费点审计（回填中）
+## 4. id 消费点审计（2026-08-25 回填，全库逐点核过）
 
-（Explore agent 扫描中：id 持久化点 / 跨操作关联 / 「改名后 id 不变」依赖 / eTag 回采现状；结果回填此节，选型据此拍板。）
+**结论：核心引擎对 id 稳定性的依赖 = 零。** `src/listing.ts:32` 本来就把「身份 = approot 相对路径，itemId/内容哈希均否决」写成红线，全库贯彻：所有 mutation 返回值只取 `.eTag` 从不复用 `.id`；同一性判定一律 `_find`（按 path）+ eTag。离线队列/trash 记录/staging 账本全部只存 name+eTag，**一个 id 都不持久**。
+
+- **唯一持久化 id**：`create-store.ts:428` 把 `id` 写进 dir-index-cache，唯一读者 = SW 流式网关（`sw/gateway.ts:81-86,128`，按名免 Graph 往返拉分片）。
+- **id 跨操作关联窗口**最长的两处：回收站 list→用户点击（秒~分钟；当前只处理 412 未处理 404——这在 OneDrive 下同样不安全，属预存小洞）；download-session 会话期钉 item（promote 腿已有按名重验兜底，read/prefetch 腿硬失败）。
+- **方案 A（path-as-id）破坏面**：核心引擎 0 处必改；SW 网关补「id 解析失败→丢缓存重解析一次」；404 收敛进「已被别处动过」错误族（顺手把预存小洞一起堵）；provider 契约文档写清 id 语义。
+- **方案 B（session 句柄表）破坏面**：SW 跨 JS 上下文拿不到页面的句柄表（整条 SW 链只能退化成按名兜底）；**失败模式更危险**——旧 key 在新 session 可能被复用 → 解析到**别的文件**而不是干净失败；另需句柄表 GC（watchFolder 每刷新全量发 item，表无限涨）。
+- 共同隐含契约（folder provider 必须满足）：同 session 无外部改名时同文件 id 恒定（contract test 钉着）；文件夹 id 与文件 id 同命名空间（ensureFolder/getApprootId 返回值要能当 move/copy 的目标参数）。
+
+**选型建议（AI 推荐，⚠ 待 user 拍板）：方案 A，path-as-id**——「改名即换 id」文档化；与 store 宪法（身份=path）同构，B 全弃。配套三件：SW 网关失效重解析、404 错误族收敛、契约文档 id 语义节。
 
 ## 5. 后续
 
