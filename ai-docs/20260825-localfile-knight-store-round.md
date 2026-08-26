@@ -56,6 +56,20 @@
 **选型（user 2026-08-25 拍板）：方案 A，path-as-id**——「改名即换 id」文档化；与 store 宪法（身份=path）同构，B 弃。配套三件：SW 网关失效重解析、404 错误族收敛、契约文档语义节。
 **改名（user 同点拍板）：`id` 字段更名为 `ref`**——名字必须说明行李牌性（opaque reference：同 session 无外部改动时有效；**非身份**；改名/移动后可换；身份=path）。CloudItem.ref + provider 全方法参数同改，OneDrive provider 的 ref 恰好稳定=Graph id（那是地板之上的赠品，消费方不得依赖）。随 0.4.0 exports 批次一起过目。本地磁盘改名裂卡=既有 wart E 同族（低概率、分叉自愈），文档化不修。
 
-## 5. 后续
+## 5. 缓存姿态（user 2026-08-25 拍板）
 
-宪法修订案（MASTER §A：IDB 降级、无地环境轴、folder backend 红线映射、拷贝即分叉）待本文定稿后起草，user 逐行过目。实现顺序：0.3.6（A2/A3）→ 0.4.0（dispose+dirty+多账号形状）→ folder provider。
+**「folder 就是另一朵云」**：folder provider 走与云完全同一台机器（IDB 本地腿照常），引擎零特判；安全性与云图库平价不降。依据：会咬人的 divergence 只有 dirty-vs-源，与云模式同一套红线管辖；clean 缓存陈旧被打开时 freshness 检查（永不跳过红线）杀掉。「clean 字节不值得缓存」= post-v1 优化旋钮（provider 标记重取微秒级）；无缓存全案 park，不在红线区做定制手术。folder 模式 dirty 不需活过 session（无离线 + 图库退出自动 ctrl+s）——此事实是旋钮的将来依据，不是 v1 特判的理由。
+
+## 6. MASTER / share-file-model 宪法修订案（草案，⚠ 逐条待 user 过目后才动家族 doc）
+
+1. **IDB 永不为家**（§A 新一行）：IDB 三种合法角色 = 图库缓存（clean 可弃）/ crash-shadow（best-effort）/ device-local 登记（registry/句柄）。「dirty 永不被驱逐」限定为**我方逻辑**承诺；浏览器整源驱逐不在控制内（A1/A6）——契约 = dirty 窗口最小化（退出自动推）+ attach gallery 时 persist() + 按最坏假设设计。
+2. **share-file-model Home 表修订**：「accountless 文件家住 IDB、never evict」一行 superseded——accountless 的家 = 用户文件系统（文件 / folder gallery）；ScratchPad 孤儿 workbench 行保留（其角色即 crash-shadow）。
+3. **folder provider 红线映射**（§A 新节）：etag→(mtime,size)+懒仲裁 hash（hash 永不升格身份）；If-Match→读-比-写（TOCTOU 毫秒窗文档化，唯一并发写手=云盘客户端）；删除=.trash→源内子文件夹（资源管理器可见）；**synced-folder 跨机仲裁委托云盘客户端（冲突副本档位，低于 Graph If-Match）——档位差异必须文档化**。
+4. **一源一历史 + 拷贝即分叉**（文件级与 gallery 级统一）：禁止任何源内身份标记（0607 判决延伸到 gallery 尺度）；registry（per-gallery、device-local、永不同步）≠ 0607 否决的 registry（per-file、跨设备同步）——ADR 记区分。
+5. **provider item `ref` 语义**：opaque reference 非身份，同 session 无外部改动有效，改名/移动可换；身份=path。改名裂卡 = wart E 同族接受。
+6. **多实例**：`${appId}.${databaseId}` 每源一实例一库；锁/键一律带源命名空间。
+7. 指针行：无地环境轴、一画一家、两模式详 WeebPaint `ai-docs/20260825-localfile-knight-grill-verdicts.md`（app 级宪法，家族 doc 只挂指针不复制）。
+
+## 7. 实现顺序
+
+0.3.6（A2/A3 收敛）→ 0.4.0（dispose + dirty facet + `id`→`ref` + provider 多账号形状；exports 打包一次过目）→ folder provider → MASTER 修订落地（§6 获批后）。
