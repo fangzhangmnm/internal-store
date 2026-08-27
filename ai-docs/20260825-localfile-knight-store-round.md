@@ -16,7 +16,7 @@
 
 ## 2. 已拍的 provider 契约纪律
 
-- **eTag = `${mtime}-${size}`**；懒仲裁 hash 只在可疑差异时算（mtime 变 size 同/粗粒度平台），**永不升格为身份**。
+- **eTag = `${mtime}-${size}`**；懒仲裁 hash 只在可疑差异时算（mtime 变 size 同/粗粒度平台），**永不升格为身份**。→ **2026-08-27 定案 park（ADR-0025）**：真机观察到假冲突才做；落点=markSynced 持久 base hash；eTag 拆解捷径永久禁止。
 - **eTag 回采**：每个 mutation 返回新 item——mtime 必须在 `writable.close()` **之后**重读（mtime 在 close 时刻才定；提前读=回采到旧值=谱系中毒假冲突，2026-06 改名 bug 同族）。
 - **If-Match 等价物 = 读-比-写**，TOCTOU 毫秒窗进已知失败清单（唯一并发写手=云盘桌面客户端）；语法护栏同 ifmatch-guard：裸写路径=测试红。
 - **权限中途过期**（NotAllowedError）：入队 + surfaced，只在用户手势 re-request，后台绝不弹授权。
