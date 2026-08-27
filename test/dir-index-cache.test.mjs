@@ -19,7 +19,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 const UI = { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {}, onReplayStatus: () => {} };
 
 function mkStore({ provider = createMockProvider(), local = createMockLocal(), kv = memKv(), signedIn = () => true, online = () => true } = {}) {
-  const store = createStore({
+  const store = createStore({ persistence: "none",
     appId: "test", provider, local, kv, ui: UI,
     validateAdopt: () => true, isOnline: online, signedIn, skipMigration: true,
   });

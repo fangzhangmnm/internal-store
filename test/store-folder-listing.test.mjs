@@ -166,7 +166,7 @@ describe("watchFolder · 网盘模型集成", () => {
   function mkStore({ online = true, signedIn = true } = {}) {
     const errors = [];
     const local = createMockLocal();
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test",
       provider: createMockProvider(),
       ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: (e) => errors.push(e) },
@@ -234,7 +234,7 @@ describe("watchFolder · 网盘模型集成", () => {
 describe("改身份/新建 的目标占用护栏", () => {
   function mkStore() {
     const local = createMockLocal();
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test",
       provider: createMockProvider(),
       ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} },
@@ -291,7 +291,7 @@ describe("离线 move（删+建，tag 走法）", () => {
     const local = createMockLocal();
     const provider = createMockProvider();
     let online = true;
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test",
       provider, local, kv: memKv(),
       ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {}, onReplayStatus: () => {} },
@@ -356,7 +356,7 @@ describe("离线删文件夹（排队/隐藏/回线删/content-wins/eager-cancel
     const provider = createMockProvider();
     const kv = memKv();
     let online = true;
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test", provider, local, kv,
       ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {}, onReplayStatus: () => {} },
       validateAdopt: () => true, isOnline: () => online, signedIn: () => online, skipMigration: true,
@@ -430,7 +430,7 @@ describe("open 纯云端项 · offlineEscape 出口", () => {
     // 云端有这个文件，但 download 永不 resolve（模拟「在线但 OneDrive 不可达」）
     provider._seed("cloudonly", new TextEncoder().encode("REMOTE"));
     provider.download = () => new Promise(() => {});
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test", provider,
       ui: {
         busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {},

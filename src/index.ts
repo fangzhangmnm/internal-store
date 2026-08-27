@@ -7,6 +7,10 @@
 //   要用的东西这里没导出 → 说明公开面缺了，补这里的 export（并想清楚该不该暴露），别绕过封口。
 /** 创建 store 的唯一入口（薄组合根：provider → 装配深模块 → 暴露 file / collection / files 面）。 */
 export { createStore, ReadOnlyFilesError, StoreDisposedError } from "./create-store.ts";
+// persist 三件套（user 2026-08-27 拍板，全案 = persistence.ts 头注释）：执行体只准在用户手势时刻调；
+//   感知面走 store.files.persistence()；StoreConfig.persistence 必填表态。库永不自动调 persist()。
+export { requestStoragePersistence, queryStoragePersistence } from "./persistence.ts";
+export type { PersistenceState, StorageManagerLike } from "./persistence.ts";
 export { CloudNetworkError } from "./errors.ts";   // 网络层失败的类型化封装（app 按 name 换 i18n 人话文案；2026-08-25）
 export { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（ref 失效 404 收敛；app 提示刷新列表。2026-08-26）
 /** 主门牌类型：配置（StoreConfig）、UI bundle（StoreUI）、文件对象（RawFile/ZipFile）、store 本体（Store）、at-rest 密文（EncryptedBlob）。 */

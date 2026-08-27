@@ -193,7 +193,7 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const provider = createMockProvider();
     const local = createMockLocal();
     const staging = memStaging();
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test", provider, local, kv: memKv(), staging, stagingChunkBytes: 4, ui: UI,
       validateAdopt: () => true, isOnline: () => true, signedIn: () => true, skipMigration: true,
     });
@@ -249,7 +249,7 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const staging = memStaging();
     let online = true;
     const errors = [];
-    const store = createStore({
+    const store = createStore({ persistence: "none",
       appId: "test", provider, local, kv: memKv(), staging, stagingChunkBytes: 4,
       ui: { ...UI, reportError: (e) => errors.push(String(e?.message ?? e)) },
       validateAdopt: () => true, isOnline: () => online, signedIn: () => true, skipMigration: true,

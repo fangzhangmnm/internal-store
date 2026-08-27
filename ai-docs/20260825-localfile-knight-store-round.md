@@ -101,3 +101,18 @@
   权限中途过期（NotAllowedError）路径。合批到下次真机 session。
 - 悬而未做（非本批）：懒仲裁 hash（post-v1 旋钮）；app 层句柄持久化/权限 re-request 手势；WeebPaint 接线归无地 P 系。
 - exports 增量（待过目 → 0.5.0 审版门）：`createFolderProvider` + `FolderDirHandle`/`FolderFileHandle`/`FolderFile` 四条，别无变化。
+
+### 0.6.0 批：persist 三件套（2026-08-27 user 拍板「三件套同意，排版」；**已实现待审版**）
+
+- 议题：`navigator.storage.persist()` 要不要库层强制/提醒。**定性（别翻案）**：库**永不**自动调 persist()——
+  Firefox 真弹窗（boot 自动调=违「权限只在用户手势」纪律）；Chromium 从不弹窗、engagement 启发式（boot 调=空枪）；
+  Safari ITP 不理它；且 persist 是 §A 保命三件套里最弱的降概率层（真承重=dirty 窗口短+正本不进 IDB），
+  库内静默强制=谎报承重。库能上代码保证的是「必表态、必感知」，保证不了「必成功」。persist 是 origin 级
+  （同 origin 兄弟共享）→ 调用时机归宿主层。
+- 三件套落地（`src/persistence.ts`）：① **感知强制**——boot 纯查询 `persisted()`（零弹窗），未持久 funnel 一次
+  （log 级）+ 只读面 `files.persistence(): PersistenceState`；② **接线强制**——`StoreConfig.persistence`
+  **必填**（`"app-managed" | "none"`，编译期+运行时双门，validateAdopt/appId 同手法）；③ **执行体**——
+  `requestStoragePersistence()`（feature-detect→已持久不重复调→persist→三态），app 手势时刻调
+  （宪法「挂上图库就 persist()」的落点）。结果**永不**改变 store 行为。
+- 测试 +3（375 全绿）；exports 增量：StoreConfig.persistence（**消费方 breaking：装配加一行**）+
+  files.persistence + `requestStoragePersistence`/`queryStoragePersistence` + `PersistenceState`/`StorageManagerLike`。

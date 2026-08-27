@@ -31,6 +31,7 @@ import { runStoreMigrations, storeNamespace } from "./migration.ts";
 import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
 import { setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts";
+import { queryStoragePersistence, type PersistenceState } from "./persistence.ts";
 
 // ── ui bundle（Model B，README.md §7）──
 /** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
@@ -75,6 +76,14 @@ export interface StoreConfig {
    *  `${appId}.${databaseId}`：IndexedDB 库名 + 全部 localStorage 键前缀都据它隔离（namespacedKv 统一加）。
    *  **同 origin 的兄弟 PWA 必须用不同 appId**。 */
   appId: string;
+  /** ⚠ **必填**（persist 三件套之②，user 2026-08-27 拍板；全案见 persistence.ts 头注释）：
+   *  对 `navigator.storage.persist()` 的接线表态——编译期逼装配者面对这件事一次，噪音一行，遗忘不可能。
+   *    "app-managed" = app 承诺在**自己的用户手势时刻**（挂图库/首存/安装后）调 requestStoragePersistence()
+   *      ——宪法「挂上图库就 persist()」的落点。库 boot 自动 persisted() 纯查询（零弹窗），未持久 funnel 一次（log 级）。
+   *    "none"        = 显式放弃接线（测试 / 只读镜像消费者 / 明知不值当的场景），库不查不扰。
+   *  ⚠ 库**永不**自动调 persist()（Firefox 真弹窗违手势纪律；Chromium boot 时调=启发式空枪；Safari ITP 不理它）；
+   *  ⚠ persist 结果**永不**改变 store 行为——它是保命三件套里最弱的降概率层，真承重 = dirty 窗口短 + 正本不进 IDB。 */
+  persistence: "app-managed" | "none";
   /** 同一 app 内的 store 实例标识（默认 "defaultStore"）。想开**多个互不打架的 store**（不同数据集）
    *  → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。 */
   databaseId?: string;
@@ -295,8 +304,18 @@ export function createStore(config: StoreConfig) {
     return out as T;
   }
   if (!appId) throw new Error("createStore: appId 必填——同 origin 兄弟 PWA 隔离的红线（每个 app 建自己的 IDB 库）");
+  if (config.persistence !== "app-managed" && config.persistence !== "none")
+    throw new Error('createStore: persistence 必填（"app-managed" | "none"）——persist() 接线必须显式表态（2026-08-27 拍板，见 persistence.ts）');
   // 深模块统一错误上报接上 ui.reportError（深模块 import reportStoreError 直接调，不必线穿 ui）。store 侧不 log。
   setStoreErrorReporter((err, level) => ui.reportError(err, level));
+  // persist 三件套之①（感知强制）：boot 纯查询 persisted()——零弹窗零 consent；未持久 funnel 一次（log 级，
+  //   funnel 不扰民；badge 与否是 app 产品决定，感知面 = files.persistence()）。"none" = 已表态放弃，不查不扰。
+  if (config.persistence === "app-managed") {
+    void queryStoragePersistence().then((st) => {
+      if (st.supported && !st.persisted)
+        ui.reportError(new Error("navigator.storage: origin not persisted yet — wire requestStoragePersistence() at a user gesture (best-effort layer, never load-bearing)"), "log");
+    });
+  }
   const ns = storeNamespace(appId, databaseId);   // 命名空间根 `${appId}.${databaseId}`：IDB 库名 + 全部 localStorage 键前缀
   // **窄腰 choke point**：包一层 namespacedKv，所有键自动落 `${ns.root}.`；各深模块只用相对键（files.*/collections.*/settings.*/internal.*）。
   const kv = namespacedKv(rawKv, ns.root);
@@ -977,6 +996,9 @@ export function createStore(config: StoreConfig) {
     files: rejectAfterDispose({
       /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
       nameOccupied: (name: string): Promise<boolean> => nameOccupied(name).then((o) => o != null),
+      /** persist 感知面（三件套之①）：纯查询快照（零弹窗，任何时刻可调）——app 画「本地缓存未受保护」badge 用。
+       *  执行体（手势时刻调）= 顶层 export 的 requestStoragePersistence()；档位定性见 persistence.ts 头注释。 */
+      persistence: (): Promise<PersistenceState> => queryStoragePersistence(),
       // ── dirty facet（0.4.0，2026-08-25 拍板 §1.3：聚合门面，别散一地）。绿灯门「先推完」按钮的读数与执行体。
       //   底层「不开文档推 dirty 项」路径此前**不存在**（uploadReplay 只管 never-synced float；已同步的
       //   dirty 只有下次 save 才补推）——按拍板「缺则此门面即其新家」，建在 pushLocalBytes（vetted push）之上。

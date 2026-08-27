@@ -25,6 +25,7 @@ import "./ifmatch-guard.test.ts";   // 2026-08-25 全库 If-Match 语法护栏
 import "./idb-tx-guard.test.ts";   // 2026-08-26 IDB 事务形状语法护栏（0.3.6 收敛；行为面=tools/idb-tx-commit-check.mjs）
 import "./store-dispose-dirty.test.ts";   // 2026-08-26 0.4.0 批：dispose + dirty facet + CloudStaleRefError
 import "./folder-provider.contract.test.ts";   // 2026-08-26 folder provider（「folder 就是另一朵云」；fake FSA=Linux 口径+无 native move）
+import "./persistence.test.ts";   // 2026-08-27 persist 三件套（必填表态+纯查询感知+手势执行体；库永不自动调 persist()）
 import "./delete.test.ts";
 import "./trash.test.ts";
 import "./trash-merge.test.ts";

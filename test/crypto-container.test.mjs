@@ -251,7 +251,7 @@ describe("getEncryptedBlob · at-rest 密文原样读（v415，E1）", () => {
   const { createMockLocal } = await import("../src/testing/mock-local.ts");
   const { memKv } = await import("../src/cloud-sync.ts");
   const local = createMockLocal();
-  const store = createStore({
+  const store = createStore({ persistence: "none",
     appId: "test", provider: createMockProvider(),
     ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} },
     validateAdopt: () => true, kv: memKv(), local,
@@ -278,7 +278,7 @@ describe("getEncryptedBlob · at-rest 密文原样读（v415，E1）", () => {
   const { createMockProvider } = await import("../src/testing/mock-provider.ts");
   const { createMockLocal } = await import("../src/testing/mock-local.ts");
   const { memKv } = await import("../src/cloud-sync.ts");
-  const store = createStore({
+  const store = createStore({ persistence: "none",
     appId: "test", provider: createMockProvider(),
     ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} },
     validateAdopt: () => true, kv: memKv(), local: createMockLocal(),

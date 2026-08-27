@@ -20,7 +20,7 @@ function dumpKv() {
 const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} } as never;
 function mkStore(provider = createMockProvider()) {
   const kv = dumpKv();
-  const store = createStore({
+  const store = createStore({ persistence: "none",
     appId: "wp", provider, ui: STUB_UI,
     validateAdopt: () => true, kv, local: createMockLocal(),
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,

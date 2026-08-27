@@ -27,7 +27,7 @@ const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolv
 function mkStore(kv: ReturnType<typeof dumpKv>, provider = createMockProvider(), databaseId?: string) {
   return {
     provider,
-    store: createStore({
+    store: createStore({ persistence: "none",
       appId: "wp", databaseId, provider, ui: STUB_UI,
       validateAdopt: () => true, kv, local: createMockLocal(),
       fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,

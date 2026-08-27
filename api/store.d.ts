@@ -302,6 +302,9 @@ export declare function createStore(config: StoreConfig): {
     files: {
         /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
         nameOccupied: (name: string) => Promise<boolean>;
+        /** persist 感知面（三件套之①）：纯查询快照（零弹窗，任何时刻可调）——app 画「本地缓存未受保护」badge 用。
+         *  执行体（手势时刻调）= 顶层 export 的 requestStoragePersistence()；档位定性见 persistence.ts 头注释。 */
+        persistence: () => Promise<PersistenceState>;
         dirty: {
             /** 有未推字节的文件**数**。⚠ 只返标量、永不返名字（与 usage 红线同口径——不是列举面，列举唯一面 =
              *  watchFolder）；bool 用 `count() > 0` 白送。口径 = durable dirty 轨（任何 tab 的未推都算）。 */
@@ -703,6 +706,14 @@ export declare interface OneDriveConfig {
     homeAccountId?: string;
 }
 
+/** 持久化状态（纯查询快照）。supported=false 含「环境无 StorageManager」（node/旧浏览器/测试）。 */
+export declare interface PersistenceState {
+    /** 环境支持 navigator.storage.persisted 查询。 */
+    supported: boolean;
+    /** 本 origin 已获持久化（Chromium：storage pressure 下不清 persistent bucket；其余平台语义见头注释）。 */
+    persisted: boolean;
+}
+
 /** pull 的结果：拉到的字节 + 权威 item（H7：分片末响应无 item 时拉权威 etag）+ 建议落地名（撞名 caller 用）。 */
 export declare interface PullResult {
     /** 拉到的字节。 */
@@ -734,6 +745,9 @@ export declare interface PushResult {
     /** 上传后的云端 item。 */
     item: CloudItem | null;
 }
+
+/** 纯查询（零 consent、零弹窗、任何时刻可调）。异常/缺环境 → supported:false（诚实降级，不谎报已持久）。 */
+export declare function queryStoragePersistence(sm?: StorageManagerLike | null): Promise<PersistenceState>;
 
 /** 文件对象（非 zip）。isZip 在编译期分出两种：RawFile 无 getPeek/setPeek。 */
 export declare interface RawFile {
@@ -855,6 +869,11 @@ export declare interface RefreshOpts {
     busy?: Busy;
 }
 
+/** 执行体：**只准在用户手势时刻调**（挂图库/首存/安装后——Firefox 会真弹窗，别在 boot/后台调）。
+ *  已持久 → 直接 granted（不重复打扰）；denied 可下次手势再试（Chromium 启发式会随 engagement 变）。
+ *  ⚠ 无论结果如何都**不得**据此改变数据安全行为（persist 是降概率，不是保证——头注释档位定性）。 */
+export declare function requestStoragePersistence(sm?: StorageManagerLike | null): Promise<"granted" | "denied" | "unsupported">;
+
 /** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
 export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
@@ -909,6 +928,12 @@ export declare interface StagingStore {
     keys(): Promise<string[]>;
 }
 
+/** StorageManager 最小面（参数注入 = 测试 seam；prod 缺省走 globalThis.navigator.storage）。 */
+export declare type StorageManagerLike = {
+    persist?: () => Promise<boolean>;
+    persisted?: () => Promise<boolean>;
+};
+
 /** store 本体类型（createStore 的返回面：file / collection / files / encryption）。 */
 export declare type Store = ReturnType<typeof createStore>;
 
@@ -922,6 +947,14 @@ export declare interface StoreConfig {
      *  `${appId}.${databaseId}`：IndexedDB 库名 + 全部 localStorage 键前缀都据它隔离（namespacedKv 统一加）。
      *  **同 origin 的兄弟 PWA 必须用不同 appId**。 */
     appId: string;
+    /** ⚠ **必填**（persist 三件套之②，user 2026-08-27 拍板；全案见 persistence.ts 头注释）：
+     *  对 `navigator.storage.persist()` 的接线表态——编译期逼装配者面对这件事一次，噪音一行，遗忘不可能。
+     *    "app-managed" = app 承诺在**自己的用户手势时刻**（挂图库/首存/安装后）调 requestStoragePersistence()
+     *      ——宪法「挂上图库就 persist()」的落点。库 boot 自动 persisted() 纯查询（零弹窗），未持久 funnel 一次（log 级）。
+     *    "none"        = 显式放弃接线（测试 / 只读镜像消费者 / 明知不值当的场景），库不查不扰。
+     *  ⚠ 库**永不**自动调 persist()（Firefox 真弹窗违手势纪律；Chromium boot 时调=启发式空枪；Safari ITP 不理它）；
+     *  ⚠ persist 结果**永不**改变 store 行为——它是保命三件套里最弱的降概率层，真承重 = dirty 窗口短 + 正本不进 IDB。 */
+    persistence: "app-managed" | "none";
     /** 同一 app 内的 store 实例标识（默认 "defaultStore"）。想开**多个互不打架的 store**（不同数据集）
      *  → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。 */
     databaseId?: string;

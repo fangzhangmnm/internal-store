@@ -208,6 +208,7 @@ export function createStore(config: StoreConfig): {
     }) => Collection;
     files: {
         nameOccupied: (name: string) => Promise<boolean>;
+        persistence: () => Promise<PersistenceState>;
         dirty: {
             count: () => Promise<number>;
             pushAll: () => Promise<{
@@ -481,6 +482,12 @@ export interface OneDriveConfig {
 }
 
 // @public
+export interface PersistenceState {
+    persisted: boolean;
+    supported: boolean;
+}
+
+// @public
 export interface PullResult {
     blob: Blob;
     item: CloudItem | null;
@@ -503,6 +510,9 @@ export interface PurgeOpts {
 export interface PushResult {
     item: CloudItem | null;
 }
+
+// @public
+export function queryStoragePersistence(sm?: StorageManagerLike | null): Promise<PersistenceState>;
 
 // @public
 export interface RawFile {
@@ -574,6 +584,9 @@ export interface RefreshOpts {
 }
 
 // @public
+export function requestStoragePersistence(sm?: StorageManagerLike | null): Promise<"granted" | "denied" | "unsupported">;
+
+// @public
 export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
 // @public
@@ -617,6 +630,12 @@ export interface StagingStore {
 }
 
 // @public
+export type StorageManagerLike = {
+    persist?: () => Promise<boolean>;
+    persisted?: () => Promise<boolean>;
+};
+
+// @public
 export type Store = ReturnType<typeof createStore>;
 
 // @public
@@ -640,6 +659,7 @@ export interface StoreConfig {
     kv?: Kv;
     local?: LocalCache;
     offlineUploadReplay?: UploadReplayPolicy;
+    persistence: "app-managed" | "none";
     provider: CloudProvider;
     readOnlyFiles?: boolean;
     signedIn?: () => boolean;
