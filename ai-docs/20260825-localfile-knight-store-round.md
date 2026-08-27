@@ -83,7 +83,7 @@
 - 测试：+5（drain/dispose 拒后续/dirty count/pushAll 成败/CloudStaleRefError），364 全绿；真浏览器夹具（连接 memo 后）复跑全过。api/ diff + pack 清单 = 审版材料。
 - **→ v0.4.0 已发（2026-08-26 user 过目批准；tag + gh release）。**
 
-### folder provider 实现记录（2026-08-26，Claude Fable 5；**已实现待审版**——新 exports 未花版本号）
+### folder provider 实现记录（2026-08-26，Claude Fable 5；→ **v0.5.0 已发**，exports 同日 user 过目批准）
 
 - `src/providers/folder.ts`：`createFolderProvider(root) → CloudProvider`，§2 契约逐条落地——eTag=`${mtime}-${size}`；
   回采 mtime 在 `writable.close()` **之后**重读；If-Match=读-比-写（412），blind replace 运行时护栏与 graph 同款；
