@@ -28,6 +28,10 @@ export { createLocalCache } from "./local-cache.ts";
 // provider（云端低层 adapter）：OneDrive（浏览器）/ graph 适配器（可 mock 验）。
 /** config 驱动的完整 OneDrive CloudProvider 工厂（MSAL + Graph + 适配器）。 */
 export { createOneDriveProvider } from "./providers/index.ts";
+// folder provider（2026-08-25 拍板「folder 就是另一朵云」；2026-08-26 落地）：本地文件夹句柄 → CloudProvider，
+//   引擎零特判。句柄类型 = 结构化最小面（浏览器 FileSystemDirectoryHandle 天然满足；见 providers/folder.ts 头注释）。
+export { createFolderProvider } from "./providers/folder.ts";
+export type { FolderDirHandle, FolderFileHandle, FolderFile } from "./providers/folder.ts";
 /** OneDrive auth 状态（initAuth / getAuthState 返回的形状）。 */
 export type { AuthState } from "./providers/auth.ts";   // .h 生成需要可命名（TS4023）；公开面缺了就补这里
 /** 把 Graph transport 翻成库的 CloudProvider 的适配器。 */

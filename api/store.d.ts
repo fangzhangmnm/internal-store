@@ -246,6 +246,10 @@ export declare interface CollectionInitItem {
     value: unknown;
 }
 
+/** 本地文件夹 → CloudProvider（「folder 就是另一朵云」）。root = 用户 picker 授权的目录句柄（approot）。
+ *  浏览器专用；auth/权限生命周期（句柄持久化、re-request 手势）归 app 层。 */
+export declare function createFolderProvider(root: FolderDirHandle): CloudProvider;
+
 /** LocalCache 工厂（prod=IDB）：files/trash/backup 三分区的本地持久层，内容无关、只存不透明 blob。
  *  dbName 必须已带命名空间（createStore 传 `${appId}.${databaseId}`）——同 origin 兄弟 PWA /
  *  多 store 实例隔离，见 idb-store.ts 头注释。 */
@@ -466,6 +470,40 @@ export declare interface FileStream {
 export declare interface FolderDeleteResult {
     /** 四态：deleted/already-gone=终态成功；non-empty=有内容；list-failed=列举失败确认不了空。 */
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
+}
+
+/** 目录句柄最小面。 */
+export declare interface FolderDirHandle {
+    readonly kind: "directory";
+    readonly name: string;
+    getDirectoryHandle(name: string, opts?: {
+        create?: boolean;
+    }): Promise<FolderDirHandle>;
+    getFileHandle(name: string, opts?: {
+        create?: boolean;
+    }): Promise<FolderFileHandle>;
+    removeEntry(name: string, opts?: {
+        recursive?: boolean;
+    }): Promise<void>;
+    values(): AsyncIterable<FolderFileHandle | FolderDirHandle>;
+}
+
+/** getFile() 的返回（浏览器 = File，本身是 Blob）。 */
+export declare interface FolderFile extends Blob {
+    readonly lastModified: number;
+}
+
+/** 文件句柄最小面。move 可选（平台矩阵；缺 → copy-验-删源退路）。 */
+export declare interface FolderFileHandle {
+    readonly kind: "file";
+    readonly name: string;
+    getFile(): Promise<FolderFile>;
+    createWritable(): Promise<{
+        write(data: Blob | Uint8Array): Promise<void>;
+        close(): Promise<void>;
+    }>;
+    /** native move（Chromium：同目录改名 move(name)；跨目录 move(dir, name?) 支持面待真机矩阵）。 */
+    move?(...args: unknown[]): Promise<void>;
 }
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */

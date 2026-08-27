@@ -81,3 +81,23 @@
 - **id→ref**（§4 拍板 + 配套三件）：CloudItem.ref（行李牌 JSDoc 语义节）+ provider 全方法参数 + `getApprootId`→`getApprootRef` + CloudSync/TrashItem/RestoreOpts/PurgeOpts 的 `cloudItemId`→`cloudRef`。**dir-index-cache 持久 JSON 键名保持 `id` 不动**（schema v1 零变更，非持久化结构变更）；SW 网关配套「失效重解析」（range 404 → 丢缓存跳过 dir-index 走 Graph 按名重查一次）；404 收敛 = `CloudStaleRefError`（「已被别处动过」族，restore/purge 落地，预存小洞一起堵）。GraphTransport/RawGraphItem 保留 Graph 域 `id` 命名（wire 形状；OneDrive ref=Graph id 是赠品的文档化边界）。
 - **多账号形状**（§1.4 ①③库侧）：`OneDriveConfig.homeAccountId?` → token source 钉死该账号（auth.getTokenFor：`pca.getAccountByHomeId` + silent 带 account；失败不动全局 activeAccount）；已知局限 = graph token-source 模块级（同页第二 provider 覆盖前者，现状单 provider/页，真多账号并联归将来批次）。② registry 存账号 id = app 侧（WeebPaint），本批不动。
 - 测试：+5（drain/dispose 拒后续/dirty count/pushAll 成败/CloudStaleRefError），364 全绿；真浏览器夹具（连接 memo 后）复跑全过。api/ diff + pack 清单 = 审版材料。
+- **→ v0.4.0 已发（2026-08-26 user 过目批准；tag + gh release）。**
+
+### folder provider 实现记录（2026-08-26，Claude Fable 5；**已实现待审版**——新 exports 未花版本号）
+
+- `src/providers/folder.ts`：`createFolderProvider(root) → CloudProvider`，§2 契约逐条落地——eTag=`${mtime}-${size}`；
+  回采 mtime 在 `writable.close()` **之后**重读；If-Match=读-比-写（412），blind replace 运行时护栏与 graph 同款；
+  ref=path（方案 A，move/rename 后换牌）；大小写解析统一不敏感口径（命中沿用磁盘真实大小写，**逐段**采真名）；
+  move：native `handle.move()` 优先、缺则 copy-先-验-后-删源（字节数核对过才删源）；错误形状 `.status` 404/409/412
+  与 Graph 对齐 → cloud-sync/push 零改动直接工作（§5「另一朵云」引擎零特判，集成冒烟已证）。
+- 句柄类型 = 结构化最小面（`FolderDirHandle`/`FolderFileHandle`/`FolderFile`）：浏览器 FSA 句柄天然满足，
+  node fake 可注入（TS dom lib 对 FSA 异步迭代器覆盖不全是次因）。
+- **列举过滤的落点偏离 §2 草案一处（有意）**：OS 垃圾（desktop.ini/.DS_Store/Thumbs.db/~$*）本层滤 + 判空时视作可清
+  （否则 Windows 自发 desktop.ini 让夹永远删不掉）；`.trash`/`.backup` 等 dot 项本层**照返**——上层 isHidden
+  （listing.ts）是既有唯一滤点，本层再滤会挡住 listTrash 列 `.trash` 内部。
+- 测试 +8（`test/folder-provider.contract.test.ts`）：fake FSA 刻意 Linux 大小写敏感 + 无 native move，逼出不敏感层与
+  copy-验-删源；含 cloud-sync 骑 folder provider 的集成冒烟（push/If-Match/trash 腿）。372 全绿。
+- **真机矩阵待验**（§2 拍板项，node 测不到）：native `move()` 支持面（同夹改名/跨夹）、move 后 mtime 保留行为、
+  权限中途过期（NotAllowedError）路径。合批到下次真机 session。
+- 悬而未做（非本批）：懒仲裁 hash（post-v1 旋钮）；app 层句柄持久化/权限 re-request 手势；WeebPaint 接线归无地 P 系。
+- exports 增量（待过目 → 0.5.0 审版门）：`createFolderProvider` + `FolderDirHandle`/`FolderFileHandle`/`FolderFile` 四条，别无变化。

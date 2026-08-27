@@ -174,6 +174,9 @@ export interface CollectionInitItem {
 }
 
 // @public
+export function createFolderProvider(root: FolderDirHandle): CloudProvider;
+
+// @public
 export function createLocalCache(dbName: string): LocalCache;
 
 // @public
@@ -305,6 +308,50 @@ export interface FileStream {
 // @public
 export interface FolderDeleteResult {
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
+}
+
+// @public
+export interface FolderDirHandle {
+    // (undocumented)
+    getDirectoryHandle(name: string, opts?: {
+        create?: boolean;
+    }): Promise<FolderDirHandle>;
+    // (undocumented)
+    getFileHandle(name: string, opts?: {
+        create?: boolean;
+    }): Promise<FolderFileHandle>;
+    // (undocumented)
+    readonly kind: "directory";
+    // (undocumented)
+    readonly name: string;
+    // (undocumented)
+    removeEntry(name: string, opts?: {
+        recursive?: boolean;
+    }): Promise<void>;
+    // (undocumented)
+    values(): AsyncIterable<FolderFileHandle | FolderDirHandle>;
+}
+
+// @public
+export interface FolderFile extends Blob {
+    // (undocumented)
+    readonly lastModified: number;
+}
+
+// @public
+export interface FolderFileHandle {
+    // (undocumented)
+    createWritable(): Promise<{
+        write(data: Blob | Uint8Array): Promise<void>;
+        close(): Promise<void>;
+    }>;
+    // (undocumented)
+    getFile(): Promise<FolderFile>;
+    // (undocumented)
+    readonly kind: "file";
+    move?(...args: unknown[]): Promise<void>;
+    // (undocumented)
+    readonly name: string;
 }
 
 // @public
