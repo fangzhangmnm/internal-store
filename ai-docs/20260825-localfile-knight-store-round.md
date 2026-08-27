@@ -102,7 +102,7 @@
 - 悬而未做（非本批）：懒仲裁 hash（post-v1 旋钮）；app 层句柄持久化/权限 re-request 手势；WeebPaint 接线归无地 P 系。
 - exports 增量（待过目 → 0.5.0 审版门）：`createFolderProvider` + `FolderDirHandle`/`FolderFileHandle`/`FolderFile` 四条，别无变化。
 
-### 0.6.0 批：persist 三件套（2026-08-27 user 拍板「三件套同意，排版」；**已实现待审版**）
+### 0.6.0 批：persist 三件套（2026-08-27 user 拍板「三件套同意，排版」；→ **v0.6.0 已发**，exports 同日过目批准）
 
 - 议题：`navigator.storage.persist()` 要不要库层强制/提醒。**定性（别翻案）**：库**永不**自动调 persist()——
   Firefox 真弹窗（boot 自动调=违「权限只在用户手势」纪律）；Chromium 从不弹窗、engagement 启发式（boot 调=空枪）；
