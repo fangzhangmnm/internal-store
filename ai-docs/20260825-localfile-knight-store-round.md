@@ -60,7 +60,7 @@
 
 **「folder 就是另一朵云」**：folder provider 走与云完全同一台机器（IDB 本地腿照常），引擎零特判；安全性与云图库平价不降。依据：会咬人的 divergence 只有 dirty-vs-源，与云模式同一套红线管辖；clean 缓存陈旧被打开时 freshness 检查（永不跳过红线）杀掉。「clean 字节不值得缓存」= post-v1 优化旋钮（provider 标记重取微秒级）；无缓存全案 park，不在红线区做定制手术。folder 模式 dirty 不需活过 session（无离线 + 图库退出自动 ctrl+s）——此事实是旋钮的将来依据，不是 v1 特判的理由。
 
-## 6. MASTER / share-file-model 宪法修订案（草案，⚠ 逐条待 user 过目后才动家族 doc）
+## 6. MASTER / share-file-model 宪法修订案（**已落地**：MyPWAPatterns commit 1f2ed58（2026-08-26 无地骑士 session，user 逐条批）；2026-08-27 user 复核追认。§6.4 的「ADR 记区分」= ADR-0024（2026-08-27 补，user 批准）。§7 全部完结。）
 
 1. **IDB 里永远不放任何东西的正本**（§A 新一行）。它只干三件事：图库的本地缓存（丢了从源重拿）、崩溃备份（尽力而为）、这台设备自己的记事本（链接过哪些图库、句柄）。「dirty 永不被驱逐」这条红线管的是**我们自己的代码**——绝不主动清没推完的画；但**浏览器**有权存储紧张时把整个库端掉，这拦不住（A1/A6）。真正的保命三件套：让「没推上去」的时间越短越好（退出自动推）、挂上图库就向浏览器申请「别清我」（persist()）、写代码永远假设 IDB 明天就没了。
 2. **share-file-model Home 表修订**：「accountless 文件家住 IDB、never evict」一行 superseded——accountless 的家 = 用户文件系统（文件 / folder gallery）；ScratchPad 孤儿 workbench 行保留（其角色即 crash-shadow）。
