@@ -970,6 +970,9 @@ export function createStore(config: StoreConfig) {
   const _collections = new Map<string, Collection>();
   /** collection 工厂：synced（默认）走 collections 实例 + 云端 scaffold；{local:true} = local-only 变体
    *  （cloudless：只走 IDB 本地缓存、永不碰云、不 scaffold）——给设备本地设置/状态用。
+   *  ⚠ `{local:true}` **已标废弃**（2026-08-27，WeebPaint P5 escalation，详 ai-docs/20260827-deprecation-cloudless-collection.md）：
+   *  device 本地字段归 app 侧 localStorage 器官，store 只管带云同步的持久化（单一职责）。新消费不许再接；
+   *  物理移除钉死在 WeebPaint P5 收货落地之后的版本（顺序红线——现在删会断在跑的消费者）。
    *  opts.getInitData：仅当这份 collection 的 json 不存在（新库）时调，填初始值（uat=1；store 内容无关，app 域构造 [{id, value}]）。
    *  **单例**：app schema 的全局单例命名空间——同名第二次返**同一对象**，opts 以首次为准（后续调忽略 opts 差异）。 */
   function collection(name: string, opts: { manual?: boolean; local?: boolean; getInitData?: CollectionConfig["getInitData"] } = {}): Collection {

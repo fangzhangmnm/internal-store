@@ -222,7 +222,10 @@ export declare interface CollectionConfig {
     local?: Pick<LocalCache, "save" | "get" | "exists">;
     /** 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。 */
     localWriteDelayMs?: number;
-    /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。 */
+    /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。
+     *  @deprecated 2026-08-27 标记废弃（WeebPaint P5 escalation，ai-docs/20260827-deprecation-cloudless-collection.md）：
+     *  device 本地字段的归宿 = app 侧 localStorage 器官，store 只管带云同步的持久化（单一职责，user 原话）。
+     *  ⚠ 顺序红线：物理移除必须等 WeebPaint P5 收货落地之后的版本——现在删会断在跑的 local-user-preference / local-app-state。 */
     cloudless?: boolean;
     /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;

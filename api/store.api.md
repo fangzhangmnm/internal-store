@@ -149,6 +149,7 @@ export interface Collection {
 // @public
 export interface CollectionConfig {
     cloud: CloudSync;
+    // @deprecated
     cloudless?: boolean;
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
     isOnline?: () => boolean;
