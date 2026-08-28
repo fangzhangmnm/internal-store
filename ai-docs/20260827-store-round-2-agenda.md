@@ -32,6 +32,14 @@ app 侧 P7 流程 = 清 registry + 全缓存库 + localStorage + crash/revert ri
 清零 = WeebPaint 侧工单（评估播种期是否可关：存量设备都升过 0.11.10+ 后 legacy 播种可退役）。**等 WeebPaint 清零信号再删**，顺序红线见 deprecation doc。
 **（2026-08-27 状态更新，edited by Claude Fable 5）**：WeebPaint 侧评估已出（该仓 `ai-docs/20260827-cloudless-seeding-retirement-eval.md`）——**播种期未到关点，清零信号未发**。两个门：①WeebPaint 真机批跑完（每台自家设备 boot 一次 ≥0.11.11）；②prod 升上 0.11.x 且存量 prod 设备升级 boot 过（现 prod=v0.10.33 无播种代码）。本议题继续等信号，别抢跑。
 
+### 4′. encryption 独立出口（WeebPaint ambient 退役轮发现，2026-08-27，edited by Claude Fable 5）
+
+`store.encryption`（isEncryptedBlob/tryDecryptEncryptedBlob/isEncryptedPeekBlob）是纯内容加密面（blob 进出，
+零 provider/持久化依赖），但只经 Store 实例出口 → **WeebPaint 无库模式（kind:none）探测不了加密 .ora**
+（导入/本地打开的嗅探腿只能跳过，加密件在 decode 才响亮失败）。需求：库出独立 encryption 面
+（如 `createEncryption(crypto codec)` 独立门牌，Store.encryption 同源复用）。⚠ 加门牌 = 接口变更，
+escalate human 拍板。app 端已按家规不绕（显式分叉 + 注释指回本议题）。
+
 ### 4. 真机矩阵（folder provider）
 
 native move / mtime 语义 / 权限过期表现——已并入 WeebPaint `ai-docs/20260827-device-test-batch.md` 场景 C，user 跑完结果回流本仓记录；假冲突观察 = ADR-0025 懒 hash 的启动条件。
