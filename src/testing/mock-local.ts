@@ -42,18 +42,55 @@ export interface MockLocal extends LocalCache {
   _dirIndex: Map<string, string>;
 }
 
-/** MockLocal 工厂：内存模拟本地持久层（IDB），实现 store.local 契约（测 Store 编排用）。 */
-export function createMockLocal(): MockLocal {
-  const items = new Map<string, Bytes>();           // name → Uint8Array
-  const trash = new Map<string, TrashItem>();        // trashKey → { name, bytes }
-  const dirIndex = new Map<string, string>();        // folder → 目录索引缓存 JSON 串
-  let bk = 0;
+/** 共享 backing（A4 双 tab 测试用）：两个 createMockLocal 实例喂同一 backing = 同设备两个 tab 共 IDB。 */
+export interface MockLocalBacking {
+  items: Map<string, Bytes>;
+  trash: Map<string, TrashItem>;
+  dirIndex: Map<string, string>;
+  revs: Map<string, number>;      // name → 落盘 rev（A4 版本戳；真实现存进 CacheRecord.rev）
+  bk: { n: number };
+}
+export function createMockLocalBacking(): MockLocalBacking {
+  return { items: new Map(), trash: new Map(), dirIndex: new Map(), revs: new Map(), bk: { n: 0 } };
+}
+
+/** MockLocal 工厂：内存模拟本地持久层（IDB），实现 store.local 契约（测 Store 编排用）。
+ *  opts.backing 注入共享底座 = 模拟同设备双 tab（各实例 per-tab seenRev，同 A4 真实现）。 */
+export function createMockLocal(opts: { backing?: MockLocalBacking } = {}): MockLocal {
+  const backing = opts.backing ?? createMockLocalBacking();
+  const items = backing.items;                       // name → Uint8Array
+  const trash = backing.trash;                       // trashKey → { name, bytes }
+  const dirIndex = backing.dirIndex;                 // folder → 目录索引缓存 JSON 串
+  const revs = backing.revs;
+  // A4 镜像（契约同 local-cache.ts）：per-tab seen + guard 撞版备份 + 5min 防 spam 冷却。
+  const _seenRev = new Map<string, number>();
+  const _lastConflictBackupAt = new Map<string, number>();
+  const CONFLICT_BACKUP_COOLDOWN_MS = 5 * 60_000;
   // 注：本测试替身内部以 Uint8Array 存取（测试断言 .length / u8txt），而真 LocalCache
   // 契约「内部落 Blob、get 出 Blob」。二者在「字节 vs Blob」上有意背离 —— 测试只关心字节内容。
   // 故 get 运行时回 Bytes，但声明为契约的 Blob（下方 as 处擦除），保持 MockLocal ⊆ LocalCache。
   const adapter: LocalCache = {
-    async save(name: string, bytes: Bytes | Blob) { items.set(name, await toU8(bytes)); },
+    async save(name: string, bytes: Bytes | Blob, _hint?: unknown, guard?: "user-save") {
+      const storedRev = revs.get(name) ?? 0;
+      let foreignOverwrite: { backedUp: boolean; foreignRev: number } | undefined;
+      if (guard === "user-save" && items.has(name) && storedRev !== (_seenRev.get(name) ?? 0)) {
+        const nowTs = Date.now();
+        let backedUp = false;
+        if (nowTs - (_lastConflictBackupAt.get(name) ?? 0) >= CONFLICT_BACKUP_COOLDOWN_MS) {
+          items.set(`.backup-local/${++backing.bk.n}:${name}`, items.get(name)!);   // 对方字节留底
+          _lastConflictBackupAt.set(name, nowTs);
+          backedUp = true;
+        }
+        foreignOverwrite = { backedUp, foreignRev: storedRev };
+      }
+      items.set(name, await toU8(bytes));
+      const rev = storedRev + 1;
+      revs.set(name, rev);
+      _seenRev.set(name, rev);
+      return foreignOverwrite ? { rev, foreignOverwrite } : { rev };
+    },
     async get(name: string): Promise<Blob | null> {
+      if (items.has(name)) _seenRev.set(name, revs.get(name) ?? 0);   // A4：读也刷新本 tab seen
       // 测试替身：运行时回 Uint8Array（测试只读字节内容），类型按契约声明 Blob。
       return (items.has(name) ? items.get(name)! : null) as unknown as Blob | null;
     },
@@ -72,7 +109,7 @@ export function createMockLocal(): MockLocal {
     },
     async backup(name: string) {
       if (!items.has(name)) throw new Error(`本地无 ${name}，无法备份`);
-      const backupName = `.backup-local/${++bk}:${name}`;   // 隐藏命名空间 + counter 防撞（测试确定性）；同名多次也唯一
+      const backupName = `.backup-local/${++backing.bk.n}:${name}`;   // 隐藏命名空间 + counter 防撞（测试确定性）；同名多次也唯一
       items.set(backupName, items.get(name)!);              // 复制：原件不动
       return backupName;
     },

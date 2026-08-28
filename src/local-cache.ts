@@ -30,16 +30,45 @@ export function createLocalCache(dbName: string): LocalCache {
   const trashP = bs.partition("trash");
   const backupP = bs.partition("backup");
   const dirIdxP = bs.partition("dir-index-cache");   // 每夹「上次云帧」目录索引缓存（A3；非 SSoT，脏的，只配画首帧）；逻辑分区=键前缀，零 IDB schema 变更
+  // A4 双 tab 互覆护栏（2026-08-28 user 拍板 a）：per-tab seen rev（本实例=本 tab）。
+  //   get/save 都刷新 seen；guard="user-save" 的写与 stored rev 对表，撞版 = 别 tab 写过 →
+  //   先把**对方字节**备份进 backup 分区再覆盖（词典序②：谁的操作都不静默丢）。
+  //   读-比-写有毫秒级 TOCTOU 窗（已知失败，同文件器官 mtime 对表姿势）；护的是 30s autosave
+  //   交替互覆那种分钟级真实事故。防 spam：同名 backup 冷却窗 5min（对方连写不刷屏备份箱）。
+  const _seenRev = new Map<string, number>();
+  const _lastConflictBackupAt = new Map<string, number>();
+  const CONFLICT_BACKUP_COOLDOWN_MS = 5 * 60_000;
   return {
     // 覆盖写。bytes 归一化成 Blob(契约落 Blob)。
     // ⚠ 曾把 hint.peek 一并写进记录的 .peek 字段——**零 reader**（活的图库缩略图走密文 getPeek），
     //   却对加密件把 256px **明文**缩略图落进了 IDB，违反红线「明文缩略图永不落盘」。字段已删；
     //   hint 仍原样透传给上层作旁路，但 store 不再持久化它的任何解码产物。
-    async save(name: string, bytes: Bytes | Blob, _hint?: unknown) {
+    async save(name: string, bytes: Bytes | Blob, _hint?: unknown, guard?: "user-save") {
       const blob = bytes instanceof Blob ? bytes : new Blob([bytes]);
-      await files.put(name, { blob, updatedAt: Date.now() });
+      const stored = await files.get(name);
+      const storedRev = stored?.rev ?? 0;
+      let foreignOverwrite: { backedUp: boolean; foreignRev: number } | undefined;
+      if (guard === "user-save" && stored && storedRev !== (_seenRev.get(name) ?? 0)) {
+        const nowTs = Date.now();
+        const last = _lastConflictBackupAt.get(name) ?? 0;
+        let backedUp = false;
+        if (nowTs - last >= CONFLICT_BACKUP_COOLDOWN_MS) {
+          await backupP.put(`${stamp()}:${name}`, { ...stored, updatedAt: nowTs });   // 对方字节留底（原件即将被覆盖）
+          _lastConflictBackupAt.set(name, nowTs);
+          backedUp = true;
+        }
+        foreignOverwrite = { backedUp, foreignRev: storedRev };
+      }
+      const rev = storedRev + 1;
+      await files.put(name, { blob, updatedAt: Date.now(), rev });
+      _seenRev.set(name, rev);
+      return foreignOverwrite ? { rev, foreignOverwrite } : { rev };
     },
-    async get(name: string) { const r = await files.get(name); return r ? r.blob : null; },
+    async get(name: string) {
+      const r = await files.get(name);
+      if (r) _seenRev.set(name, r.rev ?? 0);
+      return r ? r.blob : null;
+    },
     async exists(name: string) { return files.exists(name); },
     // 轻量元信息：blob.size 是 Blob 引用属性（不载字节）、updatedAt 存记录里 → 便宜。listing 给本地项填尺寸/时间。
     async stat(name: string) { const r = await files.get(name); return r ? { size: r.blob.size, updatedAt: r.updatedAt } : null; },

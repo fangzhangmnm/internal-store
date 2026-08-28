@@ -116,9 +116,21 @@ export interface TrashEntry {
   name: string;
 }
 /** 本地持久层（store.local 契约）：**内容无关**，存任意 binary blob。 */
+/** 守护写回执（A4 双 tab 本地互覆护栏，2026-08-28 user 拍板 a）。 */
+export interface LocalSaveReceipt {
+  /** 本条记录的新版本戳（每写 +1；老记录无 rev 视 0——零迁移）。 */
+  rev: number;
+  /** 撞版覆盖：本 tab 上次见到的 rev ≠ 落盘时的 rev = 别的写手（另一 tab）动过——
+   *  覆盖前已把**对方的字节**留底进 backup 分区（backedUp=false 仅当命中防 spam 冷却窗，字节仍被覆盖但已在近期备份链里）。 */
+  foreignOverwrite?: { backedUp: boolean; foreignRev: number };
+}
+
 export interface LocalCache {
-  /** hint：save 透传的 app 旁路（store 不解释、不看内容；app 可经 hint.peek 供不透明 sidecar 字节）。 */
-  save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+  /** hint：save 透传的 app 旁路（store 不解释、不看内容；app 可经 hint.peek 供不透明 sidecar 字节）。
+   *  guard="user-save"（A4）：用户内容保存路径专用——写前对表本 tab seen rev，撞版（双 tab 互写）
+   *  先备份对方字节再覆盖并回执 foreignOverwrite（读-比-写，毫秒级 TOCTOU 窗与文件器官 mtime 对表
+   *  同款已知失败姿势）。云 pull/改名等系统路径**不传 guard**（覆盖是它们的正常语义，不误报）。 */
+  save(name: string, bytes: Bytes | Blob, hint?: unknown, guard?: "user-save"): Promise<LocalSaveReceipt | void | unknown>;
   /** 读缓存 blob；缺 → null。 */
   get(name: string): Promise<Blob | null>;
   /** 是否已缓存。 */

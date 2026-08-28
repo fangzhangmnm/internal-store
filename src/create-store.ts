@@ -29,7 +29,7 @@ import { createDownloadSessions, EtagChangedError, type StagingStore, type Stagi
 import { runStoreMigrations, storeNamespace } from "./migration.ts";
 import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
-import { setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts";
+import { reportStoreError, setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts";
 import { queryStoragePersistence, type PersistenceState } from "./persistence.ts";
 
 // ── ui bundle（Model B，README.md §7）──
@@ -788,7 +788,12 @@ export function createStore(config: StoreConfig) {
         cancelFolderDeletionForDescendant(name);                 // 在待删夹下存文件 → 撤销该夹的排队删除（eager-cancel，Q6）
         const plain = await toU8(bytes);
         const sealed = await seal.sealForWrite(name, plain);
-        await sub.serialize(name, () => local.save(name, sealed, opts?.hint));   // local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图
+        // A4 双 tab 互覆护栏：用户内容保存 = guard="user-save"（本 tab seen rev 对表；撞版=另一 tab
+        //   写过 → local 层已先备份对方字节再覆盖，这里只负责 surface——冲突必 surface，绝不静默）。
+        const receipt = await sub.serialize(name, () => local.save(name, sealed, opts?.hint, "user-save")) as import("./types.ts").LocalSaveReceipt | void;   // local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图
+        if (receipt && typeof receipt === "object" && receipt.foreignOverwrite) {
+          reportStoreError(new Error(`local overwrite conflict: "${name}" was written by another tab (rev ${receipt.foreignOverwrite.foreignRev}); their bytes were ${receipt.foreignOverwrite.backedUp ? "backed up before overwrite" : "overwritten (recent copy already in backup)"}`), "warning");
+        }
         notifyFolderOf(name);                                    // 网盘模型：本夹 watcher 即时反映新增/变脏（无云往返；gallery 没开=cheap no-op）
         if (opts?.tryPush === false) return { pushed: false, reason: "not-attempted" };   // 只落本地（autosave/consent-safe，ADR-0016/0018：opaque Work 的 push 必 consent-gated）
         // surfaceCollision：**编辑既有文件**时，谱系断裂撞名走冲突面而非抛 collision（push.ts 的长注释解释了为什么两者相反）。

@@ -21,7 +21,7 @@ import { reportStoreError } from "./error-handling.ts";   // QuotaExceededError 
 
 // 记录 = 不透明字节 + 写入时刻。**刻意没有缩略图/预览字段**：曾有个 .peek（零 reader），
 // 对加密件把明文缩略图落进了 IDB —— 明文派生物永不落持久层，别再加回来。
-export interface CacheRecord { blob: Blob; updatedAt: number; }
+export interface CacheRecord { blob: Blob; updatedAt: number; rev?: number; }   // rev：A4 本地版本戳（files 分区用；老记录缺席=0，零迁移）
 
 const STORE = "blobs";
 

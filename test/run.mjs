@@ -35,6 +35,7 @@ import "./seal.test.ts";
 import "./freshness.test.ts";
 import "./store-open-conflict.test.ts";
 import "./local-head.test.ts";
+import "./local-conflict-guard.test.ts";
 import "./offload.test.ts";
 import "./identity.test.ts";
 import "./cloud-write-ifmatch.test.ts";
