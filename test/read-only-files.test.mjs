@@ -62,7 +62,7 @@ describe("readOnlyFiles · 只读镜像", () => {
 
   it("collections 不受影响（阅读位置类照写）", async () => {
     const { store } = mk();
-    const c = store.collection("positions", { local: true });
+    const c = store.collection("positions");
     await c.init();
     c.setItem("track1", { sec: 42 });
     eq(c.getItem("track1").sec, 42, "collection 写读照常");

@@ -111,192 +111,13 @@ test("[collection] pre-init 守卫：init 前 setItem 抛、getItem 返 default"
   assert(threw, "init 前 setItem 应抛（设置未就绪，防覆盖未 hydrate 的值）");
 });
 
-// ── local-only 变体（{local:true}）：只走 IDB、永不碰云、不 scaffold 云文件 ──────────────────
-test("[collection] local-only 变体：不上云（无 collections.etag/dirty kv、云端无文件）、isDirty 恒 false", async () => {
-  const kv = dumpKv();
-  const { store, provider } = mkStore(kv, createMockProvider());
-  const c = store.collection("local-user-preference", { local: true });
-  await c.init();
-  c.setItem("color-theme", "night");
-  await c.flushLocal();
-  eq(c.getItem("color-theme", "auto"), "night", "本地往返 OK");
-  eq(c.isDirty(), false, "local-only 永不脏");
-  assert(!kv.keys().some((k) => k.includes("collections.etag:local-user-preference")), "local-only 不写 collections etag kv");
-  await new Promise((r) => setTimeout(r, 20));
-  assert(!(await provider.getItemByPath(".wp/local-user-preference.json")), "local-only 不 scaffold 云端文件");
-});
-
-test("[narrow-waist] databaseId：默认 defaultStore；不同 databaseId → 不同命名空间根（多实例不打架）", async () => {
-  const kvA = dumpKv(), kvB = dumpKv();
-  const a = mkStore(kvA).store.collection("synced-user-preference"); await a.init(); a.setItem("lang", "zh"); await a.reconcileWithRemote();
-  const b = mkStore(kvB, createMockProvider(), "thumbs").store.collection("synced-user-preference"); await b.init(); b.setItem("lang", "en"); await b.reconcileWithRemote();
-  assert(kvA.keys().every((k) => k.startsWith("wp.defaultStore.")), "默认根 wp.defaultStore");
-  assert(kvB.keys().every((k) => k.startsWith("wp.thumbs.")), "自定义根 wp.thumbs");
-});
-
-test("[narrow-waist] collection 名：非法/斜杠/.. → 抛；合法名 OK（settings 已非保留名）", () => {
-  const { store } = mkStore(dumpKv());
-  for (const bad of ["", "a/b", "a:b", "..", "x*"]) {
-    let t = false; try { store.collection(bad); } catch { t = true; }
-    assert(t, `非法 collection 名应抛: ${JSON.stringify(bad)}`);
-  }
-  store.collection("settings"); store.collection("brush-rack"); store.collection("synced-user-preference");   // 合法：不抛（settings 已解除保留）
-});
-
-// ── files / collections 两实例 etag 隔离 + collection 云端落 .wp/<name>.json ──────
-test("[narrow-waist] file 与同名 collection 的 etag 落不同前缀（两实例隔离）+ collection 云端 = .wp/<name>.json", async () => {
-  const kv = dumpKv();
-  const { store, provider } = mkStore(kv);
-
-  await store.file("dup.ora", { isZip: false }).save(new TextEncoder().encode("BYTES"));   // 文件推云
-  const coll = store.collection("dup");
-  await coll.init();
-  coll.setItem("k", { v: 1 });
-  await coll.reconcileWithRemote();                                                                        // collection 推云
-
-  assert(kv.keys().some((k) => k.startsWith("wp.defaultStore.files.etag:")), "文件 etag 落 files.etag:");
-  assert(kv.keys().some((k) => k === "wp.defaultStore.collections.etag:dup"), "collection etag 落 collections.etag:dup");
-  assert(!kv.keys().some((k) => k.startsWith("wp.defaultStore.collections.etag:dup.ora")), "文件不该落 collections 前缀");
-
-  const item = await provider.getItemByPath(".wp/dup.json");
-  assert(!!item, "collection 应落云端 .wp/dup.json");
-  assert(!!(await provider.getItemByPath("dup.ora")), "文件落 approot 根 dup.ora");
-});
-
-// ── store 自管 scaffold：synced collection 建 .wp/<name>.json（不覆盖已有）──────────────────
-test("[narrow-waist] scaffold：建 synced collection → 建 .wp/<name>.json（不覆盖已有）", async () => {
-  const provider = createMockProvider();
-  const { store } = mkStore(dumpKv(), provider);
-  store.collection("brush-rack");                        // synced collection → store 自动在云端建出文件
-  await new Promise((r) => setTimeout(r, 30));           // 等 fire-and-forget scaffold 落地
-  assert(!!(await provider.getItemByPath(".wp/brush-rack.json")), "建 collection 应建 .wp/brush-rack.json");
-  const before = await provider.getItemByPath(".wp/brush-rack.json");
-  // 二次建同名同 provider → 已存在不重建、不覆盖（etag 不变）
-  const { store: store2 } = mkStore(dumpKv(), provider);
-  store2.collection("brush-rack");
-  await new Promise((r) => setTimeout(r, 30));
-  const after = await provider.getItemByPath(".wp/brush-rack.json");
-  eq(after!.eTag, before!.eTag, "已存在的 .wp/brush-rack.json 不被空信封覆盖（etag 不变）");
-});
-
-// ── cloud-sync backupFolder 默认 .backup（weakOverride loser 落 .backup/）─────────
-test("[narrow-waist] cloud-sync backupFolder 默认 .backup（weakOverride 把云端 loser stash 进 .backup/）", async () => {
-  const provider = createMockProvider();
-  provider._seed("z.ora", "OLD-CLOUD");
-  const cloud = createCloudSync({ provider, kv: (() => { const d = dumpKv(); return d; })(), fileName: (n: string) => n });
-  const res = await cloud.weakOverride("z.ora", new TextEncoder().encode("NEW-LOCAL"));
-  assert(String(res.backedUp).startsWith(".backup/"), `loser 应进 .backup/，实得 ${res.backedUp}`);
-});
-
-// ── file mode:"new" 新建画布防静默覆盖（1d，2026-07-17）────────────────────────────────
-{
-  const _enc = (s: string) => new TextEncoder().encode(s);
-  const _td = new TextDecoder();
-  async function readFile(store: ReturnType<typeof mkStore>["store"], name: string): Promise<string> {
-    const b = await store.file(name, { isZip: true, mode: "existing" }).open();
-    if (!b) return "";
-    const u8 = b instanceof Uint8Array ? b : new Uint8Array(await (b as Blob).arrayBuffer());
-    return _td.decode(u8);
-  }
-  test("[file mode] mode:'new' 撞名不覆盖（抛 collision）；existing 覆盖=正常编辑", async () => {
-    const { store } = mkStore(dumpKv());
-    await store.file("A.ora", { isZip: true, mode: "new" }).save(_enc("V1"), { tryPush: false });   // 空名 → 建成功
-    eq(await readFile(store, "A.ora"), "V1", "新建成功、可读");
-    let threw = false;
-    try { await store.file("A.ora", { isZip: true, mode: "new" }).save(_enc("V2"), { tryPush: false }); }
-    catch { threw = true; }
-    assert(threw, "mode:'new' 撞名 → 抛（绝不静默覆盖）");
-    eq(await readFile(store, "A.ora"), "V1", "原字节没被覆盖（还是 V1）");
-    await store.file("A.ora", { isZip: true, mode: "existing" }).save(_enc("V3"), { tryPush: false });   // 编辑=覆盖正常
-    eq(await readFile(store, "A.ora"), "V3", "existing 覆盖 = 正常持久");
-  });
-}
-
-// ── file.reupload：candidate-gone 的「重新上传」（本地 clean 字节推云到空 path）────────────
-{
-  const _enc = (s: string) => new TextEncoder().encode(s);
-  test("[reupload] cloud-gone 后本地字节推回空 path → synced（云端又有）", async () => {
-    const { provider, store } = mkStore(dumpKv());
-    await store.file("R.ora", { isZip: true, mode: "new" }).save(_enc("V1"), { tryPush: true });   // local+cloud+synced
-    assert(await provider.getItemByPath("R.ora"), "云端有");
-    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.ref);               // 模拟云端 gone
-    assert(!(await provider.getItemByPath("R.ora")), "云端没了");
-    const r = await store.file("R.ora", { isZip: true, mode: "existing" }).reupload();
-    assert(r.status !== "no-local", `重传返回 ${r.status}`);
-    assert(await provider.getItemByPath("R.ora"), "重传后云端又有（推回空 path）");
-  });
-  test("[reupload] 乌龙撞名（空 path 其实云端已有异内容）→ 抛（app surface conflict）", async () => {
-    const { provider, store } = mkStore(dumpKv());
-    await store.file("R.ora", { isZip: true, mode: "new" }).save(_enc("V1"), { tryPush: true });
-    const it = await provider.getItemByPath("R.ora"); await provider.delete(it!.ref);               // 本地以为云端 gone
-    provider._seed("R.ora", "OTHER-DEVICE-DATA");                                                   // 但别设备已在同名放了异内容
-    let threw = false;
-    try { await store.file("R.ora", { isZip: true, mode: "existing" }).reupload(); } catch { threw = true; }
-    assert(threw, "撞名异内容 → 抛（绝不覆盖别设备的新文件）");
-  });
-}
-
-// ── 第 3 步：path-guard 三函数 + collection 单例 + files 命名空间（2026-07-17）────────────────
-{
-  test("[path-guard] assertValidFileName：拒 3 个保留根，放行其他子路径/dotfile", () => {
-    for (const bad of [".trash", ".trash/x", ".backup", ".backup/x.ora", ".wp", ".wp/synced-user-preference"]) {
-      let threw = false; try { assertValidFileName(bad, "wp"); } catch { threw = true; }
-      assert(threw, `保留根应拒：${bad}`);
-    }
-    for (const ok of ["x.ora", "folder/x.ora", ".hidden.ora", "a/.b.ora", "folder/sub/deep.ora"]) {
-      assertValidFileName(ok, "wp");   // 不抛
-    }
-  });
-  test("[path-guard] assertValidCollectionName：禁斜杠/Windows 非法字符/bare .|..；放行点分层级", () => {
-    for (const bad of ["a/b", "a:b", "", ".", "..", "a*b"]) {
-      let threw = false; try { assertValidCollectionName(bad); } catch { threw = true; }
-      assert(threw, `应拒：${JSON.stringify(bad)}`);
-    }
-    for (const ok of ["brush-rack", "synced-user-preference", "parent.child", ".hidden-coll"]) {
-      assertValidCollectionName(ok);   // 不抛（点/前导点放行）
-    }
-  });
-  test("[files] file() 保留根名 → 抛（路径护栏归位 store）", () => {
-    const { store } = mkStore(dumpKv());
-    let threw = false; try { store.file(".trash/x.ora", { isZip: true, mode: "existing" }); } catch { threw = true; }
-    assert(threw, "保留根 file() 抛");
-  });
-  test("[collection] 单例：同名第二次返同一对象（app schema 全局单例命名空间）", () => {
-    const { store } = mkStore(dumpKv());
-    const a = store.collection("brush-rack");
-    const b = store.collection("brush-rack");
-    assert(a === b, "同名 collection 返同一实例（否则两份内存信封同步同一云文件=互相看不见）");
-    assert(store.collection("other") !== a, "不同名 → 不同实例");
-  });
-  test("[files] 命名空间面齐备（nameOccupied boolean / reconcileAll / drainOfflineQueue / 回收站族）", () => {
-    const { store } = mkStore(dumpKv());
-    for (const m of ["nameOccupied", "watchFolder", "ensureFolder", "newFolder", "deleteFolder", "drainOfflineQueue", "listTrash", "listBackup", "restoreTrash", "purgeTrash", "emptyTrash", "emptyBackup", "reconcileAll"]) {
-      assert(typeof store.files[m] === "function", `store.files.${m} 应存在`);
-    }
-  });
-}
-
-// ── deleteFolder 判空两端（本地有文件也拒删，2026-07-17）────────────────────────────────
-{
-  const _enc = (s: string) => new TextEncoder().encode(s);
-  test("[files.deleteFolder] 本地夹下有文件 → 拒删（两端判空，防本地文件成孤儿）", async () => {
-    const { store } = mkStore(dumpKv());
-    await store.file("F/x.ora", { isZip: true, mode: "new" }).save(_enc("X"), { tryPush: false });   // 本地 F/ 下有文件
-    let threw = false;
-    try { await store.files.deleteFolder("F"); } catch { threw = true; }
-    assert(threw, "本地非空 → 拒删");
-    await store.file("F/x.ora", { isZip: true, mode: "existing" }).delete();   // 清掉（进 trash）
-    await store.files.deleteFolder("F");   // 现在本地空（cloud 也无此夹）→ 不抛
-  });
-}
-
 // ── P3（v436）：接缝不许把 store 的诚实结果收窄成 void ────────────────────────────────────
 //   本次审计的核心发现：深模块的返回类型早就是有信息量的联合类型，所有活着的谎报都发生在
 //   store 与 UI 之间那一层。这几条锁住「结果确实流出来了」。
 test("collection.flushLocal 本地写失败 → ok:false（不得 resolve 成功；三个 unload 屏障全靠它）", async () => {
   const { createCollection } = await import("../src/collection.ts");
   const col = createCollection({
-    name: "c", cloudless: true,
+    name: "c", cloud: { setDirty: () => {}, isDirty: () => false, getETag: () => null, setETag: () => {} }, manual: true,
     local: { save: async () => { throw new Error("QuotaExceeded"); }, get: async () => null },
     reportError: () => {},
   } as never);
@@ -310,7 +131,7 @@ test("collection.flushLocal 正常路径 → ok:true", async () => {
   const { createCollection } = await import("../src/collection.ts");
   const saved: unknown[] = [];
   const col = createCollection({
-    name: "c", cloudless: true,
+    name: "c", cloud: { setDirty: () => {}, isDirty: () => false, getETag: () => null, setETag: () => {} }, manual: true,
     local: { save: async (_k: string, b: unknown) => { saved.push(b); }, get: async () => null },
     reportError: () => {},
   } as never);

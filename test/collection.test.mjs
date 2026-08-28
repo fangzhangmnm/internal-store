@@ -24,9 +24,9 @@ function mockCloud({ text = null } = {}) {
   };
 }
 
-// 纯本地变体：不碰云，专测本地写路径。
+// manual 模式（只标脏不自动推）：专测本地写路径（cloudless 变体已移除 2026-08-28 清零轮）。
 async function localColl(cloud = mockCloud()) {
-  const c = createCollection({ cloud, name: "c.json", cloudless: true, now: () => 1000 });
+  const c = createCollection({ cloud, name: "c.json", manual: true, now: () => 1000 });
   await c.init();
   return c;
 }
@@ -131,15 +131,15 @@ describe("collection · getInitData seed 的 LWW（SEED_UAT=1 最低戳）", () 
     eq(c.getEntry("b1").uat, 1750000000000, "uat 也是云端那个，seed 戳没留下");
   });
 
-  it("未登录/离线（cloudless）→ 照样拿到出厂笔，且不 clobber 云端", async () => {
+  it("离线/未登录 → 照样拿到出厂笔，云端零往返（offline 短路；cloudless 移除后的等价场景）", async () => {
     const cloud = mockCloud();
     const c = createCollection({
-      cloud, name: "rack.json", cloudless: true, now: () => 1000,
+      cloud, name: "rack.json", now: () => 1000, isOnline: () => false,
       getInitData: () => [{ id: "b1", value: { name: "出厂笔" } }],
     });
     await c.init();
     eq(c.getItem("b1").name, "出厂笔", "离线新设备立即有内容");
-    eq(cloud.pushes, 0, "★cloudless 绝不碰云（不会把 seed 推上去盖掉云端真数据）");
+    eq(cloud.pushes, 0, "★离线不推（seed 不会背着用户推上云）");
     eq(cloud.pulls, 0, "也不拉");
   });
 

@@ -25,7 +25,6 @@
 //   reconcile 云端（不 await）→ resolve。boot await init() 拿本地即够；云端后台对齐、onChange 通知。
 //   reconcileWithRemote()：事件驱动（focus/visible/online）重拉+resolve，per-key LWW（同 file.refresh）。
 //   pull 时若 local 有 uat-newer / pending → 一并 push（故名 reconcileWithRemote，非单向 pull）。
-// local-only 变体（cloudless）：只走 IDB 本地缓存、永不碰云（flow.sync）。给设备本地设置用。
 import { createFolderFlow, type FolderFlowResult } from "./folder-flow.ts";
 import { emptyFolder, parseFolderBlob, mergeFolders, normalizeFolder, FOLDER_ENVELOPE_VERSION } from "./folder-merge.ts";
 import type { FolderEnvelope, FolderItem } from "./folder-merge.ts";
@@ -76,11 +75,6 @@ export interface CollectionConfig {
   local?: Pick<LocalCache, "save" | "get" | "exists">;
   /** 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。 */
   localWriteDelayMs?: number;
-  /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。
-   *  @deprecated 2026-08-27 标记废弃（WeebPaint P5 escalation，ai-docs/20260827-deprecation-cloudless-collection.md）：
-   *  device 本地字段的归宿 = app 侧 localStorage 器官，store 只管带云同步的持久化（单一职责，user 原话）。
-   *  ⚠ 顺序红线：物理移除必须等 WeebPaint P5 收货落地之后的版本——现在删会断在跑的 local-user-preference / local-app-state。 */
-  cloudless?: boolean;
   /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
   getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
 }
@@ -149,7 +143,7 @@ const isTombstone = (e: FolderItem): boolean => valueOf(e) === null;
 
 export function createCollection(cfg: CollectionConfig): Collection {
   const { cloud, name, isOnline, syncDelayMs = 1500, now = () => Date.now(), manual = false,
-    local, localWriteDelayMs = 400, cloudless = false, getInitData } = cfg;
+    local, localWriteDelayMs = 400, getInitData } = cfg;
   const flow = createFolderFlow({ cloud, name, encode, decode, isOnline });
   let env: FolderEnvelope = emptyFolder();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -236,8 +230,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
 
   function clearTimer() { if (timer != null) { clearTimeout(timer); timer = null; } }
   function scheduleSync() {
-    scheduleLocalWrite();        // 本地缓存与云无关：cloudless/manual/auto 都写本地（强杀/离线靠它）
-    if (cloudless) return;       // local-only：永不碰云
+    scheduleLocalWrite();        // 本地缓存与云无关：manual/auto 都写本地（强杀/离线靠它）
     cloud.setDirty(name, true);
     if (manual) return;          // 手动模式：只标脏，云 commit 由调用方 reconcileWithRemote() 驱动
     clearTimer();
@@ -247,7 +240,6 @@ export function createCollection(cfg: CollectionConfig): Collection {
   // sync：snapshot 内存 env → folder-flow（pull-merge-push）→ 把合并结果**并回**当前 env（per-item LWW 保新编辑不被旧快照盖）。
   //   带来云端值变 → fireChanged。dirty 收尾（K12）：synced 且并回后 == 已推的 res.folder 才清脏。返 flow 结果。
   async function sync(): Promise<FolderFlowResult | null> {
-    if (cloudless) return null;
     const before = snapshotValues();
     const res = await flow.sync(env);
     env = mergeFolders(env, res.folder);
@@ -261,9 +253,8 @@ export function createCollection(cfg: CollectionConfig): Collection {
   }
 
   // 后台/事件驱动云端对齐：freshness 快路径（etag-skip）+ 完整 pull-merge-push；离线/坏字节绝不 wipe。
-  //   返 flow 结果或 null（cloudless / etag-skip）。
+  //   返 flow 结果或 null（etag-skip）。
   async function reconcile(): Promise<FolderFlowResult | null> {
-    if (cloudless) return null;
     // 快路径（freshness etag-skip）：clean ∧ 在线 ∧ 有已知 etag ∧ 云端 etag 没变 → 本地即最新，跳整份 pull-merge-push。
     if (!cloud.isDirty(name) && (!isOnline || isOnline()) && cloud.getETag(name)) {
       const meta = await cloud.fetchMeta(name).catch((e) => { reportStoreError(e, "log"); return null; });
@@ -294,7 +285,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
       .map((it) => ({ id: it.id, uat: SEED_UAT, value: shallowCopy(it.value) }));
     if (!seeded.length) return;
     env = mergeFolders(env, { version: FOLDER_ENVELOPE_VERSION, items: seeded });   // LWW：seed uat=1 遇真数据必让位
-    cloud.setDirty(name, true);   // seed 需推云（cloudless 也标脏无害，flushLocal 落本地）
+    cloud.setDirty(name, true);   // seed 需推云
     scheduleLocalWrite();
   }
 
@@ -305,7 +296,6 @@ export function createCollection(cfg: CollectionConfig): Collection {
     //   离线新设备照样立即有内容；在线新设备先显 seed、云端到了再覆盖（用户设计）。
     if (!idbHad) await seedInit();
     ready = true;                       // 本地(含 seed)就绪：getItem 有值、setItem 放行。云端后台对齐（不 block boot）。
-    if (cloudless) return;
     void reconcile().catch((e) => reportStoreError(e, "log"));   // 后台 pull-merge-push：真 cloud 覆盖 seed；seed 未被覆盖的推云
   }
 
@@ -349,7 +339,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
   }
 
   function flushLocal(): Promise<{ ok: boolean; error?: unknown }> { return writeLocalNow(); }
-  function isDirty(): boolean { return cloudless ? false : cloud.isDirty(name); }
+  function isDirty(): boolean { return cloud.isDirty(name); }
 
   return { init, reconcileWithRemote, setItem, deleteItem, getItem, getEntry, entries, keys, onChange, flushLocal, isDirty };
 }
