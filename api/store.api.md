@@ -432,7 +432,7 @@ export interface ListContext {
     signedIn: boolean;
 }
 
-// @public
+// @public (undocumented)
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
@@ -446,7 +446,7 @@ export interface LocalCache {
     purgeTrash?(trashKey: string): Promise<void>;
     putDirIndexCache?(folder: string, json: string): Promise<void>;
     restore(trashKey: string): Promise<string>;
-    save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+    save(name: string, bytes: Bytes | Blob, hint?: unknown, guard?: "user-save"): Promise<LocalSaveReceipt | void | unknown>;
     stat(name: string): Promise<{
         size: number;
         updatedAt: number;
@@ -456,6 +456,15 @@ export interface LocalCache {
         bytes: number;
         count: number;
     }>;
+}
+
+// @public
+export interface LocalSaveReceipt {
+    foreignOverwrite?: {
+        backedUp: boolean;
+        foreignRev: number;
+    };
+    rev: number;
 }
 
 // @public

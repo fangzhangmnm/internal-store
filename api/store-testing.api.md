@@ -37,16 +37,47 @@ export interface CloudProvider {
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
 
-// Warning: (ae-forgotten-export) The symbol "EncryptionPort" needs to be exported by the entry point index.d.ts
-//
 // @public (undocumented)
 export function createMockEncryption(): EncryptionPort;
 
 // @public
-export function createMockLocal(): MockLocal;
+export function createMockLocal(opts?: {
+    backing?: MockLocalBacking;
+}): MockLocal;
+
+// @public (undocumented)
+export function createMockLocalBacking(): MockLocalBacking;
 
 // @public
 export function createMockProvider(opts?: MockProviderOpts): MockProvider;
+
+// @public
+export interface EncryptionPort {
+    // (undocumented)
+    readonly CONTAINER_PEEK_ENTRIES: readonly string[];
+    // (undocumented)
+    decryptPeek(parsed: unknown, password: string): Promise<Uint8Array>;
+    // (undocumented)
+    readonly ENC_PEEK_MIME: string;
+    // (undocumented)
+    looksEncryptedContainer(b: Blob | Uint8Array): Promise<boolean>;
+    // (undocumented)
+    packContainer(o: {
+        dataBytes: Uint8Array;
+        fileName?: string | null;
+        ext?: string;
+        peek?: Uint8Array | null;
+        password: string;
+    }): Promise<Blob>;
+    // (undocumented)
+    readonly PEEK_TAIL_WINDOW: number;
+    // (undocumented)
+    scanEncPeekFromEnd(u8: Uint8Array): unknown | null;
+    // (undocumented)
+    unpackContainer(b: Blob | Uint8Array, password: string): Promise<{
+        dataBlob: Blob;
+    }>;
+}
 
 // @public
 export interface Fault {
@@ -62,7 +93,7 @@ export interface FolderDeleteResult {
     status: "deleted" | "already-gone" | "non-empty" | "list-failed";
 }
 
-// @public
+// @public (undocumented)
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
@@ -76,7 +107,7 @@ export interface LocalCache {
     purgeTrash?(trashKey: string): Promise<void>;
     putDirIndexCache?(folder: string, json: string): Promise<void>;
     restore(trashKey: string): Promise<string>;
-    save(name: string, bytes: Bytes | Blob, hint?: unknown): Promise<unknown>;
+    save(name: string, bytes: Bytes | Blob, hint?: unknown, guard?: "user-save"): Promise<LocalSaveReceipt | void | unknown>;
     stat(name: string): Promise<{
         size: number;
         updatedAt: number;
@@ -89,10 +120,35 @@ export interface LocalCache {
 }
 
 // @public
+export interface LocalSaveReceipt {
+    foreignOverwrite?: {
+        backedUp: boolean;
+        foreignRev: number;
+    };
+    rev: number;
+}
+
+// @public
 export interface MockLocal extends LocalCache {
     _dirIndex: Map<string, string>;
     _items: Map<string, Bytes>;
     _trash: Map<string, TrashItem>;
+}
+
+// @public
+export interface MockLocalBacking {
+    // (undocumented)
+    bk: {
+        n: number;
+    };
+    // (undocumented)
+    dirIndex: Map<string, string>;
+    // (undocumented)
+    items: Map<string, Bytes>;
+    // (undocumented)
+    revs: Map<string, number>;
+    // (undocumented)
+    trash: Map<string, TrashItem>;
 }
 
 // @public

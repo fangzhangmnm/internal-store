@@ -19,6 +19,7 @@ export { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」�
 export type { StoreConfig, StoreUI, RawFile, ZipFile, Store, EncryptedBlob, FileStream } from "./create-store.ts";
 /** 统一列举面（README §2）的类型：列举项（Item）、8-badge 同步状态（SyncState）、列举上下文（ListContext）。 */
 export type { Item, SyncState, ListContext } from "./listing.ts";
+export type { LocalSaveReceipt } from "./types.ts";   // A4 守护写回执（guard="user-save" 撞版 surface）
 /** syncState 便利判定：isCached（有本地副本）/ isDirty（有未推本地编辑）。 */
 export { isCached, isDirty } from "./listing.ts";
 /** 字节别名（host adapter 的类型用；不暴露内部文件路径）。 */
