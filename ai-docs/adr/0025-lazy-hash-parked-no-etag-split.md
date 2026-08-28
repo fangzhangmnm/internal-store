@@ -23,3 +23,5 @@ folder provider 的 eTag = `${mtime}-${size}`（拍板 2026-08-25，`ai-docs/202
 
 - folder provider v1 的已知小疣：桌面云盘客户端若真会 touch mtime，用户会偶见一次多余冲突面（选一下即过，两边留底）——接受，观察，不预修。
 - 任何「给 eTag 加结构」的提案直接撞本 ADR 第 3 条。
+
+> **SUPERSEDED 2026-08-28（edited by Claude Fable 5）**：user 拍板「已经被判是不好的设计，舍弃」——懒仲裁 hash 不做了（本 ADR 仅存档；eTag 不透明红线附案继续有效）。

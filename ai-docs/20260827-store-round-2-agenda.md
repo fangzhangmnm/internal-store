@@ -11,7 +11,10 @@
 
 ## 议题（逐条 escalate human，不许自行拍板）
 
-### 1. OneDrive provider per-account pin（P3 余账）
+> **状态刷新 2026-08-28（edited by Claude Fable 5）**：议题 2/3/4′ 已随 **0.7.0**（store）+ **@internal/encryption 0.1.0**（新仓 `20260828 internal-encryption`）完结——cloudless 物理移除（WeebPaint v0.11.25 清零信号=播种纪元整体退役，user 拍板宣发前不留 backward compat）、maintenance 深清两口子（typed consent 库内比对/blocked 诚实报告/库名+计数红线口径）、encryption 立户割接（config.encryption=EncryptionPort 必填，Store.encryption 面退役）。WeebPaint 已收货双包。
+> **持久化收敛轮新单（user 0828 拍板，宣发前红线）**：①议题 1 pin 改判**必做**；②双 tab 同作品本地字节互覆护栏（0821 §7.5 旧账）**必做**；③图库长驻云端轮询 park 改判**必做**；④GDrive/多云 provider **数据结构必做**（「黄线=宣发后不后悔数据结构，migration 洁癖」）；⑤ADR-0025 懒 hash user 改判**舍弃**（补 superseded 戳）；⑥createStore 构造期 fail-fast（见文末）。
+
+### 1. OneDrive provider per-account pin（P3 余账）——**user 0828 改判必做（持久化收敛轮）**
 
 现状：auth 面已有 `getTokenFor(homeAccountId)`（0.4.0 口子），但 **provider 绑 MSAL active account**——WeebPaint 切到非 active 账号的库时只能先交互登录切 active（P3 Q8 拍板「结构支持、UX 不打磨」下可接受）。
 需求方向（escalate 设计再动）：provider 级账号 pin（`createOneDriveProvider({ homeAccountId })` 或 per-store 注入），让 attach 非 active 账号库能 silent token。不急——真多账号顺滑才需要。
@@ -51,3 +54,4 @@ native move / mtime 语义 / 权限过期表现——已并入 WeebPaint `ai-doc
 - eTag 不透明红线：拆解/组件化比较永久禁止（ADR-0025 附案）。
 - personal-account-only；翻 audience 必须连 authority 一起改（2026-08-23 坑）。
 - 署名制：新文件/commit 署模型名+日期；只签自己。
+- **构造期 fail-fast**：config.encryption 必填但运行时无守卫（JS 消费者/漏喂测试静默漏网，WeebPaint 收货实测）——createStore 开头加一行 throw。下版顺手。
