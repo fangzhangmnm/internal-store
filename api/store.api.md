@@ -682,6 +682,7 @@ export interface StoreConfig {
     persistence: "app-managed" | "none";
     provider: CloudProvider;
     readOnlyFiles?: boolean;
+    reconcilePolicy: "app-driven" | "none";
     signedIn?: () => boolean;
     skipMigration?: boolean;
     staging?: StagingStore;

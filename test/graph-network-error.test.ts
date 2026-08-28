@@ -3,11 +3,11 @@
 //   fetch 自身 throw（Safari 报裸 `TypeError: Load failed`）→ 必须翻成 CloudNetworkError：
 //   可辨认（app 换 i18n 人话）、status undefined（push.retriable 仍视为可重试，重试语义不变）、cause 保留原错。
 import { test, assert, eq } from "./runner.mjs";
-import { configureGraphTokenSource, getItemByPath } from "../src/providers/graph.ts";
+import { createGraph } from "../src/providers/graph.ts";
 import { CloudNetworkError } from "../src/errors.ts";
 
 test("graph fetch 网络层 throw → CloudNetworkError（name 可辨认 / status undefined / cause 保留）", async () => {
-  configureGraphTokenSource(() => Promise.resolve("TEST-TOKEN"));
+  const { getItemByPath } = createGraph(() => Promise.resolve("TEST-TOKEN"));
   const orig = globalThis.fetch;
   (globalThis as { fetch: unknown }).fetch = () => { throw new TypeError("Load failed"); };
   try {

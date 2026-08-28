@@ -17,7 +17,7 @@ function memStaging() {
 function mk() {
   const provider = createMockProvider();
   const local = createMockLocal();
-  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "test", provider, local, kv: memKv(), staging: memStaging(), ui: UI, readOnlyFiles: true,
     validateAdopt: () => true, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });

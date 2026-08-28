@@ -26,7 +26,7 @@ test("[persist] requestStoragePersistence：已持久→granted 不重复调；p
 });
 
 test("[persist] StoreConfig.persistence 必填表态：缺失 → createStore throw（编译期+运行时双门）；files.persistence() 感知面在", async () => {
-  const mk = (persistence?: unknown) => createStore({ encryption: createMockEncryption(),
+  const mk = (persistence?: unknown) => createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(),
     ...(persistence != null ? { persistence } : {}),
     appId: "wp", provider: createMockProvider(),
     ui: { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} },

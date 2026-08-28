@@ -14,18 +14,13 @@
 //   - @microsoft.graph.conflictBehavior 在 URL 查询串，不是 header（@ 在 header 非法）。
 //   - 大于 4MB 走 createUploadSession 分块上传。atlas zip 大概率超 4MB。
 
-// ── token-source 接缝（2026-08-20 收敛，2026-08-15 grill 拍板方向）────────────────────────────
-//   graph 层不绑 MSAL：页面 = createOneDriveProvider 自动注入 auth.getToken；SW = 注入凭据桥读端
-//   （sw/bridge createBridgeTokenSource）。SW 网关此前手搓的一份 Graph 实现随之退役（双实现 drift
-//   的现世报见下方 getDownloadUrl 的 $select 雷注）。
-import { CloudNetworkError } from "../errors.ts";
 
-let _tokenSource: (() => Promise<string>) | null = null;
-export function configureGraphTokenSource(fn: () => Promise<string>): void { _tokenSource = fn; }
-async function getToken(): Promise<string> {
-  if (!_tokenSource) throw new Error("graph token source 未配置（页面走 createOneDriveProvider；SW 走 configureGraphTokenSource(createBridgeTokenSource(dbName))）");
-  return _tokenSource();
-}
+// ── token-source 接缝（2026-08-20 收敛；**2026-08-28 实例化**：per-account pin 打扫轮）──────────
+//   graph 层不绑 MSAL：页面 = createOneDriveProvider 注入 auth.getToken/getTokenFor；SW = 凭据桥读端。
+//   旧形 = 模块级 configureGraphTokenSource 单例 + 模块级 approot/subfolder/downloadUrl 缓存——
+//   第二个 provider 会覆盖第一个的 token 源，且**跨账号缓存互相投毒**（A 账号的 approot id 配 B 账号
+//   token = 打错盘）。createGraph(tokenSource) 起，token 源与全部缓存 per-instance，双库双账号并联安全。
+import { CloudNetworkError } from "../errors.ts";
 
 // ---- 实际读到的 Graph JSON 形状（只声明本文件真正访问的字段，其余 Graph 字段忽略）。----
 // driveItem 的 file/folder facet 二选一区分文件/文件夹；@ 前缀字段是 Graph 注解。
@@ -75,6 +70,43 @@ export function encodeApprootPath(path: string): string {
   return path.split("/").filter(Boolean).map(encodeSeg).join("/");
 }
 
+function _rangeHeader(offset: number | null, length: number): string {
+  return (offset == null)
+    ? `bytes=-${length}`
+    : `bytes=${offset}-${offset + length - 1}`;
+}
+
+// 直接打已知 CDN URL 的 byte-range（省掉每个 peek 的 metadata RTT）
+// caller 处理 401/403 = downloadUrl 过期，重申请 getDownloadUrl 重试一次
+export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number): Promise<ArrayBuffer> {
+  const r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) } });
+  if (!r.ok && r.status !== 206) {
+    const err: GraphError = new Error(`range download failed ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+  return await r.arrayBuffer();
+}
+
+//   "replace" 默认覆盖；"fail" 同名拒收（用于 sibling-copy）。
+interface UploadFileOpts {
+  conflictBehavior?: string;
+  eTag?: string | null;
+}
+//   trash / restore 用 "fail" 保护数据，caller 自己 fallback 改名
+interface MoveItemOpts {
+  eTag?: string | null;
+  newName?: string | null;
+  conflictBehavior?: string;
+}
+
+/** Graph 实例（per-provider：token 源 + 全部缓存实例私有）。返回面 = GraphTransport 超集。 */
+export function createGraph(tokenSource: () => Promise<string>) {
+  const getToken = (): Promise<string> => {
+    if (!tokenSource) throw new Error("graph token source missing (page: createOneDriveProvider; SW: createGraph(createBridgeTokenSource(dbName)))");
+    return tokenSource();
+  };
+
 async function graphFetch(method: string, pathOrUrl: string, { headers = {}, body = null }: GraphFetchOpts = {}): Promise<Response> {
   const token = await getToken();
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
@@ -110,7 +142,7 @@ async function graphFetch(method: string, pathOrUrl: string, { headers = {}, bod
 }
 
 // ----- listing -----
-export async function listChildren(subfolder = ""): Promise<GraphDriveItem[]> {
+async function listChildren(subfolder = ""): Promise<GraphDriveItem[]> {
   const pathPart = subfolder ? `:/${encodeApprootPath(subfolder)}:` : "";
   const items: GraphDriveItem[] = [];
   // @microsoft.graph.downloadUrl：1h 短效 CDN URL，加进 $select 让 list 一次性带回
@@ -129,7 +161,7 @@ export async function listChildren(subfolder = ""): Promise<GraphDriveItem[]> {
 }
 
 // ----- 单 item metadata -----
-export async function getItemByPath(path: string): Promise<GraphDriveItem | null> {
+async function getItemByPath(path: string): Promise<GraphDriveItem | null> {
   try {
     const r = await graphFetch(
       "GET",
@@ -143,7 +175,7 @@ export async function getItemByPath(path: string): Promise<GraphDriveItem | null
 }
 
 // ----- 二进制下载 -----
-export async function downloadItemBlob(itemId: string): Promise<Blob> {
+async function downloadItemBlob(itemId: string): Promise<Blob> {
   // 优先 @microsoft.graph.downloadUrl（短期签名 CDN）；没有就走 /content
   const dl = await getDownloadUrl(itemId);
   if (dl) {
@@ -163,7 +195,7 @@ export async function downloadItemBlob(itemId: string): Promise<Blob> {
 // 不该每片重走一次 getDownloadUrl 往返；过期/失效（401/403/404 或 fetch throw——iOS 切网后遗症
 // 会以 throw 现形）→ 清缓存重申请一次。
 const _dlUrlCache = new Map<string, string>();
-export async function downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer> {
+async function downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer> {
   let url = _dlUrlCache.get(itemId) ?? await getDownloadUrl(itemId);
   if (url) {
     _dlUrlCache.set(itemId, url);
@@ -178,29 +210,11 @@ export async function downloadItemRange(itemId: string, offset: number | null, l
   return await r.arrayBuffer();
 }
 
-function _rangeHeader(offset: number | null, length: number): string {
-  return (offset == null)
-    ? `bytes=-${length}`
-    : `bytes=${offset}-${offset + length - 1}`;
-}
-
-// 直接打已知 CDN URL 的 byte-range（省掉每个 peek 的 metadata RTT）
-// caller 处理 401/403 = downloadUrl 过期，重申请 getDownloadUrl 重试一次
-export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number): Promise<ArrayBuffer> {
-  const r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) } });
-  if (!r.ok && r.status !== 206) {
-    const err: GraphError = new Error(`range download failed ${r.status}`);
-    err.status = r.status;
-    throw err;
-  }
-  return await r.arrayBuffer();
-}
-
 // 拿一个新的 1h 短效 downloadUrl（过期重申请用）
 // ⚠ 裸 GET 不带 $select（2026-08-16 spike-7 战例）：downloadUrl 是 instance annotation，
 //   `$select=id,@microsoft.graph.downloadUrl` 会返回 200 却**丢掉该字段**。此前 listChildren 批量带回
 //   downloadUrl 把这条 refresh 路径遮着没炸；SW 网关手搓版先踩雷，同修回库（双实现 drift 的现世报）。
-export async function getDownloadUrl(itemId: string): Promise<string | null> {
+async function getDownloadUrl(itemId: string): Promise<string | null> {
   const r = await graphFetch("GET", `/me/drive/items/${itemId}`);
   const j = await r.json() as GraphDriveItem;
   return j["@microsoft.graph.downloadUrl"] || null;
@@ -208,12 +222,7 @@ export async function getDownloadUrl(itemId: string): Promise<string | null> {
 
 // ----- 上传 -----
 // path 相对 approot。eTag 给 If-Match（拿冲突检测）。conflictBehavior:
-//   "replace" 默认覆盖；"fail" 同名拒收（用于 sibling-copy）。
-interface UploadFileOpts {
-  conflictBehavior?: string;
-  eTag?: string | null;
-}
-export async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
+async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
   // 【运行时护栏，user 2026-08-25 拍板「全库以后只能用 If-Match」】盲覆盖在最深处不可表示：
   //   replace 必须带 If-Match eTag（CAS 覆盖）；新建走 conflictBehavior:"fail"（不存在才准建，CAS 等价物）。
   //   配套语法检测 = test/ifmatch-guard.test.ts（扫源码裸 replace）。深模块强制，UI/调用方守不守都拦得住。
@@ -276,7 +285,7 @@ export async function uploadFileToApproot(path: string, blob: Blob, contentType 
 // ----- 删除 -----
 // eTag（选填）：If-Match 前置——只在项未变时删（删空夹 best-effort 收 TOCTOU：child-add 若 bump folder eTag 则 412）。
 //   收不严（Graph 不保证 folder eTag 随 child 变）但零成本；文件硬删不传 = 无条件（旧行为）。
-export async function deleteItem(itemId: string, eTag?: string | null): Promise<void> {
+async function deleteItem(itemId: string, eTag?: string | null): Promise<void> {
   await graphFetch("DELETE", `/me/drive/items/${itemId}`, eTag ? { headers: { "If-Match": eTag } } : {});
 }
 
@@ -285,9 +294,9 @@ export async function deleteItem(itemId: string, eTag?: string | null): Promise<
 let _approotIdCache: string | null = null;
 const _subfolderIdCache = new Map<string, string>();
 
-export function clearFolderCaches(): void { _approotIdCache = null; _subfolderIdCache.clear(); _dlUrlCache.clear(); }
+function clearFolderCaches(): void { _approotIdCache = null; _subfolderIdCache.clear(); _dlUrlCache.clear(); }
 
-export async function getApprootId(): Promise<string> {
+async function getApprootId(): Promise<string> {
   if (_approotIdCache) return _approotIdCache;
   const r = await graphFetch("GET", "/me/drive/special/approot?$select=id");
   _approotIdCache = (await r.json() as GraphDriveItem).id;
@@ -296,7 +305,7 @@ export async function getApprootId(): Promise<string> {
 
 // 确保 approot 下有指定子文件夹（name 单段或多段 "a/b/c"），返 folder id。
 // 加缓存：第一次拉 / 建，之后 reuse。
-export async function ensureSubfolder(name: string): Promise<string> {
+async function ensureSubfolder(name: string): Promise<string> {
   if (!name) return getApprootId();
   const cached = _subfolderIdCache.get(name);
   if (cached !== undefined) return cached;
@@ -348,13 +357,7 @@ export async function ensureSubfolder(name: string): Promise<string> {
 // 把 item 移到指定 parent folder。atomic at server side（PATCH parentReference）
 // eTag 给 If-Match 防覆盖；newName 不传保持原 name
 // conflictBehavior: "fail" | "replace" | "rename" —— 默认 "fail"（防误覆盖目标位置同名）
-//   trash / restore 用 "fail" 保护数据，caller 自己 fallback 改名
-interface MoveItemOpts {
-  eTag?: string | null;
-  newName?: string | null;
-  conflictBehavior?: string;
-}
-export async function moveItemToFolder(itemId: string, targetFolderId: string, { eTag = null, newName = null, conflictBehavior = "fail" }: MoveItemOpts = {}): Promise<GraphDriveItem> {
+async function moveItemToFolder(itemId: string, targetFolderId: string, { eTag = null, newName = null, conflictBehavior = "fail" }: MoveItemOpts = {}): Promise<GraphDriveItem> {
   const headers: Record<string, string> = {};
   if (eTag) headers["If-Match"] = eTag;
   const body: Record<string, unknown> = {
@@ -371,7 +374,7 @@ export async function moveItemToFolder(itemId: string, targetFolderId: string, {
 //   Graph copy 是**异步任务**：POST 返 202 + Location 监控 URL，轮询到 completed 再按 resourceId 取回 item。
 //   监控 URL 是预授权的（带 Authorization 反而可能 401）→ 裸 fetch，网络层 throw 同款翻 CloudNetworkError。
 //   conflictBehavior 显式钉 fail：目标同名 → 409（绝不静默覆盖 .backup 里的既有备份）。
-export async function copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<GraphDriveItem> {
+async function copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<GraphDriveItem> {
   const res = await graphFetch(
     "POST",
     `/me/drive/items/${itemId}/copy?@microsoft.graph.conflictBehavior=fail`,
@@ -404,7 +407,7 @@ export async function copyItemToFolder(itemId: string, targetFolderId: string, n
   throw new Error(`Graph copy ${itemId}: monitor timeout (~5min)`);
 }
 
-export async function renameItem(itemId: string, newName: string, eTag: string | null = null): Promise<GraphDriveItem> {
+async function renameItem(itemId: string, newName: string, eTag: string | null = null): Promise<GraphDriveItem> {
   const headers: Record<string, string> = {};
   if (eTag) headers["If-Match"] = eTag;
   const r = await graphFetch("PATCH", `/me/drive/items/${itemId}`, {
@@ -413,3 +416,13 @@ export async function renameItem(itemId: string, newName: string, eTag: string |
   });
   return r.json() as Promise<GraphDriveItem>;
 }
+
+  return {
+    listChildren, getItemByPath, downloadItemBlob, downloadItemRange, getDownloadUrl,
+    uploadFileToApproot, deleteItem, clearFolderCaches, getApprootId, ensureSubfolder,
+    moveItemToFolder, copyItemToFolder, renameItem,
+  };
+}
+
+/** createGraph 返回面（sw/gateway 等消费者的类型口）。 */
+export type GraphInstance = ReturnType<typeof createGraph>;

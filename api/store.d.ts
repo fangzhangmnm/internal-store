@@ -953,6 +953,10 @@ export declare interface StoreConfig {
      *  （同一实例 app 自己也用——无库模式的加密探测/解密就靠它）。不加密的 app 传 createEncryption()
      *  （零 codec：探测照常、pack/unpack 响亮抛）——**没有 dormant 替身**（2026-08-27/28 替身大清洗）。 */
     encryption: EncryptionPort;
+    /** **必填表态**（A6，2026-08-28）：谁驱动周期性 reconcile。"app-driven" = app 自己的定时器/focus 事件
+     *  驱动（图库长驻轮询归 app，store 保持被动——器官学）；"none" = 只有显式调用，无周期性对齐。
+     *  store 行为零分支——这是表态不是开关：逼消费者想过这个问题，而不是无视（persistence 三件套同款）。 */
+    reconcilePolicy: "app-driven" | "none";
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
         /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */

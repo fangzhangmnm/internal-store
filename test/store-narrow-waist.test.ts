@@ -28,7 +28,7 @@ const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolv
 function mkStore(kv: ReturnType<typeof dumpKv>, provider = createMockProvider(), databaseId?: string) {
   return {
     provider,
-    store: createStore({ encryption: createMockEncryption(), persistence: "none",
+    store: createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
       appId: "wp", databaseId, provider, ui: STUB_UI,
       validateAdopt: () => true, kv, local: createMockLocal(),
       fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
@@ -140,4 +140,14 @@ test("collection.flushLocal 正常路径 → ok:true", async () => {
   col.setItem("k", 1);
   eq((await col.flushLocal()).ok, true, "写成功 → ok:true");
   assert(saved.length > 0, "确实落了盘");
+});
+
+// ── 表态制运行时门（0.8.0 批，2026-08-28）：漏喂 = 构造期响亮死，不静默漏网 ──────────────────
+test("createStore 表态制 fail-fast：缺 encryption / 缺 reconcilePolicy → 构造期 throw", async () => {
+  const { createStore } = await import("../src/create-store.ts");
+  const base = { persistence: "none", appId: "t", provider: createMockProvider(), ui: { busy: (_l: string, fn: () => unknown) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} }, validateAdopt: () => true, kv: dumpKv(), local: createMockLocal(), isOnline: () => false, signedIn: () => false, skipMigration: true } as never;
+  let e1 = null; try { createStore({ ...(base as object), reconcilePolicy: "app-driven" } as never); } catch (e) { e1 = e; }
+  assert(String(e1).includes("encryption"), "缺 encryption 必炸且说清楚");
+  let e2 = null; try { createStore({ ...(base as object), encryption: createMockEncryption() } as never); } catch (e) { e2 = e; }
+  assert(String(e2).includes("reconcilePolicy"), "缺 reconcilePolicy 必炸且说清楚");
 });

@@ -16,7 +16,7 @@
 //   · 响应协议 = 窗口式有界 206 真字节体（2026-08-15 user grill 收敛，spike-4/5 战例：Chrome 媒体管线
 //     拒 SW 自定义 default-stream 响应）；本地/云端同一条路，唯一分叉点 = 字节源接缝。
 import { createPartitionedBlobStore, type PartitionView } from "../blob-partition.ts";
-import { getItemByPath, downloadItemRange, configureGraphTokenSource } from "../providers/graph.ts";
+import { createGraph } from "../providers/graph.ts";
 import { createBridgeTokenSource } from "./bridge.ts";
 
 const CHUNK_DEFAULT = 2 * 1024 * 1024;
@@ -62,8 +62,9 @@ export function createSwStreamGateway(cfg: SwGatewayCfg) {
   const dirIdx: PartitionView = bs.partition("dir-index-cache");
   let cloud = cfg.cloud;
   if (!cloud) {
-    configureGraphTokenSource(createBridgeTokenSource(cfg.dbName));   // token-source 接缝：SW = 凭据桥
-    cloud = { getItemByPath, downloadItemRange };
+    // token-source 接缝：SW = 凭据桥（2026-08-28 实例化：graph 缓存/token 源 per-gateway，不再模块单例）
+    const g = createGraph(createBridgeTokenSource(cfg.dbName));
+    cloud = { getItemByPath: g.getItemByPath, downloadItemRange: g.downloadItemRange };
   }
   const resolveCache = new Map<string, Resolved>();     // name → item（SW 存活期）
   const etagVerified = new Map<string, string>();       // name → 已做过陈分片核对的 eTag（SW 存活期，防每片重读 meta）

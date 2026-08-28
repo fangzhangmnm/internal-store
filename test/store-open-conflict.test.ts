@@ -36,7 +36,7 @@ function rig(choice: () => "keepMine" | "takeCloud" | "cancel", opts: { validate
     resolveConflict: async ({ name, cloud, occasion }: { name: string; cloud: Blob | null; occasion: string }) => { conflicts.push({ name, cloud, occasion }); return choice(); },
     reportError: (e: unknown, level?: string) => { errors.push({ e, level }); },
   } as never;
-  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui, validateAdopt: opts.validateAdopt ?? (() => true), kv: kvRaw(), local,
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });

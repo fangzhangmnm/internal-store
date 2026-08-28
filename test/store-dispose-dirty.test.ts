@@ -21,7 +21,7 @@ function dumpKv() {
 const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} } as never;
 function mkStore(provider = createMockProvider()) {
   const kv = dumpKv();
-  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui: STUB_UI,
     validateAdopt: () => true, kv, local: createMockLocal(),
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,

@@ -8,7 +8,7 @@ import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { memKv } from "../src/cloud-sync.ts";
 
 const UI = { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} };
-const mk = (local = createMockLocal()) => ({ local, store: createStore({ persistence: "none",
+const mk = (local = createMockLocal()) => ({ local, store: createStore({ reconcilePolicy: "app-driven", persistence: "none",
   appId: "test", provider: createMockProvider(), encryption: createMockEncryption(),
   ui: UI, validateAdopt: () => true, kv: memKv(), local,
   isOnline: () => false, signedIn: () => false, skipMigration: true }) });

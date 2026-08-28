@@ -1,7 +1,7 @@
 // OneDriveProvider —— **浏览器专属**（MSAL/Graph/document）：方法调用时才碰浏览器；顶层 import 在 node 安全。
 // auth 流程（登录/token）只能真机验。
 
-import * as graph from "./graph.ts";
+import { createGraph } from "./graph.ts";
 import {
   configureOneDriveAuth,
   isAuthConfigured, initAuth, signIn, signOut, getToken, getTokenFor, isSignedIn,
@@ -65,14 +65,14 @@ export interface OneDriveConfig {
  */
 export function createOneDriveProvider(config: OneDriveConfig = {}): { provider: CloudProvider; auth: OneDriveAuth } {
   configureOneDriveAuth(config);                  // { clientId, scopes?, authority?, msalUrl? }
-  // token-source 接缝：页面上下文 = MSAL（SW 上下文注入凭据桥读端）。
+  // token-source 接缝：页面上下文 = MSAL（SW 上下文自建 createGraph(凭据桥)）。
   //   homeAccountId 给定 → 钉死该账号（getTokenFor）；缺省 → 全局 activeAccount（getToken）。
-  //   ⚠ 已知局限：graph token-source 是模块级——同页面建**第二个** provider 会覆盖第一个的 token 源
-  //   （现状全家族单 provider/页；真·多账号并联需 graph 实例化，将来另立批次）。
+  //   2026-08-28 实例化：graph 的 token 源与 approot/subfolder/downloadUrl 缓存全部 per-provider——
+  //   同页多 provider（多账号库并联）互不覆盖、互不投毒（旧模块级单例的已知局限就此清除）。
   const hid = config.homeAccountId;
-  graph.configureGraphTokenSource(hid ? () => getTokenFor(hid) : getToken);
+  const g = createGraph(hid ? () => getTokenFor(hid) : getToken);
   return {
-    provider: graphToCloudProvider(graph),        // CloudProvider（喂 createCloudSync）
+    provider: graphToCloudProvider(g),        // CloudProvider（喂 createCloudSync）
     auth: { isAuthConfigured, initAuth, signIn, signOut, getToken, isSignedIn, getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState },
   };
 }

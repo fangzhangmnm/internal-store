@@ -104,6 +104,10 @@ export interface StoreConfig {
    *  （同一实例 app 自己也用——无库模式的加密探测/解密就靠它）。不加密的 app 传 createEncryption()
    *  （零 codec：探测照常、pack/unpack 响亮抛）——**没有 dormant 替身**（2026-08-27/28 替身大清洗）。 */
   encryption: EncryptionPort;
+  /** **必填表态**（A6，2026-08-28）：谁驱动周期性 reconcile。"app-driven" = app 自己的定时器/focus 事件
+   *  驱动（图库长驻轮询归 app，store 保持被动——器官学）；"none" = 只有显式调用，无周期性对齐。
+   *  store 行为零分支——这是表态不是开关：逼消费者想过这个问题，而不是无视（persistence 三件套同款）。 */
+  reconcilePolicy: "app-driven" | "none";
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
     /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
@@ -337,6 +341,9 @@ export function createStore(config: StoreConfig) {
   const isOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
   // 加密密码源（对齐前身引擎非交互 getPassword）：优先 crypt.getPassword，兼容旧顶层；不给 → 恒 null（透传明文）。
   const getPassword = config.crypt?.getPassword ?? config.getPassword ?? ((): string | null => null);
+  // 表态制运行时门（fail-fast，2026-08-28：tsc 只拦 TS 消费者——JS/漏喂测试静默漏网实测过）
+  if (!config.encryption) throw new Error('createStore: config.encryption is required (pass createEncryption(), codec-less is fine) — no substitutes');
+  if (config.reconcilePolicy !== "app-driven" && config.reconcilePolicy !== "none") throw new Error('createStore: config.reconcilePolicy is required ("app-driven" | "none") — declare who drives periodic reconcile');
   const enc = config.encryption;   // 加密端口（必填；替身已清洗——mock 走 ./testing createMockEncryption）
 
   // ── 脊椎 + 低层 ──
