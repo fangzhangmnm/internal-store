@@ -149,8 +149,6 @@ export interface Collection {
 // @public
 export interface CollectionConfig {
     cloud: CloudSync;
-    // @deprecated
-    cloudless?: boolean;
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
     isOnline?: () => boolean;
     local?: Pick<LocalCache, "save" | "get" | "exists">;
@@ -204,7 +202,6 @@ export function createStore(config: StoreConfig): {
     };
     collection: (name: string, opts?: {
         manual?: boolean;
-        local?: boolean;
         getInitData?: CollectionConfig["getInitData"];
     }) => Collection;
     files: {
@@ -238,29 +235,10 @@ export function createStore(config: StoreConfig): {
             demoted: string[];
         }>;
     };
-    encryption: {
-        isEncryptedBlob: (blob: Blob | Uint8Array) => Promise<boolean>;
-        tryDecryptEncryptedBlob: (blob: Blob, pw: string) => Promise<Blob | null>;
-        isEncryptedPeekBlob: (blob: Blob | null | undefined) => boolean;
-    };
     dispose(opts?: {
         drain?: boolean;
     }): Promise<void>;
 };
-
-// @public
-export interface CryptoCodec {
-    pack7z(entries: {
-        path: string;
-        data: Uint8Array | string;
-    }[], password: string): Promise<Uint8Array>;
-    unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
-    zipPack(entries: {
-        path: string;
-        data: Uint8Array | string;
-    }[]): Promise<Blob>;
-    zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
-}
 
 // @public
 export interface DelResult {
@@ -287,6 +265,34 @@ export interface EmptyTrashOpts {
 export type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
 };
+
+// @public
+export interface EncryptionPort {
+    // (undocumented)
+    readonly CONTAINER_PEEK_ENTRIES: readonly string[];
+    // (undocumented)
+    decryptPeek(parsed: unknown, password: string): Promise<Uint8Array>;
+    // (undocumented)
+    readonly ENC_PEEK_MIME: string;
+    // (undocumented)
+    looksEncryptedContainer(b: Blob | Uint8Array): Promise<boolean>;
+    // (undocumented)
+    packContainer(o: {
+        dataBytes: Uint8Array;
+        fileName?: string | null;
+        ext?: string;
+        peek?: Uint8Array | null;
+        password: string;
+    }): Promise<Blob>;
+    // (undocumented)
+    readonly PEEK_TAIL_WINDOW: number;
+    // (undocumented)
+    scanEncPeekFromEnd(u8: Uint8Array): unknown | null;
+    // (undocumented)
+    unpackContainer(b: Blob | Uint8Array, password: string): Promise<{
+        dataBlob: Blob;
+    }>;
+}
 
 // @public
 export interface FetchMetaResult {
@@ -459,6 +465,16 @@ export interface MoveOpts {
     newName?: string | null;
 }
 
+// @public (undocumented)
+export interface NamespaceScanReport {
+    // (undocumented)
+    databases: string[];
+    // (undocumented)
+    databasesSupported: boolean;
+    // (undocumented)
+    localStorageKeys: number;
+}
+
 // @public
 export interface OneDriveAuth {
     getActiveAccount(): Account;
@@ -608,6 +624,9 @@ export type SaveResult = {
 };
 
 // @public
+export function scanAppNamespace(appId: string): Promise<NamespaceScanReport>;
+
+// @public
 export interface StagingCoverage {
     bytes: number;
     complete: boolean;
@@ -639,7 +658,7 @@ export type StorageManagerLike = {
 // @public
 export type Store = ReturnType<typeof createStore>;
 
-// @public
+// @public (undocumented)
 export interface StoreConfig {
     activeFileName?: () => string | null;
     appId: string;
@@ -650,9 +669,9 @@ export interface StoreConfig {
         makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
         getPassword?: (name: string) => string | null;
     };
-    crypto?: CryptoCodec;
     databaseId?: string;
     encFileName?: (name: string) => string;
+    encryption: EncryptionPort;
     encryptionSaltFileName?: string;
     fileName?: (name: string) => string;
     getPassword?: (name: string) => string | null;
@@ -772,6 +791,32 @@ export type UploadReplayPolicy = "auto" | "ask" | "manual";
 export interface WeakOverrideResult {
     backedUp: string | null;
     item: CloudItem | null;
+}
+
+// @public
+export function wipeAppNamespace(opts: {
+    appId: string;
+    consent: {
+        expected: string;
+        typed: string;
+    };
+}): Promise<WipeReport>;
+
+// @public (undocumented)
+export class WipeConsentError extends Error {
+    constructor(msg: string);
+    // (undocumented)
+    code: string;
+}
+
+// @public (undocumented)
+export interface WipeReport {
+    // (undocumented)
+    blockedDatabases: string[];
+    // (undocumented)
+    deletedDatabases: string[];
+    // (undocumented)
+    localStorageKeysRemoved: number;
 }
 
 // @public

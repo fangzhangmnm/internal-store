@@ -11,6 +11,7 @@ import { describe, it, assert, eq } from "./runner.mjs";
 import { createListing } from "../src/listing.ts";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createStore } from "../src/create-store.ts";
 
@@ -19,7 +20,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 const UI = { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {}, onReplayStatus: () => {} };
 
 function mkStore({ provider = createMockProvider(), local = createMockLocal(), kv = memKv(), signedIn = () => true, online = () => true } = {}) {
-  const store = createStore({ persistence: "none",
+  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
     appId: "test", provider, local, kv, ui: UI,
     validateAdopt: () => true, isOnline: online, signedIn, skipMigration: true,
   });

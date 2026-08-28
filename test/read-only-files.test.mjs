@@ -2,6 +2,7 @@
 import { describe, it, assert, eq } from "./runner.mjs";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createStore, ReadOnlyFilesError } from "../src/create-store.ts";
 
@@ -16,7 +17,7 @@ function memStaging() {
 function mk() {
   const provider = createMockProvider();
   const local = createMockLocal();
-  const store = createStore({ persistence: "none",
+  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
     appId: "test", provider, local, kv: memKv(), staging: memStaging(), ui: UI, readOnlyFiles: true,
     validateAdopt: () => true, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });

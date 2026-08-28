@@ -6,6 +6,7 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
@@ -35,7 +36,7 @@ function rig(choice: () => "keepMine" | "takeCloud" | "cancel", opts: { validate
     resolveConflict: async ({ name, cloud, occasion }: { name: string; cloud: Blob | null; occasion: string }) => { conflicts.push({ name, cloud, occasion }); return choice(); },
     reportError: (e: unknown, level?: string) => { errors.push({ e, level }); },
   } as never;
-  const store = createStore({ persistence: "none",
+  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui, validateAdopt: opts.validateAdopt ?? (() => true), kv: kvRaw(), local,
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });

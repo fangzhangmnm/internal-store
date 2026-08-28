@@ -9,6 +9,7 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createCloudSync, memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createListing } from "../src/listing.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
@@ -81,7 +82,7 @@ test("[cloud-naming] 子夹 A/wall.ora → listing 身份=A/wall.ora（保留夹
 // getPeek：格式盲、**按文件名**解 zip CD 取 entry（cloud-only 缩略图路径）。全名身份、无 fileName 注入（薄默认恒等）。
 //   v399：删「硬扫末尾 PNG」；改标准 zip 解析(EOCD→CD→按名找 entry→溢出尾片二次拉)。明文→entry 字节(无 type)；
 //   加密容器→外层 "peek" entry 密文(ENC_PEEK_MIME)。验字节源路由(本地切片 / 云端 byte-range + pullRange 二次拉)。
-const mkStore = (provider: ReturnType<typeof createMockProvider>) => createStore({ persistence: "none",
+const mkStore = (provider: ReturnType<typeof createMockProvider>) => createStore({ encryption: createMockEncryption(), persistence: "none",
   appId: "test", provider,
   ui: { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} } as never,
   validateAdopt: () => true, kv: memKv(), local: createMockLocal(),

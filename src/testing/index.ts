@@ -3,6 +3,8 @@
 export { createMockProvider, type MockProvider } from "./mock-provider.ts";
 /** 内存模拟本地持久层（IDB）的 LocalCache 测试替身。 */
 export { createMockLocal, type MockLocal } from "./mock-local.ts";
+/** EncryptionPort 契约形状替身（fake 容器非真加密；真加密测试住 @internal/encryption 仓）。 */
+export { createMockEncryption } from "./mock-encryption.ts";
 /** mock 工厂配置 + mock 内省 trash 条目形状。 */
 export type { MockProviderOpts } from "./mock-provider.ts";
 export type { TrashItem } from "./mock-local.ts";

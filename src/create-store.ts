@@ -8,7 +8,6 @@ import { toU8, createSubstrate } from "./substrate.ts";
 import type { Bytes } from "./substrate.ts";
 import { createLocalHead } from "./local-head.ts";
 import { createSeal } from "./seal.ts";
-import { looksEncryptedContainer, packContainer, unpackContainer, configureCryptoCodec, scanEncPeekFromEnd, decryptPeek, PEEK_TAIL_WINDOW, ENC_PEEK_MIME, CONTAINER_PEEK_ENTRIES, type CryptoCodec } from "./crypto-container.ts";
 import { createSafeResolve, type ResolveChoice } from "./safe-resolve.ts";
 import { createPush } from "./push.ts";
 import { createFreshness, type RefreshOpts, type FreshResult } from "./freshness.ts";
@@ -65,6 +64,19 @@ export interface StoreUI {
 }
 
 /** createStore 的配置。 */
+/** 加密端口（依赖倒置，2026-08-28 @internal/encryption 立户）：createEncryption(...) 实例的结构子集。
+ *  scanEncPeekFromEnd 返回的 parse 句柄是**不透明 token**——原样回传 decryptPeek，store 不拆解。 */
+export interface EncryptionPort {
+  looksEncryptedContainer(b: Blob | Uint8Array): Promise<boolean>;
+  packContainer(o: { dataBytes: Uint8Array; fileName?: string | null; ext?: string; peek?: Uint8Array | null; password: string }): Promise<Blob>;
+  unpackContainer(b: Blob | Uint8Array, password: string): Promise<{ dataBlob: Blob }>;
+  scanEncPeekFromEnd(u8: Uint8Array): unknown | null;
+  decryptPeek(parsed: unknown, password: string): Promise<Uint8Array>;
+  readonly PEEK_TAIL_WINDOW: number;
+  readonly ENC_PEEK_MIME: string;
+  readonly CONTAINER_PEEK_ENTRIES: readonly string[];
+}
+
 export interface StoreConfig {
   /** 云端低层 adapter（CloudProvider；如 createOneDriveProvider().provider）。 */
   provider: CloudProvider;
@@ -87,10 +99,11 @@ export interface StoreConfig {
   /** 同一 app 内的 store 实例标识（默认 "defaultStore"）。想开**多个互不打架的 store**（不同数据集）
    *  → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。 */
   databaseId?: string;
-  // ── 加密（对齐前身引擎，出处 = WebPaint ai-docs/11；逻辑在库、重型 7z/zip codec 由 app 注入）──
-  //   不注入 crypto → 加密 dormant（packContainer 抛「加密未配置」）；不加密的 app 就不注入，省 1.6MB。
-  /** app 注入的 zip/7z 加密 codec（参考实现见本仓 test/fixtures/）；不注入 → 加密 dormant。 */
-  crypto?: CryptoCodec;
+  // ── 加密端口（2026-08-28 encryption 立户 @internal/encryption；依赖倒置，store 零加密知识）──
+  /** **必填表态**（对齐 persistence 三件套先例）：app 组装时把 createEncryption(...) 实例喂进来
+   *  （同一实例 app 自己也用——无库模式的加密探测/解密就靠它）。不加密的 app 传 createEncryption()
+   *  （零 codec：探测照常、pack/unpack 响亮抛）——**没有 dormant 替身**（2026-08-27/28 替身大清洗）。 */
+  encryption: EncryptionPort;
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
     /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
@@ -324,7 +337,7 @@ export function createStore(config: StoreConfig) {
   const isOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
   // 加密密码源（对齐前身引擎非交互 getPassword）：优先 crypt.getPassword，兼容旧顶层；不给 → 恒 null（透传明文）。
   const getPassword = config.crypt?.getPassword ?? config.getPassword ?? ((): string | null => null);
-  if (config.crypto) configureCryptoCodec(config.crypto);   // app 注入 zip/7z codec 才启用加密；不注入 → dormant
+  const enc = config.encryption;   // 加密端口（必填；替身已清洗——mock 走 ./testing createMockEncryption）
 
   // ── 脊椎 + 低层 ──
   // 两个 cloud-sync 实例（etag 命名空间按实体分离，见 ai-docs/plan）：
@@ -523,9 +536,9 @@ export function createStore(config: StoreConfig) {
 
   // ── seal：加密透明（crypto-container 默认；getPassword 非交互）。不加密宿主 → getPassword 恒 null=透传 ──
   const seal = createSeal({
-    looksContainer: (b) => looksEncryptedContainer(b),
-    pack: (o) => packContainer({ dataBytes: o.dataBytes, fileName: o.fileName, ext: o.ext, peek: o.peek, password: o.password }),
-    unpack: (blob, pw) => unpackContainer(blob, pw),
+    looksContainer: (b) => enc.looksEncryptedContainer(b),
+    pack: (o) => enc.packContainer({ dataBytes: o.dataBytes, fileName: o.fileName, ext: o.ext, peek: o.peek, password: o.password }),
+    unpack: (blob, pw) => enc.unpackContainer(blob, pw),
     getPassword,
     getPrev: (n) => local.get(n),
     makePeek: config.crypt?.makePeek,   // 明文→peek（app 域，如 ora 缩略图）；不给 → 容器无 peek
@@ -538,7 +551,7 @@ export function createStore(config: StoreConfig) {
     localDirty: () => sub.edits.localDirty(),
     validateAdopt,
     unseal: (n, blob) => seal.unsealForRead(n, blob),   // 返明文；加密但锁定 → null（safePull 退验封套）
-    looksEncrypted: (b) => looksEncryptedContainer(b),
+    looksEncrypted: (b) => enc.looksEncryptedContainer(b),
   });
   // busy 文案接缝（2026-08-21）：模块只发 StoreTextKey，这里统一换译文（宿主 text 优先，缺省英文）。
   const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn);
@@ -674,23 +687,23 @@ export function createStore(config: StoreConfig) {
   }
   // 把一段密文 peek（getPeek 返回的 ENC_PEEK_MIME 段）非交互解密成明文字节。非 ENC_PEEK_MIME（已明文）→ 原样返。锁定/错密码→null。
   async function decryptEncPeek(name: string, encPeek: Blob): Promise<Blob | null> {
-    if (encPeek.type !== ENC_PEEK_MIME) return encPeek;   // 明文（如 image/png）直接给
-    const parsed = scanEncPeekFromEnd(new Uint8Array(await encPeek.arrayBuffer()));
+    if (encPeek.type !== enc.ENC_PEEK_MIME) return encPeek;   // 明文（如 image/png）直接给
+    const parsed = enc.scanEncPeekFromEnd(new Uint8Array(await encPeek.arrayBuffer()));
     if (!parsed) return null;
-    const plain = await seal.withPassword(name, (pw) => decryptPeek(parsed, pw));   // 非交互内存密码；锁定 → null
+    const plain = await seal.withPassword(name, (pw) => enc.decryptPeek(parsed, pw));   // 非交互内存密码；锁定 → null
     return plain ? new Blob([plain as BlobPart]) : null;
   }
   async function encVerify(name: string, pw: string): Promise<boolean> {     // app 解锁循环的便宜验证器（解 peek，不碰 7z）
     if (!pw) return false;
-    const tail = await encTailBytes(name, PEEK_TAIL_WINDOW, true);
-    if (tail) { const p = scanEncPeekFromEnd(new Uint8Array(await tail.arrayBuffer())); if (p) { try { await decryptPeek(p, pw); return true; } catch { return false; } } }
+    const tail = await encTailBytes(name, enc.PEEK_TAIL_WINDOW, true);
+    if (tail) { const p = enc.scanEncPeekFromEnd(new Uint8Array(await tail.arrayBuffer())); if (p) { try { await enc.decryptPeek(p, pw); return true; } catch { return false; } } }
     const full = await local.get(name);                          // 无 peek（裸 .7z）→ 退回整字节解一把（贵）
     if (!full) return false;
-    try { await unpackContainer(full instanceof Blob ? full : new Blob([full as BlobPart]), pw); return true; } catch { return false; }
+    try { await enc.unpackContainer(full instanceof Blob ? full : new Blob([full as BlobPart]), pw); return true; } catch { return false; }
   }
   async function encIsEncrypted(name: string): Promise<boolean> {
     const blob = await local.get(name);
-    return blob ? looksEncryptedContainer(blob instanceof Blob ? blob : new Blob([blob as BlobPart])) : false;
+    return blob ? enc.looksEncryptedContainer(blob instanceof Blob ? blob : new Blob([blob as BlobPart])) : false;
   }
   // 字节替换共用流（_swapBytes 红线，照搬前身引擎）：① 本地先落地 ② 云端 If-Match 跟进，失败→标脏+锚 parent=换前云版
   //   交正常 push 流接力收敛（v233 教训：只换一端 = 加密被静默撤销）③ 曾同步但离线 → 拒（防只换一端）④ 错密码前置出局。
@@ -720,13 +733,13 @@ export function createStore(config: StoreConfig) {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
-      if (await looksEncryptedContainer(asBlob)) return { status: "already" };
+      if (await enc.looksEncryptedContainer(asBlob)) return { status: "already" };
       if (cloud.getETag(name) != null && !online()) return { status: "offline" };   // 早退：还没打包就知两端换不齐
       const pw = getPassword(name);
       if (!pw) return { status: "locked" };                      // 首次加密密码由 app 调用前放进 getPassword seam
       let peek: Uint8Array | null = null;
       if (config.crypt?.makePeek) { try { peek = await config.crypt.makePeek(asBlob); } catch { peek = null; } }
-      const container = await packContainer({ dataBytes: await toU8(asBlob), fileName: name, ext: config.crypt?.ext, peek, password: pw });
+      const container = await enc.packContainer({ dataBytes: await toU8(asBlob), fileName: name, ext: config.crypt?.ext, peek, password: pw });
       return await encSwap(name, await toU8(container), online, true);
     }));
   }
@@ -735,9 +748,9 @@ export function createStore(config: StoreConfig) {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
-      if (!(await looksEncryptedContainer(asBlob))) return { status: "not-encrypted" };
+      if (!(await enc.looksEncryptedContainer(asBlob))) return { status: "not-encrypted" };
       if (cloud.getETag(name) != null && !online()) return { status: "offline" };
-      const res = await seal.withPassword(name, (pw) => unpackContainer(asBlob, pw));   // ④ 非交互解；无/错密码→locked，任何持久改动前出局
+      const res = await seal.withPassword(name, (pw) => enc.unpackContainer(asBlob, pw));   // ④ 非交互解；无/错密码→locked，任何持久改动前出局
       if (!res) return { status: "locked" };
       return await encSwap(name, await toU8(res.dataBlob), online, false);
     }));
@@ -919,10 +932,10 @@ export function createStore(config: StoreConfig) {
       if (!src) return null;
       const entries = await readCentralDirectory(src);
       if (!entries) return null;
-      const encEntry = entries.find((e) => CONTAINER_PEEK_ENTRIES.includes(e.name));   // 加密容器旁路块（密文）
+      const encEntry = entries.find((e) => enc.CONTAINER_PEEK_ENTRIES.includes(e.name));   // 加密容器旁路块（密文）
       if (encEntry) {
         const bytes = await readEntryBytes(src, encEntry);
-        return bytes ? new Blob([bytes as BlobPart], { type: ENC_PEEK_MIME }) : null;
+        return bytes ? new Blob([bytes as BlobPart], { type: enc.ENC_PEEK_MIME }) : null;
       }
       const target = entries.find((e) => e.name === o.zipEntry);                       // 明文：唯一依据 = app 给的文件名
       if (!target) return null;
@@ -935,7 +948,7 @@ export function createStore(config: StoreConfig) {
       const blob = await local.get(name);
       if (!blob) return null;                                   // 没有本地副本（纯云端未缓存）→ 拿不到 at-rest 字节
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
-      if (!(await looksEncryptedContainer(asBlob))) return null;   // 明文件 → null（brand 的运行时真相由这一行保证）
+      if (!(await enc.looksEncryptedContainer(asBlob))) return null;   // 明文件 → null（brand 的运行时真相由这一行保证）
       return asBlob as EncryptedBlob;
     };
     return rejectAfterDispose(Object.assign(raw, { getPeek, decryptPeek: decryptPeekFn, getEncryptedBlob }) as ZipFile);
@@ -1077,31 +1090,8 @@ export function createStore(config: StoreConfig) {
        *  绝不自动/轮询——全树 listAll 是重活。 */
       reconcileAll: (opts?: { activeFileName?: string }) => reconcileMod.reconcile(opts),
     }),
-    //   设计约束：① 不做重复的计算 ② 不做不必要的计算。
-    /** **裸字节**级的加密面（文件还没进 store、无 name 可查时用）。有 name 的场景一律走 file.*
-     *  （isEncrypted / encrypt / decrypt / verifyPassword / getPeek / decryptPeek / getEncryptedBlob）——
-     *  那些能用便宜的 peek 路径，别走这里。 */
-    encryption: rejectAfterDispose({
-      /** 是不是加密容器。**只嗅魔数/尾窗**，不派生密钥、不解密（便宜，可用于分流）。 */
-      isEncryptedBlob: (blob: Blob | Uint8Array): Promise<boolean> => looksEncryptedContainer(blob),
-
-      /** 验密码 + 解出明文，**合一**。null = 错密码（或不是容器）。
-       *
-       *  为什么合一（这就是「不做重复的计算」）：旧面把它拆成 verifyContainer(验) + unsealWith(解)，
-       *  而两者内部都是完整的 unpackContainer —— 导入一个加密文件要把整幅作品**解密两遍**
-       *  （密码试错时更多）。7z-wasm 全量解一幅画不是小钱。合一后一次尝试 = 一次解密，
-       *  且成功那次的明文直接给调用方复用。
-       *  明文只在返回的 Blob 里（内存），库不缓存、不落盘。 */
-      tryDecryptEncryptedBlob: async (blob: Blob, pw: string): Promise<Blob | null> => {
-        if (!pw) return null;
-        if (!(await looksEncryptedContainer(blob))) return null;   // 不是容器 → null（"明文原样返"是旧 unsealWith 的糊涂语义，已去掉：调用方自己先分流）
-        try { return (await unpackContainer(blob, pw)).dataBlob; } catch { return null; }
-      },
-
-      /** 这块 blob 是不是**密文 peek**（getPeek 对加密件返回的那种）。纯类型判定，零计算。
-       *  取代把 ENC_PEEK_MIME 这个魔法常量导出给 app —— app 要问的是语义，不是常量值。 */
-      isEncryptedPeekBlob: (blob: Blob | null | undefined): boolean => !!blob && blob.type === ENC_PEEK_MIME,
-    }),
+    // （encryption 面已随 @internal/encryption 立户退役 2026-08-28：加密是纯内容操作不属于同步引擎——
+    //   app 用自己的 createEncryption 实例（无库模式也活着），store 只经 EncryptionPort 收同一实例。）
     // ── dispose（0.4.0，2026-08-25 拍板 §1.2）：停 watcher → drain in-flight push → 断 IDB 连接 → 拒后续。──
     /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
      *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；

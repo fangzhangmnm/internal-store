@@ -66,7 +66,7 @@ export type { StagingStore } from "./download-session.ts";
 export type { ResolveChoice } from "./safe-resolve.ts";
 export type { StoreErrorLevel } from "./error-handling.ts";
 /** 加密 codec 注入契约 + collection 配置 + 回收站聚合条目。 */
-export type { CryptoCodec } from "./crypto-container.ts";
+export type { EncryptionPort } from "./create-store.ts";   // 加密端口（@internal/encryption 实例喂进 config.encryption）
 export type { CollectionConfig } from "./collection.ts";
 export type { TrashItem } from "./trash-merge.ts";
 /** OneDrive provider 面：工厂配置 + auth 契约 + Graph transport 形状。 */

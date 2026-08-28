@@ -8,6 +8,7 @@ import { isHidden, assertValidFileName, assertValidCollectionName } from "../src
 import { namespacedKv } from "../src/kv-namespace.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createCloudSync } from "../src/cloud-sync.ts";
 
@@ -27,7 +28,7 @@ const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolv
 function mkStore(kv: ReturnType<typeof dumpKv>, provider = createMockProvider(), databaseId?: string) {
   return {
     provider,
-    store: createStore({ persistence: "none",
+    store: createStore({ encryption: createMockEncryption(), persistence: "none",
       appId: "wp", databaseId, provider, ui: STUB_UI,
       validateAdopt: () => true, kv, local: createMockLocal(),
       fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,

@@ -4,6 +4,7 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createStore, StoreDisposedError } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createSubstrate } from "../src/substrate.ts";
 import { createCloudSync, memKv } from "../src/cloud-sync.ts";
@@ -20,7 +21,7 @@ function dumpKv() {
 const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} } as never;
 function mkStore(provider = createMockProvider()) {
   const kv = dumpKv();
-  const store = createStore({ persistence: "none",
+  const store = createStore({ encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui: STUB_UI,
     validateAdopt: () => true, kv, local: createMockLocal(),
     fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,

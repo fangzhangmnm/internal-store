@@ -37,6 +37,11 @@ export interface CloudProvider {
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
 
+// Warning: (ae-forgotten-export) The symbol "EncryptionPort" needs to be exported by the entry point index.d.ts
+//
+// @public (undocumented)
+export function createMockEncryption(): EncryptionPort;
+
 // @public
 export function createMockLocal(): MockLocal;
 

@@ -222,11 +222,6 @@ export declare interface CollectionConfig {
     local?: Pick<LocalCache, "save" | "get" | "exists">;
     /** 本地写防抖（coalesce 高频 setItem，避免每帧写 IDB）。默认 400。 */
     localWriteDelayMs?: number;
-    /** local-only 变体：永不碰云（init 只 hydrate、setItem 只写本地、reconcileWithRemote no-op）。
-     *  @deprecated 2026-08-27 标记废弃（WeebPaint P5 escalation，ai-docs/20260827-deprecation-cloudless-collection.md）：
-     *  device 本地字段的归宿 = app 侧 localStorage 器官，store 只管带云同步的持久化（单一职责，user 原话）。
-     *  ⚠ 顺序红线：物理移除必须等 WeebPaint P5 收货落地之后的版本——现在删会断在跑的 local-user-preference / local-app-state。 */
-    cloudless?: boolean;
     /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
 }
@@ -297,7 +292,6 @@ export declare function createStore(config: StoreConfig): {
     /** collection 工厂（app schema 全局单例；设置/状态全走它）。 */
     collection: (name: string, opts?: {
         manual?: boolean;
-        local?: boolean;
         getInitData?: CollectionConfig["getInitData"];
     }) => Collection;
     /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
@@ -358,24 +352,6 @@ export declare function createStore(config: StoreConfig): {
             demoted: string[];
         }>;
     };
-    /** **裸字节**级的加密面（文件还没进 store、无 name 可查时用）。有 name 的场景一律走 file.*
-     *  （isEncrypted / encrypt / decrypt / verifyPassword / getPeek / decryptPeek / getEncryptedBlob）——
-     *  那些能用便宜的 peek 路径，别走这里。 */
-    encryption: {
-        /** 是不是加密容器。**只嗅魔数/尾窗**，不派生密钥、不解密（便宜，可用于分流）。 */
-        isEncryptedBlob: (blob: Blob | Uint8Array) => Promise<boolean>;
-        /** 验密码 + 解出明文，**合一**。null = 错密码（或不是容器）。
-         *
-         *  为什么合一（这就是「不做重复的计算」）：旧面把它拆成 verifyContainer(验) + unsealWith(解)，
-         *  而两者内部都是完整的 unpackContainer —— 导入一个加密文件要把整幅作品**解密两遍**
-         *  （密码试错时更多）。7z-wasm 全量解一幅画不是小钱。合一后一次尝试 = 一次解密，
-         *  且成功那次的明文直接给调用方复用。
-         *  明文只在返回的 Blob 里（内存），库不缓存、不落盘。 */
-        tryDecryptEncryptedBlob: (blob: Blob, pw: string) => Promise<Blob | null>;
-        /** 这块 blob 是不是**密文 peek**（getPeek 对加密件返回的那种）。纯类型判定，零计算。
-         *  取代把 ENC_PEEK_MIME 这个魔法常量导出给 app —— app 要问的是语义，不是常量值。 */
-        isEncryptedPeekBlob: (blob: Blob | null | undefined) => boolean;
-    };
     /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
      *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；
      *  {drain:false} = 快速拆除，in-flight 操作会因连接关闭响亮失败、dirty 账还在下次补推）→ 关 IDB 连接。
@@ -385,24 +361,6 @@ export declare function createStore(config: StoreConfig): {
         drain?: boolean;
     }): Promise<void>;
 };
-
-/** 宿主注入的 zip/7z codec（createStore config 注入；不提供 = 加密不可用）。 */
-export declare interface CryptoCodec {
-    /** 打包明文 zip（外层容器）。 */
-    zipPack(entries: {
-        path: string;
-        data: Uint8Array | string;
-    }[]): Promise<Blob>;
-    /** 解开明文 zip（path 到字节的记录）。 */
-    zipUnpack(blob: Blob): Promise<Record<string, Uint8Array>>;
-    /** 打包加密 .7z（AES-256 + 强 KDF + 加密头）。 */
-    pack7z(entries: {
-        path: string;
-        data: Uint8Array | string;
-    }[], password: string): Promise<Uint8Array>;
-    /** 解开加密 .7z（也认老 WinZip-AES zip）。 */
-    unpack7z(bytes: Uint8Array, password: string): Promise<Record<string, Uint8Array>>;
-}
 
 /** 删除操作的终态。 */
 export declare interface DelResult {
@@ -443,6 +401,28 @@ export declare interface EmptyTrashOpts {
 export declare type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
 };
+
+/** createStore 的配置。 */
+/** 加密端口（依赖倒置，2026-08-28 @internal/encryption 立户）：createEncryption(...) 实例的结构子集。
+ *  scanEncPeekFromEnd 返回的 parse 句柄是**不透明 token**——原样回传 decryptPeek，store 不拆解。 */
+export declare interface EncryptionPort {
+    looksEncryptedContainer(b: Blob | Uint8Array): Promise<boolean>;
+    packContainer(o: {
+        dataBytes: Uint8Array;
+        fileName?: string | null;
+        ext?: string;
+        peek?: Uint8Array | null;
+        password: string;
+    }): Promise<Blob>;
+    unpackContainer(b: Blob | Uint8Array, password: string): Promise<{
+        dataBlob: Blob;
+    }>;
+    scanEncPeekFromEnd(u8: Uint8Array): unknown | null;
+    decryptPeek(parsed: unknown, password: string): Promise<Uint8Array>;
+    readonly PEEK_TAIL_WINDOW: number;
+    readonly ENC_PEEK_MIME: string;
+    readonly CONTAINER_PEEK_ENTRIES: readonly string[];
+}
 
 /** fetchMeta 的结果：只轻量元信息（store open/refresh 比对 etag 用），不下载内容。 */
 export declare interface FetchMetaResult {
@@ -666,6 +646,12 @@ export declare interface MoveOpts {
     eTag?: string | null;
     /** 撞名行为。 */
     conflictBehavior?: "fail" | "replace" | "rename";
+}
+
+export declare interface NamespaceScanReport {
+    databasesSupported: boolean;
+    databases: string[];
+    localStorageKeys: number;
 }
 
 /** createOneDriveProvider 返回的 auth 面（契约显式化；订阅走 onAuthChanged 回调，无 window 事件）。 */
@@ -908,6 +894,9 @@ export declare type SaveResult = {
     resolution?: "keepMine" | "takeCloud";
 };
 
+/** 无痕扫：枚举本 appId 命名空间残留（还原出厂后验证归零用）。只读，零副作用。 */
+export declare function scanAppNamespace(appId: string): Promise<NamespaceScanReport>;
+
 /** staging 覆盖快照（A5 透明面，2026-08-18 user 批「关键是透明清晰」）——只读 staging 账本，
  *  **零网络、离线可用**。app 拿它画徽章三态（已钉走 isKeptOffline / 完整缓存 / 部分缓存）+ 离线起播
  *  护栏（complete 才起播——防「头部在缓存先响了、播到洞静默卡死」）+ 离线边界接曲决策（headBytes）。
@@ -940,7 +929,6 @@ export declare type StorageManagerLike = {
 /** store 本体类型（createStore 的返回面：file / collection / files / encryption）。 */
 export declare type Store = ReturnType<typeof createStore>;
 
-/** createStore 的配置。 */
 export declare interface StoreConfig {
     /** 云端低层 adapter（CloudProvider；如 createOneDriveProvider().provider）。 */
     provider: CloudProvider;
@@ -961,8 +949,10 @@ export declare interface StoreConfig {
     /** 同一 app 内的 store 实例标识（默认 "defaultStore"）。想开**多个互不打架的 store**（不同数据集）
      *  → 传不同 databaseId：各自独立 IDB 库 `${appId}.${databaseId}` + 独立 localStorage 前缀。 */
     databaseId?: string;
-    /** app 注入的 zip/7z 加密 codec（参考实现见本仓 test/fixtures/）；不注入 → 加密 dormant。 */
-    crypto?: CryptoCodec;
+    /** **必填表态**（对齐 persistence 三件套先例）：app 组装时把 createEncryption(...) 实例喂进来
+     *  （同一实例 app 自己也用——无库模式的加密探测/解密就靠它）。不加密的 app 传 createEncryption()
+     *  （零 codec：探测照常、pack/unpack 响亮抛）——**没有 dormant 替身**（2026-08-27/28 替身大清洗）。 */
+    encryption: EncryptionPort;
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
         /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
@@ -1148,6 +1138,27 @@ export declare interface WeakOverrideResult {
     item: CloudItem | null;
     /** 留底的备份名。 */
     backedUp: string | null;
+}
+
+/** 深清：删除本 appId 全部命名空间（所有 databaseId 实例的 IDB 库 + localStorage 键）。
+ *  前置：全部活 store 实例已 dispose（否则对应库进 blocked 报告）。consent 库内比对，不过不执行。 */
+export declare function wipeAppNamespace(opts: {
+    appId: string;
+    consent: {
+        expected: string;
+        typed: string;
+    };
+}): Promise<WipeReport>;
+
+export declare class WipeConsentError extends Error {
+    code: string;
+    constructor(msg: string);
+}
+
+export declare interface WipeReport {
+    deletedDatabases: string[];
+    blockedDatabases: string[];
+    localStorageKeysRemoved: number;
 }
 
 /** zip 容器文件对象：RawFile + 按 entry 名取字节的 peek 面（zip 解析在库内部，app 不碰 zip 布局）。 */

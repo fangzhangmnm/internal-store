@@ -5,7 +5,7 @@ import { run } from "./runner.mjs";
 
 // 契约/低层
 import "./onedrive-provider.contract.test.mjs";
-import "./crypto-container.test.mjs";
+import "./enc-at-rest.test.mjs";
 import "./substrate.test.mjs";
 import "./folder-merge.test.mjs";
 import "./folder-flow.test.mjs";

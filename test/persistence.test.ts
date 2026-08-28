@@ -4,6 +4,7 @@ import { test, eq, assert } from "./runner.mjs";
 import { queryStoragePersistence, requestStoragePersistence } from "../src/persistence.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
+import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 
 test("[persist] queryStoragePersistence：纯查询三态（persisted true/false/环境缺失），异常诚实降级不谎报", async () => {
@@ -25,7 +26,7 @@ test("[persist] requestStoragePersistence：已持久→granted 不重复调；p
 });
 
 test("[persist] StoreConfig.persistence 必填表态：缺失 → createStore throw（编译期+运行时双门）；files.persistence() 感知面在", async () => {
-  const mk = (persistence?: unknown) => createStore({
+  const mk = (persistence?: unknown) => createStore({ encryption: createMockEncryption(),
     ...(persistence != null ? { persistence } : {}),
     appId: "wp", provider: createMockProvider(),
     ui: { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} },
