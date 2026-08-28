@@ -30,6 +30,7 @@ app 侧 P7 流程 = 清 registry + 全缓存库 + localStorage + crash/revert ri
 - `local-user-preference`：只剩 P5 播种源（`seedDevicePrefsFromLegacy` 的 `_LEGACY_HOME` 读腿）；
 - `local-app-state`：`appState.currentFile / restoreAttempt` legacy 读腿（写面已由 resume-slate 接管，读腿是回执条播种源）。
 清零 = WeebPaint 侧工单（评估播种期是否可关：存量设备都升过 0.11.10+ 后 legacy 播种可退役）。**等 WeebPaint 清零信号再删**，顺序红线见 deprecation doc。
+**（2026-08-27 状态更新，edited by Claude Fable 5）**：WeebPaint 侧评估已出（该仓 `ai-docs/20260827-cloudless-seeding-retirement-eval.md`）——**播种期未到关点，清零信号未发**。两个门：①WeebPaint 真机批跑完（每台自家设备 boot 一次 ≥0.11.11）；②prod 升上 0.11.x 且存量 prod 设备升级 boot 过（现 prod=v0.10.33 无播种代码）。本议题继续等信号，别抢跑。
 
 ### 4. 真机矩阵（folder provider）
 
