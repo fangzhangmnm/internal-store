@@ -10,6 +10,8 @@ export { createStore, ReadOnlyFilesError, StoreDisposedError } from "./create-st
 // persist 三件套（user 2026-08-27 拍板，全案 = persistence.ts 头注释）：执行体只准在用户手势时刻调；
 //   感知面走 store.files.persistence()；StoreConfig.persistence 必填表态。库永不自动调 persist()。
 export { requestStoragePersistence, queryStoragePersistence } from "./persistence.ts";
+export { wipeAppNamespace, scanAppNamespace, WipeConsentError } from "./maintenance.ts";
+export type { WipeReport, NamespaceScanReport } from "./maintenance.ts";
 export type { PersistenceState, StorageManagerLike } from "./persistence.ts";
 export { CloudNetworkError } from "./errors.ts";   // 网络层失败的类型化封装（app 按 name 换 i18n 人话文案；2026-08-25）
 export { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（ref 失效 404 收敛；app 提示刷新列表。2026-08-26）
