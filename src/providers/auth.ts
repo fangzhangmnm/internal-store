@@ -195,13 +195,15 @@ async function _probeSilent(account: Account): Promise<void> {
   } catch (_) { /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
 }
 
-export async function signIn(): Promise<unknown> {
+export async function signIn(opts?: { prompt?: "select_account" }): Promise<unknown> {
   // **iOS 关键**：loginRedirect 必须在同步 user-gesture（点击）里调，**前面不能有 await**，
   // 否则 iOS Safari 把它当非手势导航静默拦截（→ 不弹登录框）。
   // interaction 状态由 boot initAuth 的 handleRedirectPromise 清（silent 探测已移后台不占 interaction），
   // 所以点击时 pca 通常已就绪，直接同步 loginRedirect。
+  // opts.prompt="select_account"（0.9.0，user 2026-08-28「加口子」）：强制微软账号选择页——多账号
+  //   「换一个账号连接图库」入口用（P3 §1.10 铸第二账号）；缺省不传 = SSO 快路（单账号零打扰不变）。
   if (!pca) await initAuth();                  // 仅 boot 还没建 pca 的极少数情况才等（会丢 gesture，但罕见）
-  return pca.loginRedirect({ scopes: SCOPES }); // 同步调用，保住 iOS user-gesture
+  return pca.loginRedirect({ scopes: SCOPES, ...(opts?.prompt ? { prompt: opts.prompt } : {}) }); // 同步调用，保住 iOS user-gesture
 }
 
 export async function signOut(): Promise<void> {

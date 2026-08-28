@@ -494,7 +494,9 @@ export interface OneDriveAuth {
     isSignedIn(): boolean;
     onAuthChanged(cb: (st: AuthState) => void): () => void;
     retrySilentSignIn(): Promise<boolean>;
-    signIn(): Promise<unknown>;
+    signIn(opts?: {
+        prompt?: "select_account";
+    }): Promise<unknown>;
     signOut(): Promise<void>;
 }
 
