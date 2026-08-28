@@ -1,7 +1,8 @@
 # 懒仲裁 hash：park 到真机观察到假冲突为止；eTag 拆解捷径永久禁止
 > created 20260827
 
-**Status:** accepted (2026-08-27 user 定案「记录不做的决策」— Claude Fable 5)
+**Status:** superseded (2026-08-28 user 改判「已经被判是不好的设计，舍弃」——懒 hash 从「park 等真机假冲突」改为**彻底弃案**，永不复议；**eTag 拆解捷径的永久禁令继续有效**（那半条是红线不是懒 hash 的附属）。edited by Claude Fable 5)
+~~**Status:** accepted (2026-08-27 user 定案「记录不做的决策」— Claude Fable 5)~~
 
 ## Context
 

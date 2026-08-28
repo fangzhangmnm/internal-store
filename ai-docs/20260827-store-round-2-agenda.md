@@ -12,6 +12,13 @@
 ## 议题（逐条 escalate human，不许自行拍板）
 
 > **状态刷新 2026-08-28（edited by Claude Fable 5）**：议题 2/3/4′ 已随 **0.7.0**（store）+ **@internal/encryption 0.1.0**（新仓 `20260828 internal-encryption`）完结——cloudless 物理移除（WeebPaint v0.11.25 清零信号=播种纪元整体退役，user 拍板宣发前不留 backward compat）、maintenance 深清两口子（typed consent 库内比对/blocked 诚实报告/库名+计数红线口径）、encryption 立户割接（config.encryption=EncryptionPort 必填，Store.encryption 面退役）。WeebPaint 已收货双包。
+> **【0828 收官戳，edited by Claude Fable 5】下述新单①②⑤⑥已全落 → v0.8.0 已发版（user「过」放行）+
+> WeebPaint v0.11.33 收货**：①pin=graph 实例化（跨账号缓存投毒同刀清除）；②A4 双 tab 护栏
+> （rev 戳+guard+备份对方字节+冷却；测试=test/local-conflict-guard.test.ts + WeebPaint 真 IDB 夹具 F3）；
+> ③轮询=app 层落 WeebPaint v0.11.32（库零改，reconcilePolicy 表态制承接）；④数据结构=WeebPaint registry
+> generic-dict 口径钉（v0.11.32，库侧无单）；⑤ADR-0025 superseded 戳已补；⑥fail-fast 已落。
+> 本 agenda 全部完结；余=议题 4 真机矩阵（user 手动）。
+>
 > **持久化收敛轮新单（user 0828 拍板，宣发前红线）**：①议题 1 pin 改判**必做**；②双 tab 同作品本地字节互覆护栏（0821 §7.5 旧账）**必做**；③图库长驻云端轮询 park 改判**必做**；④GDrive/多云 provider **数据结构必做**（「黄线=宣发后不后悔数据结构，migration 洁癖」）；⑤ADR-0025 懒 hash user 改判**舍弃**（补 superseded 戳）；⑥createStore 构造期 fail-fast（见文末）。
 
 ### 1. OneDrive provider per-account pin（P3 余账）——**user 0828 改判必做（持久化收敛轮）**
