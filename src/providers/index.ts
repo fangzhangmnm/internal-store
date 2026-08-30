@@ -17,8 +17,8 @@ export interface OneDriveAuth {
   isAuthConfigured(): boolean;
   /** 初始化 auth（silent probe：有 account 不代表本 app 有 token）。 */
   initAuth(): Promise<AuthState>;
-  /** 交互式登录（用户手势里调）。 */
-  signIn(opts?: { prompt?: "select_account" }): Promise<unknown>;
+  /** 交互式登录（用户手势里调）。mode:"popup"=loginPopup 不离页（0.10.0，缺省仍 redirect）。 */
+  signIn(opts?: { prompt?: "select_account"; mode?: "popup" | "redirect" }): Promise<unknown>;
   /** 登出：只清本 app cache（clearCache），不 logoutRedirect 踢掉用户整个微软会话。 */
   signOut(): Promise<void>;
   /** 拿 access token（silent）。 */

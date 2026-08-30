@@ -195,15 +195,31 @@ async function _probeSilent(account: Account): Promise<void> {
   } catch (_) { /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
 }
 
-export async function signIn(opts?: { prompt?: "select_account" }): Promise<unknown> {
+export async function signIn(opts?: { prompt?: "select_account"; mode?: "popup" | "redirect" }): Promise<unknown> {
   // **iOS 关键**：loginRedirect 必须在同步 user-gesture（点击）里调，**前面不能有 await**，
   // 否则 iOS Safari 把它当非手势导航静默拦截（→ 不弹登录框）。
   // interaction 状态由 boot initAuth 的 handleRedirectPromise 清（silent 探测已移后台不占 interaction），
   // 所以点击时 pca 通常已就绪，直接同步 loginRedirect。
   // opts.prompt="select_account"（0.9.0，user 2026-08-28「加口子」）：强制微软账号选择页——多账号
   //   「换一个账号连接图库」入口用（P3 §1.10 铸第二账号）；缺省不传 = SSO 快路（单账号零打扰不变）。
+  // opts.mode="popup"（0.10.0，user 2026-08-25 拍板「桌面主场 MSAL popup、iOS redirect」、0830 确认直做）：
+  //   loginPopup 全程不离页——resolve 时账号已就位（activeAccount 已设、已广播），调用方可直接续办，
+  //   不再需要 redirect 的「待续标记 + 回程续办」舞步。桌面/移动的判断归 app（库零产品知识），缺省仍 redirect。
+  //   popup 同样要同步 user-gesture 起跳（弹窗拦截），前面不能有 await（pca 就绪时下面直达）。
+  //   取消（user_cancelled）/被拦（popup_window_error）= reject 原样抛给调用方——绝不吞、绝不自动降级
+  //   redirect（降级导航已不在用户手势里，会被 iOS/弹窗拦截判黑，且「点登录却整页跳走」正是 popup 要治的病）。
   if (!pca) await initAuth();                  // 仅 boot 还没建 pca 的极少数情况才等（会丢 gesture，但罕见）
-  return pca.loginRedirect({ scopes: SCOPES, ...(opts?.prompt ? { prompt: opts.prompt } : {}) }); // 同步调用，保住 iOS user-gesture
+  const request = { scopes: SCOPES, ...(opts?.prompt ? { prompt: opts.prompt } : {}) };
+  if (opts?.mode === "popup") {
+    const response = await pca.loginPopup(request);
+    if (response?.account) {
+      pca.setActiveAccount(response.account);
+      activeAccount = response.account;
+      _emitAuth();                             // popup 弹回 → 通知 UI（与 redirect 回程 initAuth 同一广播面）
+    }
+    return response;
+  }
+  return pca.loginRedirect(request); // 同步调用，保住 iOS user-gesture
 }
 
 export async function signOut(): Promise<void> {
