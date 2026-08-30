@@ -1009,12 +1009,31 @@ export function createStore(config: StoreConfig) {
     return coll;
   }
 
+  // collection 云端存在性探针（0.11.0，user 2026-08-30「同意」；首用=WeebPaint 笔刷播种案）：
+  //   纯读 fetchMeta（`.${appId}/<name>.json`，enc 变体 _find 顺带覆盖），**零本地写零记账**。
+  //   "absent"=云端确认没有（「真新库」判据：开过库的必有 scaffold+首播）；"present"=存在
+  //   （含空信封残库——调用方按旧库办，方向安全宁不问）；"unknown"=探不到（离线/未授权/网络错），
+  //   调用方按「不知道」办，**绝不当 absent**。
+  async function collectionPeek(name: string): Promise<"absent" | "present" | "unknown"> {
+    if (_disposed) throw new StoreDisposedError("collectionPeek");
+    assertValidCollectionName(name);
+    try {
+      const meta = await collectionsCloud.fetchMeta(name);
+      return meta ? "present" : "absent";
+    } catch (e) {
+      reportStoreError(e, "log");   // 良性（离线等）；funnel 不吞（家规）
+      return "unknown";
+    }
+  }
+
   return {
     // ── file + collection。改身份走 file.tryMove(to)。──
     /** 文件对象工厂（含 tryMove/pullIfClean/save/open/delete/reupload…）。 */
     file,
     /** collection 工厂（app schema 全局单例；设置/状态全走它）。 */
     collection,
+    /** collection 云端存在性探针（纯读零记账）："absent"=确认没有 / "present"=存在 / "unknown"=探不到（离线等，绝不当 absent）。 */
+    collectionPeek,
     // ── files 命名空间。不暴露 list/listAll/localKeys（app 只放当前夹于内存；名字碰撞由 file.tryMove/mode:"new"
     //   内化检测，不靠「先 list 目标夹」；全库 listAll 仅库内 reconcile 用）。──
     /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
