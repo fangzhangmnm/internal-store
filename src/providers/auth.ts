@@ -83,12 +83,46 @@ export function countRefreshTokens(homeAccountId?: string): number | null {
     return n;
   } catch { return null; }
 }
+/** 只读诊断（0.11.3）：MSAL 缓存里 token 条目的**时间戳**（不含 secret）。RT 条目带 expiresOn 说明服务端返回过
+ *  refresh_token_expires_in（MSA 个人账号会给）；MSAL 客户端到点即判 refresh_token_expired 退 iframe——若 expiresOn 距签发
+ *  只有 ~1h，就是「一小时必掉」的直接证据。AT 条目给 cachedAt/expiresOn/target 做对照。localStorage 不可用 → null。 */
+export function inspectMsalTokenCache(homeAccountId?: string): { refreshTokens: string[]; accessTokens: string[] } | null {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!ls) return null;
+    const prefix = homeAccountId ? homeAccountId.toLowerCase() + "-" : "";
+    const rts: string[] = [], ats: string[] = [];
+    const fmt = (v: unknown): string => { const n = Number(v); return Number.isFinite(n) && n > 0 ? new Date(n * 1000).toISOString() : String(v ?? "-"); };
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i); if (!k) continue;
+      const kl = k.toLowerCase();
+      if (prefix && !kl.startsWith(prefix)) continue;
+      const isRt = kl.includes("-refreshtoken-"), isAt = kl.includes("-accesstoken-");
+      if (!isRt && !isAt) continue;
+      let ent: { expiresOn?: unknown; cachedAt?: unknown; extendedExpiresOn?: unknown; target?: unknown; environment?: unknown; familyId?: unknown } = {};
+      try { ent = JSON.parse(ls.getItem(k) ?? "{}"); } catch { /* 非 JSON：只记键 */ }
+      const env = String(ent.environment ?? kl.split("-")[1] ?? "?");
+      if (isRt) rts.push(`env=${env} familyId=${String(ent.familyId ?? "-")} expiresOn=${fmt(ent.expiresOn)}`);
+      else ats.push(`env=${env} cachedAt=${fmt(ent.cachedAt)} expiresOn=${fmt(ent.expiresOn)} extExpiresOn=${fmt(ent.extendedExpiresOn)} target=${String(ent.target ?? "-").slice(0, 80)}`);
+    }
+    return { refreshTokens: rts, accessTokens: ats };
+  } catch { return null; }
+}
+function _cacheLines(homeAccountId?: string): string[] {
+  const c = inspectMsalTokenCache(homeAccountId);
+  if (!c) return ["  msal-cache: (localStorage unavailable)"];
+  return [
+    `  msal-cache rt(${c.refreshTokens.length}):`, ...c.refreshTokens.map((l) => "    " + l),
+    `  msal-cache at(${c.accessTokens.length}):`, ...c.accessTokens.map((l) => "    " + l),
+  ];
+}
 function _logSilentFailure(where: string, account: Account, e: unknown): void {
   const err = e as { errorCode?: unknown; subError?: unknown; message?: unknown; name?: unknown } | null;
   const hid = typeof account?.homeAccountId === "string" ? account.homeAccountId : "";
   const lines = [
     `[auth] silent token renewal failed (${where}): name=${String(err?.name ?? "?")} code=${String(err?.errorCode ?? "?")} sub=${String(err?.subError ?? "")} msg=${String(err?.message ?? e).slice(0, 200)}`,
-    `  account=${hid ? hid.slice(0, 8) + "…" : "(none)"} refreshTokensInCache=${String(countRefreshTokens(hid || undefined))} scopes=${SCOPES.join(" ")}`,
+    `  account=${hid ? hid.slice(0, 8) + "…" : "(none)"} refreshTokensInCache=${String(countRefreshTokens(hid || undefined))} scopes=${SCOPES.join(" ")} now=${new Date().toISOString()}`,
+    ..._cacheLines(hid || undefined),
     `  msal-tail(${_msalTail.length}):`,
     ..._msalTail.map((l) => "    " + l),
   ];
@@ -225,7 +259,7 @@ export async function initAuth(): Promise<AuthState> {
     }
 
     const cached = pca.getAllAccounts();
-    reportStoreError(new Error(`[auth] init: redirectResponse=no cachedAccounts=${cached.length} refreshTokensInCache=${String(countRefreshTokens())}`), "log");
+    reportStoreError(new Error([`[auth] init: redirectResponse=no cachedAccounts=${cached.length} refreshTokensInCache=${String(countRefreshTokens())} now=${new Date().toISOString()}`, ..._cacheLines()].join("\n")), "log");
     if (cached.length === 0) return { signedIn: false, account: null };
 
     // silent token 探测**移出阻塞 init** → 后台跑（F4）。iOS 上 acquireTokenSilent 的 iframe 会卡住；

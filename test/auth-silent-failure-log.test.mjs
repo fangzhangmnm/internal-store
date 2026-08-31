@@ -35,7 +35,8 @@ describe("auth · 静默续签失败诊断日志（0.11.2）", () => {
     const prevMsal = globalThis.window.msal, prevLS = globalThis.localStorage;
     globalThis.window.msal = { PublicClientApplication: SilentFailPca, LogLevel: { Error: 0, Warning: 1, Info: 2, Verbose: 3, Trace: 4 } };
     globalThis.localStorage = fakeLS({
-      "uid.9188040d-6c67-4c5b-b112-36a304b66dad-login.windows.net-refreshtoken-test-client-id----": "{}",
+      "uid.9188040d-6c67-4c5b-b112-36a304b66dad-login.windows.net-refreshtoken-test-client-id----": JSON.stringify({ credentialType: "RefreshToken", environment: "login.windows.net", secret: "SECRET-MUST-NOT-LEAK", expiresOn: "1700003600" }),
+      "uid.9188040d-6c67-4c5b-b112-36a304b66dad-login.windows.net-accesstoken-test-client-id-9188040d-6c67-4c5b-b112-36a304b66dad-files.readwrite.appfolder--": JSON.stringify({ credentialType: "AccessToken", environment: "login.windows.net", secret: "SECRET-MUST-NOT-LEAK", cachedAt: "1700000000", expiresOn: "1700003600", extendedExpiresOn: "1700003600", target: "Files.ReadWrite.AppFolder openid profile" }),
       "uid.9188040d-6c67-4c5b-b112-36a304b66dad-login.microsoftonline.com-refreshtoken-test-client-id----": "{}",
       "other.tenant-login.windows.net-refreshtoken-test-client-id----": "{}",
       "msal.token.keys.test-client-id": "{}",
@@ -73,6 +74,14 @@ describe("auth · 静默续签失败诊断日志（0.11.2）", () => {
       assert(rep[0].includes("refreshTokensInCache=2"), "带本账号 RT 条数: " + rep[0]);
       assert(rep[0].includes("Info: cache miss"), "附 msal tail");
       assert(rep[0].includes("scopes=Files.ReadWrite.AppFolder"), "带 scopes");
+      // 0.11.3：缓存条目时间戳（不含 secret）
+      assert(rep[0].includes("msal-cache rt(2)"), "RT 条目数: " + rep[0]);
+      assert(rep[0].includes("expiresOn=2023-11-14T23:13:20.000Z"), "RT/AT expiresOn 转 ISO: " + rep[0]);
+      assert(rep[0].includes("cachedAt=2023-11-14T22:13:20.000Z"), "AT cachedAt");
+      assert(rep[0].includes("target=Files.ReadWrite.AppFolder"), "AT target");
+      assert(!rep[0].includes("SECRET-MUST-NOT-LEAK"), "绝不带 secret");
+      const insp = auth.inspectMsalTokenCache("UID.9188040d-6c67-4c5b-b112-36a304b66dad");
+      eq(insp.refreshTokens.length, 2); eq(insp.accessTokens.length, 1);
     } finally {
       setStoreErrorReporter(() => {});
       globalThis.window.msal = prevMsal;
