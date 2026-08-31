@@ -162,6 +162,30 @@ describe("cloud-sync.listFolder · 非递归 + 顶层安全网跳过", () => {
   });
 });
 
+// ── tile 时间口径（0.11.2，user 2026-08-31 拍板方案③）：dirty 显本地时间，否则显云端时间 ─────────────
+//   守：① dirty ∧ 两边都有 → 本地 updatedAt；② clean ∧ 两边都有 → 云端 lastModified（拉取刷新的本地戳不上位）；
+//      ③ dirty 但本地 stat 缺 → 回落云端；④ 纯本地 → 本地；⑤ cloud-only → 云端。added by Claude Fable 5 2026-08-31
+describe("listing · tile 时间口径（dirty→本地，否则云端）", () => {
+  const CLOUD_T = 1_000_000, LOCAL_T = 4_000_000;
+  function mkT({ dirty = false, withStat = true, hasCloud = true, hasLocal = true } = {}) {
+    const cloud = {
+      async listFolder() { return { files: hasCloud ? [{ path: "A/x", name: "A/x", eTag: "e1", size: 3, lastModifiedDateTime: CLOUD_T }] : [], folders: [], complete: true }; },
+      async listAll() { return { files: [], folders: [], complete: true }; },
+      getETag: () => null,
+    };
+    const local = { async appKeys() { return hasLocal ? ["A/x"] : []; }, ...(withStat ? { async stat() { return { size: 3, updatedAt: LOCAL_T }; } } : {}) };
+    const head = { seenBase: () => (hasCloud && hasLocal ? "e1" : null), isDirtyAnywhere: () => dirty };
+    return createListing({ cloud, local, head, pendingFolders: () => [] });
+  }
+  const one = async (l) => (await l.listFolder("A", CTX_ON)).items.find((i) => i.path === "A/x");
+
+  it("① dirty ∧ 云本地都有 → 本地时间（推云失败后不再倒退）", async () => { eq((await one(mkT({ dirty: true }))).lastModified, LOCAL_T); });
+  it("② clean ∧ 云本地都有 → 云端时间（只打开看过的画不显「刚刚」）", async () => { eq((await one(mkT({ dirty: false }))).lastModified, CLOUD_T); });
+  it("③ dirty 但本地 stat 缺（老 mock）→ 回落云端", async () => { eq((await one(mkT({ dirty: true, withStat: false }))).lastModified, CLOUD_T); });
+  it("④ 纯本地（无云）→ 本地时间", async () => { eq((await one(mkT({ hasCloud: false }))).lastModified, LOCAL_T); });
+  it("⑤ cloud-only（无本地）→ 云端时间", async () => { eq((await one(mkT({ hasLocal: false, withStat: false }))).lastModified, CLOUD_T); });
+});
+
 // ── watchFolder（真 createStore + mock；两帧节律 + path 契约 + 本夹写即时重画 + 夹隔离）────────
 describe("watchFolder · 网盘模型集成", () => {
   function mkStore({ online = true, signedIn = true } = {}) {

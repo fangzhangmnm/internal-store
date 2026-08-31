@@ -149,14 +149,21 @@ export function createListing(cfg: ListingCfg) {
     const seen = head.seenBase(path);
     const everSynced = seen != null;
     const cloudMoved = hasCloud && cf!.eTag !== seen;
+    const dirty = head.isDirtyAnywhere(path);   // 徽章答的是「这台设备有没有未推字节」（全局），不是本 tab 谱系
     const syncState = classifySyncState({
       hasLocal, hasCloud, everSynced, cloudMoved,
-      dirty: head.isDirtyAnywhere(path),   // 徽章答的是「这台设备有没有未推字节」（全局），不是本 tab 谱系
+      dirty,
       cloudReachable, absenceAuthoritative,
       pendingGone: isPendingGone?.(path),
     });
-    // size/时间：云端有就用云端（authoritative），否则用本地缓存记录 → 离线 / 云端帧到达前也不显 0B/1970。
-    return { path, syncState, size: cf?.size ?? localStat?.size, lastModified: cf?.lastModified ?? localStat?.updatedAt };
+    // size：云端有就用云端（authoritative），否则用本地缓存记录 → 离线 / 云端帧到达前也不显 0B/1970。
+    // 时间（0.11.2，user 2026-08-31 拍板方案③）：**本地领先（dirty=有未推字节）才显本地时间，否则显云端时间**。
+    //   以前一律云端优先：推云失败后本地一直在存、云端停在上次成功推 → tile 时间「倒退三小时」像没保存（案发 2026-08-31）。
+    //   不用 max(cloud, local)：local.updatedAt 在 pull/自动缓存时也刷新，只打开看过的画会显「刚刚」——更骗人。
+    //   判据与 badge 同源（dirty）：badge 说「未推」时间就是你本地最后一存；badge 说「已同步」时间就是云端那份；
+    //   跨设备 B 机不 dirty → 云端时间正确。仅影响显示，不进任何同步/冲突判断（no-timestamps 红线不动）。
+    const lastModified = dirty ? (localStat?.updatedAt ?? cf?.lastModified) : (cf?.lastModified ?? localStat?.updatedAt);
+    return { path, syncState, size: cf?.size ?? localStat?.size, lastModified };
   }
 
   // 本地项的轻量元信息（size+updatedAt），批量取 → classifyPath 给本地项填尺寸/时间。stat 缺（老 mock）→ 跳过。

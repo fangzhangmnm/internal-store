@@ -54,6 +54,46 @@ export function isAuthConfigured(): boolean {
 // MSAL_URL 由 configureOneDriveAuth 设（app 传 vendored 脚本相对路径，document.baseURI 解绝对）。
 let msalLoadPromise: Promise<Msal> | null = null;
 let pca: Pca = null;
+
+// ── 0.11.2 续签诊断（纯记日志，零行为变化；user 2026-08-31「一小时掉线好几个 minor 纪元每次必现」）──
+// 现象上「缓存里没有 refresh token」与「refresh token 被拒」都经 iframe 退路抛同一个 InteractionRequiredAuthError，
+//   分不开；能分开的两样东西：① MSAL 自己的日志（它会说跳过 RT 还是 RT 请求返回了什么）② 缓存里 RT 条数。
+// - MSAL logger 接 Info 级进一个 40 行的环（不进 app 日志——平时太吵），Warning/Error 即时上报（log 级）；
+//   静默续签失败时把环整段附在失败报告里 → app 黑匣子一次拿到上下文。
+// - countRefreshTokens：只读扫 localStorage 里 MSAL 自己的 RT 键（`<homeAccountId>-<env>-refreshtoken-<clientId>-…`）。
+//   这不是 store 的命名空间（namespacedKv choke point 管的是 store 键），是 MSAL 的储物柜，本文件是它唯一的包装层。
+const MSAL_TAIL_MAX = 40;
+const _msalTail: string[] = [];
+function _msalLog(level: number, message: string): void {
+  _msalTail.push(`${new Date().toISOString().slice(11, 23)} L${level} ${message}`);
+  if (_msalTail.length > MSAL_TAIL_MAX) _msalTail.splice(0, _msalTail.length - MSAL_TAIL_MAX);
+  if (level <= 1) reportStoreError(new Error("[msal] " + message), "log");   // 0=Error 1=Warning：即时给 app（log 级，不弹）
+}
+/** 只读诊断：MSAL 在 localStorage 里为该账号（缺省=任意账号）存了几条 refresh token。存储不可用 → null。 */
+export function countRefreshTokens(homeAccountId?: string): number | null {
+  try {
+    const ls = (globalThis as { localStorage?: Storage }).localStorage;
+    if (!ls) return null;
+    const prefix = homeAccountId ? homeAccountId.toLowerCase() + "-" : "";
+    let n = 0;
+    for (let i = 0; i < ls.length; i++) {
+      const k = ls.key(i);
+      if (k && k.includes("-refreshtoken-") && (!prefix || k.toLowerCase().startsWith(prefix))) n++;
+    }
+    return n;
+  } catch { return null; }
+}
+function _logSilentFailure(where: string, account: Account, e: unknown): void {
+  const err = e as { errorCode?: unknown; subError?: unknown; message?: unknown; name?: unknown } | null;
+  const hid = typeof account?.homeAccountId === "string" ? account.homeAccountId : "";
+  const lines = [
+    `[auth] silent token renewal failed (${where}): name=${String(err?.name ?? "?")} code=${String(err?.errorCode ?? "?")} sub=${String(err?.subError ?? "")} msg=${String(err?.message ?? e).slice(0, 200)}`,
+    `  account=${hid ? hid.slice(0, 8) + "…" : "(none)"} refreshTokensInCache=${String(countRefreshTokens(hid || undefined))} scopes=${SCOPES.join(" ")}`,
+    `  msal-tail(${_msalTail.length}):`,
+    ..._msalTail.map((l) => "    " + l),
+  ];
+  reportStoreError(new Error(lines.join("\n")), "log");
+}
 let activeAccount: Account = null;
 let initPromise: Promise<AuthState> | null = null;
 
@@ -141,6 +181,13 @@ export async function initAuth(): Promise<AuthState> {
   initPromise = (async () => {
     const msal = await loadMsal();
     pca = new msal.PublicClientApplication({
+      system: {
+        loggerOptions: {
+          logLevel: msal.LogLevel?.Info ?? 2,   // 0 Error / 1 Warning / 2 Info / 3 Verbose / 4 Trace
+          piiLoggingEnabled: false,
+          loggerCallback: (level: number, message: string, containsPii: boolean) => { if (!containsPii) _msalLog(level, message); },
+        },
+      },
       auth: {
         clientId: CLIENT_ID,
         authority: AUTHORITY,
@@ -178,6 +225,7 @@ export async function initAuth(): Promise<AuthState> {
     }
 
     const cached = pca.getAllAccounts();
+    reportStoreError(new Error(`[auth] init: redirectResponse=no cachedAccounts=${cached.length} refreshTokensInCache=${String(countRefreshTokens())}`), "log");
     if (cached.length === 0) return { signedIn: false, account: null };
 
     // silent token 探测**移出阻塞 init** → 后台跑（F4）。iOS 上 acquireTokenSilent 的 iframe 会卡住；
@@ -206,7 +254,7 @@ async function _probeSilent(account: Account): Promise<void> {
     pca.setActiveAccount(account);
     activeAccount = account;
     _emitAuth();                                    // 后台 silent 成功 → 通知 UI
-  } catch (_) { /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
+  } catch (e) { _logSilentFailure("boot-probe", account, e); /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
 }
 
 export async function signIn(opts?: { prompt?: "select_account"; mode?: "popup" | "redirect" }): Promise<unknown> {
@@ -252,6 +300,7 @@ export async function getToken(): Promise<string> {
     const result = await pca.acquireTokenSilent({ scopes: SCOPES, account: activeAccount });
     return result.accessToken;
   } catch (e) {
+    _logSilentFailure("getToken", activeAccount, e);
     // silent 失败 = token 过期/失效 → 清 activeAccount + 通知 UI（按钮变灰，回到"未登录"）。
     // **绝不在此 acquireTokenRedirect**：getToken 只在后台 graph 请求里被调；后台数据同步
     //   触发交互式跳转 = boot 重定向循环（silent 失败→跳转→重载→再 silent 失败…一直转）/
@@ -276,8 +325,10 @@ export async function getTokenFor(homeAccountId: string): Promise<string> {
   if (!pca) throw new Error("Auth not initialized");
   const account = pca.getAccountByHomeId(homeAccountId);
   if (!account) throw new Error(`Account not signed in on this device: ${homeAccountId}`);
-  const result = await pca.acquireTokenSilent({ scopes: SCOPES, account });
-  return result.accessToken;
+  try {
+    const result = await pca.acquireTokenSilent({ scopes: SCOPES, account });
+    return result.accessToken;
+  } catch (e) { _logSilentFailure("getTokenFor", account, e); throw e; }
 }
 
 // 当从离线变成在线时调一次。boot 时 acquireTokenSilent 因网络抛错 → activeAccount
@@ -298,7 +349,8 @@ export async function retrySilentSignIn(): Promise<boolean> {
     activeAccount = cached[0];
     _emitAuth();                                    // online 后 silent 补登 → 通知 UI
     return true;
-  } catch (_) {
+  } catch (e) {
+    _logSilentFailure("retry-silent", cached[0], e);
     return false;
   }
 }

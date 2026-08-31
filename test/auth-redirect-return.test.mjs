@@ -16,6 +16,7 @@ class ThrowingPca {
   setActiveAccount() {}
 }
 globalThis.window = globalThis.window || globalThis;
+globalThis.location ??= { origin: "https://weebpaint.test", pathname: "/dev/" };   // node 无 location；initAuth 拼 redirectUri 要用（2026-08-31 补：auth 测试自 0.10.0 起因此从未在套件里跑起来）
 
 describe("auth initAuth · redirect 回程失败上报 + 临时缓存落 localStorage（0.11.1）", () => {
   it("handleRedirectPromise 抛错 → reportStoreError(error)，initAuth 仍 resolve 未登录", async () => {
