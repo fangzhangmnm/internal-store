@@ -19,7 +19,7 @@ import { createReconcile } from "./reconcile.ts";
 import { createPendingGone } from "./pending-gone.ts";
 import { assertValidFileName, assertValidCollectionName, isHidden } from "./is-hidden.ts";
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./collection.ts";
-import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView } from "./listing.ts";
+import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError } from "./cloud-sync.ts";
@@ -460,7 +460,17 @@ export function createStore(config: StoreConfig) {
   const signedIn = config.signedIn ?? ((): boolean => true);
   const ctxNow = (): ListContext => ({ signedIn: signedIn(), online: isOnline() });
   const LOCAL_CTX: ListContext = { signedIn: false, online: false };   // 强制本地视角（首帧/写后重画：云不可达 → 纯本地 union）
-  const folderWatchers = new Map<string, Set<(s: FolderSnapshot) => void>>();
+  type FolderWatcher = (s: FolderSnapshot) => void;
+  const folderWatchers = new Map<string, Set<FolderWatcher>>();
+  // 0.11.1（user 2026-08-31 批准 S1）：帧失败的**订阅者信号面**。以前本地帧/远端帧抛错只 ui.reportError（横幅），
+  //   订阅者永远收不到帧也收不到错——WeebPaint 图库停在 loading 空白（案发 2026-08-31 iPad 长画锁屏后）。
+  //   onError 按 watcher 挂边表（WeakMap，退订即散）；phase 告诉 app 是本地帧（IDB 读）还是远端帧（云列举/收敛）失败。
+  const watcherOnError = new WeakMap<FolderWatcher, (err: unknown, phase: WatchFolderErrorPhase) => void>();
+  function emitFolderError(folder: string, err: unknown, phase: WatchFolderErrorPhase): void {
+    const set = folderWatchers.get(folder);
+    if (!set) return;
+    for (const cb of set) { const h = watcherOnError.get(cb); if (h) { try { h(err, phase); } catch (e) { ui.reportError(e); } } }
+  }
 
   // ── dir-index-cache（A3，2026-08-15 user 批）：每夹「上次**完整**云帧」的目录索引缓存（**非 SSoT，脏的**，
   //   只配画首帧）→ 冷首帧即显 cloud-only 缺项。schema v1（JSON 串落 dir-index-cache 分区，key=夹路径，""=根）：
@@ -504,7 +514,7 @@ export function createStore(config: StoreConfig) {
   }
   async function pushLocalFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
-    try { emitFolder(folder, await localFrameSnap(folder)); } catch (e) { ui.reportError(e); }
+    try { emitFolder(folder, await localFrameSnap(folder)); } catch (e) { ui.reportError(e); emitFolderError(folder, e, "local"); }
   }
   async function pushRemoteFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
@@ -513,22 +523,27 @@ export function createStore(config: StoreConfig) {
     const ctx = ctxNow();
     const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { ui.reportError(e, "log"); return null; }) : null;
     await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
-    try { emitFolder(folder, await listing.listFolder(folder, ctx, { cloudPrefetched: live })); } catch (e) { ui.reportError(e); }
+    try { emitFolder(folder, await listing.listFolder(folder, ctx, { cloudPrefetched: live })); } catch (e) { ui.reportError(e); emitFolderError(folder, e, "remote"); }
     if (live?.complete) writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
   }
   // 写路径变动 → 通知受影响夹（name 的父夹）的 watcher 即时重画本地帧。
   function notifyFolderOf(name: string): void {
     void pushLocalFrame(name.includes("/") ? name.slice(0, name.lastIndexOf("/")) : "");
   }
-  function watchFolder(folder: string, cb: (s: FolderSnapshot) => void): () => void {
+  /** opts.onError（0.11.1）：本夹某一帧**产不出来**时的订阅者信号（phase "local" = 本地帧/IDB 读失败，"remote" = 云列举/
+   *  收敛后的合帧失败）。语义是「这一帧没了」而非「订阅坏了」：订阅仍活着，后续写触发的本地帧照常来；app 据此把
+   *  loading 换成「读取失败 + 重试」而不是永远转圈。不传 = 旧行为（只 ui.reportError）。 */
+  function watchFolder(folder: string, cb: FolderWatcher, opts?: { onError?: (err: unknown, phase: WatchFolderErrorPhase) => void }): () => void {
     if (folder) assertValidFileName(folder, appId);   // 路径护栏（空=根，放行）：禁订阅保留根
     let set = folderWatchers.get(folder);
     if (!set) { set = new Set(); folderWatchers.set(folder, set); }
     set.add(cb);
+    if (opts?.onError) watcherOnError.set(cb, opts.onError);
+    const fail = (e: unknown, phase: WatchFolderErrorPhase): void => { ui.reportError(e); try { opts?.onError?.(e, phase); } catch (e2) { ui.reportError(e2); } };
     void (async () => {
-      await migrationReady;
-      try { cb(await localFrameSnap(folder)); } catch (e) { ui.reportError(e); }   // ① 本地帧（该新订阅者；含 stale 快照追加 → 冷首帧即显云端缺项）
-      await pushRemoteFrame(folder);                                                              // ② 云端帧（全体 watcher）
+      try { await migrationReady; } catch (e) { fail(e, "local"); return; }   // 迁移门 reject 以前是 unhandled rejection + 永无帧
+      try { cb(await localFrameSnap(folder)); } catch (e) { fail(e, "local"); }   // ① 本地帧（该新订阅者；含 stale 快照追加 → 冷首帧即显云端缺项）
+      await pushRemoteFrame(folder);                                              // ② 云端帧（全体 watcher；失败经 emitFolderError 通知）
     })();
     return (): void => { const s = folderWatchers.get(folder); if (s) { s.delete(cb); if (!s.size) folderWatchers.delete(folder); } };
   }

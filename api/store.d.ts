@@ -294,6 +294,8 @@ export declare function createStore(config: StoreConfig): {
         manual?: boolean;
         getInitData?: CollectionConfig["getInitData"];
     }) => Collection;
+    /** collection 云端存在性探针（纯读零记账）："absent"=确认没有 / "present"=存在 / "unknown"=探不到（离线等，绝不当 absent）。 */
+    collectionPeek: (name: string) => Promise<"absent" | "present" | "unknown">;
     /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
      *  **唯一列举面 = files.watchFolder（订阅当前夹）**：立即本地帧、云端到了同一 cb 再闪。 */
     files: {
@@ -316,7 +318,9 @@ export declare function createStore(config: StoreConfig): {
             }>;
         };
         /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
-        watchFolder: (folder: string, cb: (s: FolderSnapshot) => void) => () => void;
+        watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
+            onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
+        }) => () => void;
         /** 本地已缓存文件的总占用（字节 + 件数），给 app 显示「本地存了多少」。**口径**：只量本库 files 分区，
          *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
          *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
@@ -675,9 +679,10 @@ export declare interface OneDriveAuth {
     isAuthConfigured(): boolean;
     /** 初始化 auth（silent probe：有 account 不代表本 app 有 token）。 */
     initAuth(): Promise<AuthState>;
-    /** 交互式登录（用户手势里调）。 */
+    /** 交互式登录（用户手势里调）。mode:"popup"=loginPopup 不离页（0.10.0，缺省仍 redirect）。 */
     signIn(opts?: {
         prompt?: "select_account";
+        mode?: "popup" | "redirect";
     }): Promise<unknown>;
     /** 登出：只清本 app cache（clearCache），不 logoutRedirect 踢掉用户整个微软会话。 */
     signOut(): Promise<void>;
@@ -1152,6 +1157,9 @@ export declare interface UploadOpts {
 
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export declare type UploadReplayPolicy = "auto" | "ask" | "manual";
+
+/** watchFolder 帧失败的阶段（0.11.1）：local = 本地帧（IDB 读/迁移门）产不出；remote = 云列举后的合帧产不出。 */
+export declare type WatchFolderErrorPhase = "local" | "remote";
 
 /** 弱覆盖（冲突解决 weak-override 分支）的结果：覆盖云端 + 留底。 */
 export declare interface WeakOverrideResult {

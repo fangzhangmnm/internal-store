@@ -15,6 +15,8 @@ type Pca = any;
 /** MSAL account 句柄（未类型化透传；导出仅为门牌可命名）。 */
 export type Account = any;
 
+import { reportStoreError } from "../error-handling.ts";
+
 // window.msal 由 vendored 脚本注入；用 any 桥接（DOM lib 的 Window 不含 msal）。
 declare global {
   interface Window {
@@ -148,13 +150,25 @@ export async function initAuth(): Promise<AuthState> {
       cache: {
         cacheLocation: "localStorage",
         storeAuthStateInCookie: false,
+        // 0.11.1（user 2026-08-31 批准 S3）：redirect 往返的临时缓存（request state / PKCE verifier / interaction 状态）
+        //   MSAL 缺省放 sessionStorage——iOS 主屏 PWA 跳去微软页期间进程被杀（长画后内存紧张）→ sessionStorage 没了
+        //   → 回程 handleRedirectPromise 对不上 state → 登录静默失败（案发 2026-08-31「点登录 OneDrive 挂不上」）。
+        //   放 localStorage 即活过进程重启（MSAL 官方对 iOS PWA 的建议）。代价已核：① 弃置的 redirect（用户在微软页
+        //   关掉）留下的 interaction_in_progress 由下次 boot 的 handleRedirectPromise 无 hash 分支 cleanRequestByInteractionType
+        //   自清（vendored 3.27.0 已实证该分支）；② 两 tab 同时 redirect 登录会互撞 interaction_in_progress——单用户 app 可接受；
+        //   ③ 暴露面无新类：access/refresh token 本就在 localStorage（cacheLocation）。
+        temporaryCacheLocation: "localStorage",
       },
     });
     await pca.initialize();
 
     let response = null;
     try { response = await pca.handleRedirectPromise(); }
-    catch (e) { console.warn("handleRedirectPromise failed:", e); }
+    catch (e) {
+      // 0.11.1（user 2026-08-31 批准 S2）：以前只 console.warn——iPad 上 redirect 登录回程失败（state 对不上 / 微软页
+      //   返回 error）用户零感知，表现为「点登录没反应、挂不上」。走统一上报 → app 横幅。store 侧不 console（家规）。
+      reportStoreError(new Error("[auth] sign-in redirect return failed (handleRedirectPromise): " + String((e as { message?: unknown })?.message ?? e)), "error");
+    }
 
     if (response?.account) {
       pca.setActiveAccount(response.account);

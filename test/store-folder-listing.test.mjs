@@ -446,3 +446,76 @@ describe("open 纯云端项 · offlineEscape 出口", () => {
     eq(bytes, null, "本地本来就没有 → 诚实返回 null，绝不假装打开成功");
   });
 });
+
+// ── watchFolder opts.onError（0.11.1，user 2026-08-31 批准 S1；案发：iPad 长画锁屏后图库停在 loading 空白）────
+//   守：① 本地帧产不出 → onError(err,"local") 且仍 ui.reportError；② 首帧成功、远端合帧失败 → onError(err,"remote")；
+//      ③ 不传 onError = 旧行为（只 reportError，不 throw）；④ 退订后不再收 onError。
+//   added by Claude Fable 5 2026-08-31
+describe("watchFolder · opts.onError 帧失败信号（0.11.1）", () => {
+  function mkFailingStore({ failAppKeysOnCall, online = false, signedIn = false } = {}) {
+    const errors = [];
+    const base = createMockLocal();
+    let calls = 0;
+    const local = new Proxy(base, {
+      get(t, k) {
+        if (k === "appKeys") return async (...a) => { calls++; if (failAppKeysOnCall(calls)) throw new Error(`idb appKeys wedged (call ${calls})`); return t.appKeys(...a); };
+        return t[k];
+      },
+    });
+    const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+      appId: "test", provider: createMockProvider(),
+      ui: { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: (e) => errors.push(e) },
+      validateAdopt: () => true, kv: memKv(), local,
+      isOnline: () => online, signedIn: () => signedIn, skipMigration: true,
+    });
+    return { store, errors };
+  }
+  const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+
+  it("本地帧产不出 → onError(err,'local')，且 ui.reportError 照旧", async () => {
+    const { store, errors } = mkFailingStore({ failAppKeysOnCall: () => true });
+    const frames = [], errs = [];
+    const unsub = store.files.watchFolder("A", (s) => frames.push(s), { onError: (e, phase) => errs.push([String(e), phase]) });
+    await tick();
+    eq(frames.length, 0, "没有帧");
+    assert(errs.length >= 1, "订阅者收到失败信号");
+    eq(errs[0][1], "local", "phase=local");
+    assert(errs[0][0].includes("wedged"), "原错误透传");
+    assert(errors.length >= 1, "ui.reportError 仍上报（横幅不退役）");
+    unsub();
+  });
+
+  it("首帧成功、远端合帧失败 → onError(err,'remote')；首帧已到手", async () => {
+    // call1 = 本地帧 appKeys（成功）；call2 = 远端阶段 listFolder 内 appKeys（失败）
+    const { store } = mkFailingStore({ failAppKeysOnCall: (n) => n >= 2, online: true, signedIn: true });
+    const frames = [], errs = [];
+    const unsub = store.files.watchFolder("A", (s) => frames.push(s), { onError: (e, phase) => errs.push(phase) });
+    await tick(20);
+    assert(frames.length >= 1, "本地首帧照常到");
+    assert(errs.includes("remote"), "远端合帧失败 → phase=remote");
+    unsub();
+  });
+
+  it("不传 onError = 旧行为：只 reportError、不 throw、不炸订阅", async () => {
+    const { store, errors } = mkFailingStore({ failAppKeysOnCall: () => true });
+    let threw = false;
+    try { const u = store.files.watchFolder("A", () => {}); await tick(); u(); } catch { threw = true; }
+    assert(!threw, "无 onError 也不抛");
+    assert(errors.length >= 1, "仍 reportError");
+  });
+
+  it("退订后不再收到 onError（边表随 watcher 散）", async () => {
+    // 订阅期两帧全部放行；退订**之后**才让 appKeys 失败，再用本夹写触发 pushLocalFrame——已退订，不该收到
+    const ctl = { fail: false };
+    const { store } = mkFailingStore({ failAppKeysOnCall: () => ctl.fail });
+    const errs = [];
+    const unsub = store.files.watchFolder("A", () => {}, { onError: (_e, p) => errs.push(p) });
+    await tick(20);
+    eq(errs.length, 0, "订阅期两帧正常，零信号");
+    unsub();
+    ctl.fail = true;
+    await store.file("A/x", { isZip: false }).save(bytes("x"), { tryPush: false });
+    await tick();
+    eq(errs.length, 0, "退订后零信号");
+  });
+});

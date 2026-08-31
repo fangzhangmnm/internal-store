@@ -204,6 +204,7 @@ export function createStore(config: StoreConfig): {
         manual?: boolean;
         getInitData?: CollectionConfig["getInitData"];
     }) => Collection;
+    collectionPeek: (name: string) => Promise<"absent" | "present" | "unknown">;
     files: {
         nameOccupied: (name: string) => Promise<boolean>;
         persistence: () => Promise<PersistenceState>;
@@ -214,7 +215,9 @@ export function createStore(config: StoreConfig): {
                 failed: string[];
             }>;
         };
-        watchFolder: (folder: string, cb: (s: FolderSnapshot) => void) => () => void;
+        watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
+            onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
+        }) => () => void;
         usage: () => Promise<{
             bytes: number;
             count: number;
@@ -496,6 +499,7 @@ export interface OneDriveAuth {
     retrySilentSignIn(): Promise<boolean>;
     signIn(opts?: {
         prompt?: "select_account";
+        mode?: "popup" | "redirect";
     }): Promise<unknown>;
     signOut(): Promise<void>;
 }
@@ -798,6 +802,9 @@ export interface UploadOpts {
 
 // @public
 export type UploadReplayPolicy = "auto" | "ask" | "manual";
+
+// @public
+export type WatchFolderErrorPhase = "local" | "remote";
 
 // @public
 export interface WeakOverrideResult {

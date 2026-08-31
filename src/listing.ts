@@ -116,6 +116,8 @@ export interface FolderSnapshot {
    *  等云端帧纠偏。stale 帧恒 complete:false（不权威，别据此做任何删/收敛判断）。 */
   stale?: true;
 }
+/** watchFolder 帧失败的阶段（0.11.1）：local = 本地帧（IDB 读/迁移门）产不出；remote = 云列举后的合帧产不出。 */
+export type WatchFolderErrorPhase = "local" | "remote";
 
 // ── listFolder 的可选预取/快照注入（A3）─────────────────────────────────────────────
 /** 现场云帧预取（修双拉）：调用方已拉好 cloud.listFolder 结果 → 传进来复用，undefined=listing 自取，null=云不可达。 */

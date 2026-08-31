@@ -57,7 +57,7 @@ export type { TryMoveResult, SaveResult } from "./create-store.ts";
 export type { TrashResult, RestoreOpts, PurgeOpts, EmptyTrashOpts } from "./trash.ts";
 export type { RefreshOpts, FreshResult } from "./freshness.ts";
 export type { DelResult } from "./delete.ts";
-export type { FolderSnapshot } from "./listing.ts";
+export type { FolderSnapshot, WatchFolderErrorPhase } from "./listing.ts";   // 0.11.1：watchFolder opts.onError 的 phase
 export type { FolderDeleteResult, UploadOpts, MoveOpts, Kv } from "./types.ts";
 export type { UploadReplayPolicy } from "./upload-queue.ts";
 /** staging 覆盖快照（file.stagingCoverage 返回；A5 透明面——徽章三态/离线起播护栏/离线接曲决策）。 */
