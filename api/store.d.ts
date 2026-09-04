@@ -1048,8 +1048,10 @@ export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pull
 export declare type StoreTextParams = Record<string, string>;
 
 export declare interface StoreUI {
-    /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
-    busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+    /** busy UI 锁：包住一段异步操作（label 供显示）。**key**（0.11.4）= 这段操作是什么（StoreTextKey），宿主据此决定
+     *  画不画全屏遮罩：`sync.pushing` / `file.renaming` 是后台节律（自动推云、改标题），宿主通常只走状态栏；
+     *  其余（加解密、回收站、建删夹）是用户动作，遮罩合理。老宿主忽略第三参数照常工作。 */
+    busy: <T>(label: string, fn: () => Promise<T>, key?: StoreTextKey) => Promise<T>;
     /** 可选：busy 文案翻译注入（2026-08-21 拍板，库内不再烤成品语言串）。库把 StoreTextKey
      *  发给宿主换译文（params 由宿主插值）；不实现 / 返回 undefined → 内建英文缺省。 */
     text?: StoreTextFn;

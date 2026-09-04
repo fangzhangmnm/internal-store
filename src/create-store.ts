@@ -38,8 +38,10 @@ import { queryStoragePersistence, type PersistenceState } from "./persistence.ts
 import { resolveStoreText, type StoreTextFn, type StoreTextKey } from "./ui-text.ts";
 
 export interface StoreUI {
-  /** busy UI 锁：包住一段用户态异步操作（label 供显示）。 */
-  busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+  /** busy UI 锁：包住一段异步操作（label 供显示）。**key**（0.11.4）= 这段操作是什么（StoreTextKey），宿主据此决定
+   *  画不画全屏遮罩：`sync.pushing` / `file.renaming` 是后台节律（自动推云、改标题），宿主通常只走状态栏；
+   *  其余（加解密、回收站、建删夹）是用户动作，遮罩合理。老宿主忽略第三参数照常工作。 */
+  busy: <T>(label: string, fn: () => Promise<T>, key?: StoreTextKey) => Promise<T>;
   /** 可选：busy 文案翻译注入（2026-08-21 拍板，库内不再烤成品语言串）。库把 StoreTextKey
    *  发给宿主换译文（params 由宿主插值）；不实现 / 返回 undefined → 内建英文缺省。 */
   text?: StoreTextFn;
@@ -576,7 +578,9 @@ export function createStore(config: StoreConfig) {
     looksEncrypted: (b) => enc.looksEncryptedContainer(b),
   });
   // busy 文案接缝（2026-08-21）：模块只发 StoreTextKey，这里统一换译文（宿主 text 优先，缺省英文）。
-  const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn);
+  const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn, label as StoreTextKey);
+  /** 带插值参数的直调版（key 同样透传给宿主）。 */
+  const busyK = <T>(key: StoreTextKey, params: Record<string, string> | undefined, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, key, params), fn, key);
   const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
@@ -751,7 +755,7 @@ export function createStore(config: StoreConfig) {
     }
   }
   async function encEncrypt(name: string, online: () => boolean): Promise<{ status: string }> {
-    return ui.busy(resolveStoreText(ui.text, "file.encrypting", { name }), () => sub.serialize(name, async () => {
+    return busyK("file.encrypting", { name }, () => sub.serialize(name, async () => {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
@@ -766,7 +770,7 @@ export function createStore(config: StoreConfig) {
     }));
   }
   async function encDecrypt(name: string, online: () => boolean): Promise<{ status: string }> {
-    return ui.busy(resolveStoreText(ui.text, "file.decrypting", { name }), () => sub.serialize(name, async () => {
+    return busyK("file.decrypting", { name }, () => sub.serialize(name, async () => {
       const blob = await local.get(name);
       if (!blob) return { status: "no-local" };
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
@@ -873,7 +877,7 @@ export function createStore(config: StoreConfig) {
       async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
         roGuard("reupload");
-        return ui.busy(resolveStoreText(ui.text, "file.reuploading"), async () => {
+        return busyK("file.reuploading", undefined, async () => {
           if (!(await local.exists(name))) return { status: "no-local" };
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
           head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
@@ -1097,9 +1101,9 @@ export function createStore(config: StoreConfig) {
       /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
       ensureFolder: (path: string) => { roGuard("ensureFolder"); return ensureFolderLocalFirst(path); },
       /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */
-      newFolder: singleFlight("新建文件夹", (path: string) => { roGuard("newFolder"); return ui.busy(resolveStoreText(ui.text, "folder.creating"), async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); }); }),   // 子夹出现在父夹 → 重画父夹
+      newFolder: singleFlight("新建文件夹", (path: string) => { roGuard("newFolder"); return busyK("folder.creating", undefined, async () => { await ensureFolderLocalFirst(path); notifyFolderOf(path); }); }),   // 子夹出现在父夹 → 重画父夹
       /** 删除**空**文件夹——「必须证实为空」库内强制（两端判空；非空/无法确认 → 抛错拒删）。 */
-      deleteFolder: singleFlight("删除文件夹", (path: string) => { roGuard("deleteFolder"); return ui.busy(resolveStoreText(ui.text, "folder.deleting"), async (): Promise<void> => {
+      deleteFolder: singleFlight("删除文件夹", (path: string) => { roGuard("deleteFolder"); return busyK("folder.deleting", undefined, async (): Promise<void> => {
         assertValidFileName(path, appId);                            // 路径护栏
         // 判空**两端都查**：本地有该夹下的文件（含 local-only/未上云）→ 拒删（否则删掉云端夹、本地文件成孤儿）。
         const prefix = `${path}/`;

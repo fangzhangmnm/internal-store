@@ -12,6 +12,7 @@ import "./folder-flow.test.mjs";
 import "./collection.test.mjs";
 import "./maintenance.test.mjs";
 import "./store-folder-listing.test.mjs";
+import "./busy-key.test.mjs";
 import "./dir-index-cache.test.mjs";
 import "./download-session.test.mjs";
 import "./read-only-files.test.mjs";

@@ -726,7 +726,7 @@ export type StoreTextParams = Record<string, string>;
 
 // @public (undocumented)
 export interface StoreUI {
-    busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>;
+    busy: <T>(label: string, fn: () => Promise<T>, key?: StoreTextKey) => Promise<T>;
     confirmReplay?: (count: number) => Promise<boolean>;
     offlineEscape?: () => {
         probe: Promise<unknown>;
