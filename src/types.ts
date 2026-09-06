@@ -103,7 +103,13 @@ export interface CloudProvider {
   copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
   /** 改名。 */
   rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+  /** 可选（0.11.6）：auth 转变订阅。store 只认 reason "signOut"（明确登出 → 清 dir-index-cache，本地帧不再掺云端名单）；
+   *  凭证过期（expired）/ 静默失败**不算**登出——名单照掺（user 2026-09-06 批「凭证过期仍显示云端名单」）。folder provider 无此面。 */
+  onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
 }
+/** auth 转变的原因（0.11.6）：store 侧只对 "signOut" 有反应；其余给 UI/诊断。 */
+export type AuthChangeReason = "init" | "signIn" | "silent" | "expired" | "signOut";
+export interface ProviderAuthEvent { signedIn: boolean; reason?: AuthChangeReason }
 
 // ---- 本地持久层（LocalCache）：store.local 契约（**内容无关**，存任意 binary blob）----
 // **字节边界关键点**（0B bug 雷区）：save 可收 Bytes 或 Blob（store 流经 toU8 给的是 Bytes），
@@ -163,6 +169,8 @@ export interface LocalCache {
   getDirIndexCache?(folder: string): Promise<string | null>;
   /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
   putDirIndexCache?(folder: string, json: string): Promise<void>;
+  /** 清整个 dir-index-cache 分区（0.11.6：明确登出时调；缺席 → 清不了，本地帧照掺）。 */
+  clearDirIndexCache?(): Promise<void>;
   /** 关底层持久连接 + 拒后续（store.dispose 用）。可选：注入的 mock 不实现 → dispose 跳过（无连接可关）。 */
   close?(): void;
 }

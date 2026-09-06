@@ -8,6 +8,7 @@
 //   有 account 不代表本 app 有 token（本 app 可能从没授权过）。
 // - signOut() 只清本 app cache（clearCache），不 logoutRedirect 把用户 Outlook 一起踢掉。
 
+import type { AuthChangeReason } from "../types.ts";
 // MSAL 全局由运行时 vendored 脚本（window.msal）加载，无 @types → 整体 any 松类型。
 // pca = PublicClientApplication 实例；account = AccountInfo。下面统一用 any 兜（见顶部注释）。
 type Msal = any;
@@ -143,6 +144,8 @@ export interface AuthState {
   probing?: boolean;
   /** 正在探测的缓存 account。 */
   probedAccount?: Account;
+  /** 这次转变的原因（0.11.6）：signIn / silent（后台续签成功）/ expired（静默失败清 account）/ signOut（明确登出）。 */
+  reason?: AuthChangeReason;
 }
 
 // ---- auth 状态可观察 seam ----
@@ -152,8 +155,8 @@ type AuthSub = (st: AuthState) => void;
 const _authSubs = new Set<AuthSub>();
 export function onAuthChanged(cb: AuthSub): () => void { _authSubs.add(cb); return () => _authSubs.delete(cb); }
 export function getAuthState(): AuthState { return { signedIn: !!activeAccount, account: activeAccount }; }
-function _emitAuth(): void {
-  const st = getAuthState();
+function _emitAuth(reason: AuthChangeReason): void {
+  const st = { ...getAuthState(), reason };
   for (const cb of _authSubs) { try { cb(st); } catch (_) {} }
 }
 
@@ -254,7 +257,7 @@ export async function initAuth(): Promise<AuthState> {
     if (response?.account) {
       pca.setActiveAccount(response.account);
       activeAccount = response.account;
-      _emitAuth();                                  // 登录 redirect 回来 → 通知 UI（按钮变蓝）
+      _emitAuth("signIn");                          // 登录 redirect 回来 → 通知 UI（按钮变蓝）
       return { signedIn: true, account: activeAccount };
     }
 
@@ -287,7 +290,7 @@ async function _probeSilent(account: Account): Promise<void> {
     await pca.acquireTokenSilent({ scopes: SCOPES, account });
     pca.setActiveAccount(account);
     activeAccount = account;
-    _emitAuth();                                    // 后台 silent 成功 → 通知 UI
+    _emitAuth("silent");                            // 后台 silent 成功 → 通知 UI
   } catch (e) { _logSilentFailure("boot-probe", account, e); /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
 }
 
@@ -311,7 +314,7 @@ export async function signIn(opts?: { prompt?: "select_account"; mode?: "popup" 
     if (response?.account) {
       pca.setActiveAccount(response.account);
       activeAccount = response.account;
-      _emitAuth();                             // popup 弹回 → 通知 UI（与 redirect 回程 initAuth 同一广播面）
+      _emitAuth("signIn");                     // popup 弹回 → 通知 UI（与 redirect 回程 initAuth 同一广播面）
     }
     return response;
   }
@@ -322,7 +325,7 @@ export async function signOut(): Promise<void> {
   if (!pca || !activeAccount) return;
   const account = activeAccount;
   activeAccount = null;
-  _emitAuth();                                      // 登出 → 立即通知 UI（按钮变灰）
+  _emitAuth("signOut");                             // 登出 → 立即通知 UI（按钮变灰）
   try { await pca.clearCache({ account }); }
   catch (e) { console.warn("clearCache failed:", e); }
   try { pca.setActiveAccount(null); } catch (_) {}
@@ -341,7 +344,7 @@ export async function getToken(): Promise<string> {
     //   阅读中被劫持导航。交互式重新登录只走显式 signIn()（user-gesture loginRedirect），
     //   后台同步在此降级为离线（调用方 try/catch 收成 offline，本地仍可读、脏不丢）。
     activeAccount = null;
-    _emitAuth();
+    _emitAuth("expired");
     throw e;
   }
 }
@@ -381,7 +384,7 @@ export async function retrySilentSignIn(): Promise<boolean> {
     await pca.acquireTokenSilent({ scopes: SCOPES, account: cached[0] });
     pca.setActiveAccount(cached[0]);
     activeAccount = cached[0];
-    _emitAuth();                                    // online 后 silent 补登 → 通知 UI
+    _emitAuth("silent");                            // online 后 silent 补登 → 通知 UI
     return true;
   } catch (e) {
     _logSilentFailure("retry-silent", cached[0], e);

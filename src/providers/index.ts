@@ -71,8 +71,12 @@ export function createOneDriveProvider(config: OneDriveConfig = {}): { provider:
   //   同页多 provider（多账号库并联）互不覆盖、互不投毒（旧模块级单例的已知局限就此清除）。
   const hid = config.homeAccountId;
   const g = createGraph(hid ? () => getTokenFor(hid) : getToken);
+  // 0.11.6：provider 带 onAuthChanged（reason 透传）——store 据 "signOut" 清 dir-index-cache；expired 不清（凭证过期仍显示云端名单）
+  const provider: CloudProvider = Object.assign(graphToCloudProvider(g), {
+    onAuthChanged: (cb: (ev: { signedIn: boolean; reason?: AuthState["reason"] }) => void) => onAuthChanged((st) => cb({ signedIn: st.signedIn, reason: st.reason })),
+  });
   return {
-    provider: graphToCloudProvider(g),        // CloudProvider（喂 createCloudSync）
+    provider,                                 // CloudProvider（喂 createCloudSync）
     auth: { isAuthConfigured, initAuth, signIn, signOut, getToken, isSignedIn, getActiveAccount, retrySilentSignIn, onAuthChanged, getAuthState },
   };
 }

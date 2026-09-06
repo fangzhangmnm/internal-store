@@ -144,6 +144,7 @@ export function createMockLocal(opts: { backing?: MockLocalBacking } = {}): Mock
     // dir-index-cache 分区替身（A3）：内存 map，契约同真实现（JSON 串，store 自产自销）。
     async getDirIndexCache(folder: string) { return dirIndex.get(folder) ?? null; },
     async putDirIndexCache(folder: string, json: string) { dirIndex.set(folder, json); },
+    async clearDirIndexCache() { dirIndex.clear(); },
   };
   return {
     ...adapter,

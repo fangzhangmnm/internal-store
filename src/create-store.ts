@@ -464,6 +464,14 @@ export function createStore(config: StoreConfig) {
   const LOCAL_CTX: ListContext = { signedIn: false, online: false };   // 强制本地视角（首帧/写后重画：云不可达 → 纯本地 union）
   type FolderWatcher = (s: FolderSnapshot) => void;
   const folderWatchers = new Map<string, Set<FolderWatcher>>();
+  // 0.11.6 明确登出 → 清 dir-index-cache（本地帧「缓存在就掺」的唯一反例）；expired/silent/signIn 不动缓存。清完把在看的夹重画一帧。
+  const unAuth = provider.onAuthChanged?.((ev) => {
+    if (ev.reason !== "signOut") return;
+    void (async () => {
+      try { await local.clearDirIndexCache?.(); } catch (e) { ui.reportError(e, "log"); }
+      for (const f of [...folderWatchers.keys()]) void pushLocalFrame(f);
+    })();
+  });
   // 0.11.1（user 2026-08-31 批准 S1）：帧失败的**订阅者信号面**。以前本地帧/远端帧抛错只 ui.reportError（横幅），
   //   订阅者永远收不到帧也收不到错——WeebPaint 图库停在 loading 空白（案发 2026-08-31 iPad 长画锁屏后）。
   //   onError 按 watcher 挂边表（WeakMap，退订即散）；phase 告诉 app 是本地帧（IDB 读）还是远端帧（云列举/收敛）失败。
@@ -508,10 +516,13 @@ export function createStore(config: StoreConfig) {
     if (!set) return;
     for (const cb of set) { try { cb(snap); } catch (e) { ui.reportError(e); } }
   }
-  // 本地帧 = 纯本地 union + stale 快照追加（signedIn 才掺快照；登出 → 纯本地，别显示云端名单）。
+  // 本地帧 = 纯本地 union + stale 快照追加。
+  //   0.11.6（user 2026-09-06 批「凭证过期仍显示云端名单」）：**缓存在就掺**，不再看 signedIn()——缓存存在本身就证明这台设备上
+  //   这个库曾对着一个云账号拿到过完整云帧；凭证过期（getToken 静默失败清 activeAccount）、冷启动首帧比 MSAL init 快，都不该让
+  //   60 张画凭空消失成 3 张（09-06 晨案）。唯一不掺 = 明确登出：provider.onAuthChanged reason "signOut" → 清整个分区（见下）。
   //   stale 只补 cloud-only 缺项，本地项 badge 仍塌到本地视角（listing 内保证）——写后重画也走这，cloud-only 项不闪没。
   async function localFrameSnap(folder: string): Promise<FolderSnapshot> {
-    const stale = signedIn() ? await readDirIndexCache(folder) : null;
+    const stale = await readDirIndexCache(folder);
     return listing.listFolder(folder, LOCAL_CTX, stale ? { staleCloud: stale } : undefined);
   }
   async function pushLocalFrame(folder: string): Promise<void> {
@@ -525,7 +536,12 @@ export function createStore(config: StoreConfig) {
     const ctx = ctxNow();
     const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { ui.reportError(e, "log"); return null; }) : null;
     await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
-    try { emitFolder(folder, await listing.listFolder(folder, ctx, { cloudPrefetched: live })); } catch (e) { ui.reportError(e); emitFolderError(folder, e, "remote"); }
+    try {
+      // 0.11.6：云不可达 / 凭证过期 / 未登录时的这一帧**同样掺 stale**——否则它会把本地帧刚显出来的云端名单又抹掉
+      //   （09-06 晨案 items=4 的第二只手：本地帧掺了、远端帧没掺 → 两帧一闪又剩 4 张）。live 到了就以现场云帧为准。
+      const stale = live ? null : await readDirIndexCache(folder);
+      emitFolder(folder, await listing.listFolder(folder, ctx, stale ? { cloudPrefetched: live, staleCloud: stale } : { cloudPrefetched: live }));
+    } catch (e) { ui.reportError(e); emitFolderError(folder, e, "remote"); }
     if (live?.complete) writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
   }
   // 写路径变动 → 通知受影响夹（name 的父夹）的 watcher 即时重画本地帧。
@@ -1151,6 +1167,7 @@ export function createStore(config: StoreConfig) {
     async dispose(opts?: { drain?: boolean }): Promise<void> {
       if (_disposed) return;
       _disposed = true;                              // 先拒新调用（drain 才可能收敛）
+      unAuth?.();                                    // 0.11.6：退订 provider auth 事件
       folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效
       if (opts?.drain !== false) await sub.drain();  // 等所有 serialize 链尾（push/local 写都在链上）
       local.close?.();                               // 断 IDB（三个 cache 可能同/异实例，close 幂等）

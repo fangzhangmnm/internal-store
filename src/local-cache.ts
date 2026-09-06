@@ -114,6 +114,7 @@ export function createLocalCache(dbName: string): LocalCache {
     // dir-index-cache：key=夹路径（""=根 → IDB 全键 "dir-index-cache/"），值=JSON 串装 Blob（store 自产自销，本层不解释）。
     async getDirIndexCache(folder: string) { const r = await dirIdxP.get(folder); return r ? await r.blob.text() : null; },
     async putDirIndexCache(folder: string, json: string) { await dirIdxP.put(folder, { blob: new Blob([json], { type: "application/json" }), updatedAt: Date.now() }); },
+    async clearDirIndexCache() { for (const k of await dirIdxP.keys()) await dirIdxP.del(k); },   // 0.11.6 明确登出：整分区清掉
     close() { bs.close(); },
   };
 }

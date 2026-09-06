@@ -90,6 +90,8 @@ export interface MockProvider extends CloudProvider {
   _dump(): CloudItem[];
   /** 直接播种一个云端文件。 */
   _seed(path: string, bytes: Bytes | string): CloudItem;
+  /** 测试辅助（0.11.6）：模拟 auth 转变（store 只认 reason "signOut"）。 */
+  _emitAuth(ev: { signedIn: boolean; reason?: "init" | "signIn" | "silent" | "expired" | "signOut" }): void;
 }
 
 /** MockCloudProvider 工厂：内存模拟 OneDrive-ish 云盘（不碰网络/MSAL，秒级 CI）。
@@ -197,7 +199,10 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
     }
   }
 
+  const _authSubs = new Set<(ev: { signedIn: boolean; reason?: "init" | "signIn" | "silent" | "expired" | "signOut" }) => void>();
   const provider: MockProvider = {
+    onAuthChanged(cb) { _authSubs.add(cb); return () => { _authSubs.delete(cb); }; },
+    _emitAuth(ev) { for (const cb of [..._authSubs]) cb(ev); },
     // ---- 只读 ----
     async list(folder = "") {
       const f = normPath(folder);

@@ -4,7 +4,7 @@
 //   · 落底：完整云帧 → dir-index-cache 分区写 {v:1, files, folders}；partial 不落底。
 //   · 冷首帧：新 store 实例（同一本地）→ 首帧含 stale cloud-only 缺项、stale:true、complete:false。
 //   · badge 不被 stale 污染：本地有副本的项照旧塌本地视角（绝不因快照旧 eTag 闪 newer-on-cloud）、不重复。
-//   · 登出不掺快照（别把云端名单给未登录视角）。
+//   · 0.11.6（user 2026-09-06 批「凭证过期仍显示云端名单」）：signedIn:false（凭证过期 / auth 未就绪）**仍掺**快照；只有 provider 发 reason "signOut" 才清缓存、本地帧退回纯本地。
 //   · 红线：快照绝不喂 gone 判定——云列举失败时，快照里「没有」的本地 clean 文件分毫不动。
 //   · 写后重画（notifyFolderOf 本地帧）仍含 stale cloud-only 项（不闪没）。
 import { describe, it, assert, eq } from "./runner.mjs";
@@ -128,7 +128,7 @@ describe("dir-index-cache · badge/登出纪律", () => {
     eq(hits[0].syncState, "synced", `★谱系在案离线显 synced、绝不闪 newer-on-cloud（实=${hits[0].syncState}）`);
   });
 
-  it("登出（signedIn:false）→ 首帧不掺快照（不给未登录视角看云端名单）", async () => {
+  it("0.11.6 凭证过期 / auth 未就绪（signedIn:false）→ 首帧**仍掺**快照（缓存在就掺；60 张画不再凭空消失）", async () => {
     const provider = createMockProvider();
     provider._seed("a.mp3", bytes("AAA"));
     const local = createMockLocal();
@@ -138,8 +138,29 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const { frames, un } = watchFrames(s2, "");
     await tick(); un();
     assert(frames.length >= 1);
-    assert(!frames[0].stale, "无 stale 标");
-    assert(!frames[0].items.some((i) => i.path === "a.mp3"), "★登出首帧无云端项");
+    assert(frames[0].stale === true, "首帧带 stale 标");
+    const it = frames[0].items.find((i) => i.path === "a.mp3");
+    assert(it && it.syncState === "cloud-only", "★凭证过期首帧仍有云端项（cloud-only）");
+  });
+  it("0.11.6 明确登出（provider auth reason signOut）→ 清 dir-index-cache、在看的夹重画为纯本地；expired 不清", async () => {
+    const provider = createMockProvider();
+    provider._seed("a.mp3", bytes("AAA"));
+    const local = createMockLocal();
+    const kv = memKv();
+    { const { store } = mkStore({ provider, local, kv }); const { un } = watchFrames(store, ""); await tick(); await tick(); un(); }
+    let signed = false;
+    const { store: s2 } = mkStore({ provider, local, kv, signedIn: () => signed, online: () => false });
+    const { frames, un } = watchFrames(s2, "");
+    await tick();
+    assert(frames.at(-1).items.some((i) => i.path === "a.mp3"), "登出前：掺快照");
+    provider._emitAuth({ signedIn: false, reason: "expired" }); await tick(); await tick();
+    assert(local._dirIndex.size >= 1, "expired 不清缓存");
+    const n0 = frames.length;
+    provider._emitAuth({ signedIn: false, reason: "signOut" }); await tick(); await tick();
+    eq(local._dirIndex.size, 0, "★signOut → dir-index-cache 分区清空");
+    assert(frames.length > n0, "清完重画一帧");
+    assert(!frames.at(-1).items.some((i) => i.path === "a.mp3") && !frames.at(-1).stale, "★重画后纯本地、无 stale");
+    un();
   });
 
   it("红线：云列举失败时，快照绝不参与 gone 判定（本地 clean synced 文件分毫不动）", async () => {

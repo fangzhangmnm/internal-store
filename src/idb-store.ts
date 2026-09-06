@@ -24,6 +24,12 @@
 //   ② 超时后**重开连接重试一次**（把「用户手动重启自愈」交给库）；再超时 → reportStoreError(warning) 上报 + 抛；
 //   ③ onversionchange（别的 tab 升库版本 / 删库）→ 老连接自己 close，下一 op 重开；onblocked 记一笔。
 //   deadline 只管「等多久」，不改任何写入语义：resolve 仍只认 oncomplete；被 abort 的写 = 没落盘 = 诚实 reject。
+//
+// ★ 页面离场不持锁（0.11.6，user 2026-09-06 批「老页面在 pagehide 时 abort 在飞事务」）。案发：重连 redirect 两次
+//   （pagehide persisted=true = 老页面进 bfcache）后新页面图库首帧 99s 不来，user 切走那一刻帧才到——冻结页面若握着未 commit
+//   的事务，同 origin 新页面对同一 object store 的事务排在它后面永远等。pagehide → abort 所有在飞 **readonly** 事务
+//   （读被弃 = reject IdbSuspendedError，页面反正要走）；readwrite **不腰斩**（抢救写照跑，「resolve 只认 oncomplete」照旧诚实）；
+//   随后若无 readwrite 在飞 → 关连接（冻结页面连连接都不留）。下一 op（bfcache 复活 / 新页面）自动重开。
 
 import { reportStoreError } from "./error-handling.ts";   // QuotaExceededError 必 funnel（拍板 §1.1）
 
@@ -41,6 +47,10 @@ export function setIdbOpTimeoutForTests(ms: number): void { _idbOpTimeoutMs = ms
 export class IdbTimeoutError extends Error {
   constructor(op: string, ms: number) { super(`idb ${op} did not respond within ${ms}ms (connection wedged?)`); this.name = "IdbTimeoutError"; }
 }
+/** 页面离场（pagehide）时被主动 abort 的只读事务。name = "IdbSuspendedError"。 */
+export class IdbSuspendedError extends Error {
+  constructor(op: string) { super(`idb ${op} aborted on pagehide (page leaving; not an error of the data)`); this.name = "IdbSuspendedError"; }
+}
 
 // ⚠ IDB 库名**必须 per-app 命名空间**（createStore 传 appId 派生 dbName）。IndexedDB 按 origin 隔离、
 //   不按 path → 同 origin 的兄弟 PWA（如 GitHub Pages 的 /app-a/ 与 /app-b/）若共用一个写死的库名，
@@ -55,6 +65,20 @@ export function createIdbCache(dbName: string) {
   let _db: Promise<IDBDatabase> | null = null;
   let _closed = false;
   let _opens = 0;   // 诊断/测试：open 次数（重开可观测）
+  interface ActiveTx { t: IDBTransaction; mode: IDBTransactionMode; suspended: boolean }
+  const _active = new Set<ActiveTx>();   // 在飞事务（pagehide 时按 mode 处置）
+  /** 页面离场：abort 在飞 readonly、readwrite 放行；无 readwrite → 关连接。幂等。 */
+  function suspend(): void {
+    let rw = 0;
+    for (const a of _active) {
+      if (a.mode === "readonly") { a.suspended = true; try { a.t.abort(); } catch { /* 已结束 */ } }
+      else rw++;
+    }
+    if (rw === 0) dropConnection(null);
+  }
+  const _onPageHide = (): void => suspend();
+  const _win = typeof window !== "undefined" && typeof window.addEventListener === "function" ? window : null;
+  _win?.addEventListener("pagehide", _onPageHide);
   /** 丢连接 memo（挂死 / 版本变更 / 强关）：下一 op 自动重开。只在 memo 还是当前这条时才清，迟到的老回调别误伤新连接。 */
   function dropConnection(which: Promise<IDBDatabase> | null): void {
     if (which !== null && _db !== which) return;
@@ -88,6 +112,7 @@ export function createIdbCache(dbName: string) {
   /** 关连接 + 拒后续调用（store.dispose 用）。幂等。 */
   function close(): void {
     _closed = true;
+    _win?.removeEventListener("pagehide", _onPageHide);
     dropConnection(null);
   }
 
@@ -114,10 +139,13 @@ export function createIdbCache(dbName: string) {
     return conn.then((db) => new Promise<T>((resolve, reject) => {
       const t = db.transaction(STORE, mode);
       const ms = _idbOpTimeoutMs;
+      const rec: ActiveTx = { t, mode, suspended: false };
+      _active.add(rec);
       let failed = false;                                  // onerror 后必再来 onabort：只报一次
       const timer = setTimeout(() => {
         if (failed) return;
         failed = true;
+        _active.delete(rec);
         dropConnection(conn);                              // 连接判挂死：丢 memo，下一 op（含下面的重试）重开
         try { t.abort(); } catch { /* 已结束 */ }
         reject(new IdbTimeoutError(`${mode} ${op}`, ms));
@@ -126,6 +154,8 @@ export function createIdbCache(dbName: string) {
         if (failed) return;
         failed = true;
         clearTimeout(timer);
+        _active.delete(rec);
+        if (rec.suspended) { reject(new IdbSuspendedError(`${mode} ${op}`)); return; }   // pagehide 主动弃读：不是数据错，不走 Quota/上报
         const err = t.error ?? new DOMException(`idb ${mode} transaction aborted`, "AbortError");
         // 配额撞墙 = 「写没落盘」的头号来源，必须 funnel 给 app（拍板 2026-08-25 §1.1）；
         // reject 照旧向上抛——上层清 dirty/停重试的决定只准建立在 resolve 之上。
@@ -136,8 +166,8 @@ export function createIdbCache(dbName: string) {
       t.onabort = fail;
       let finish: () => T;
       try { finish = run(t.objectStore(STORE)); }
-      catch (e) { failed = true; clearTimeout(timer); reject(e); t.abort(); return; }   // 同步 throw（DataError 等）→ 整笔弃，不许部分提交
-      t.oncomplete = (): void => { clearTimeout(timer); if (failed) return; resolve(finish()); };
+      catch (e) { failed = true; clearTimeout(timer); _active.delete(rec); reject(e); t.abort(); return; }   // 同步 throw（DataError 等）→ 整笔弃，不许部分提交
+      t.oncomplete = (): void => { clearTimeout(timer); _active.delete(rec); if (failed) return; resolve(finish()); };
     }));
   }
   return {
@@ -182,5 +212,7 @@ export function createIdbCache(dbName: string) {
     },
     /** 诊断/测试：连接被 open 过几次（重开可观测）。 */
     _opens(): number { return _opens; },
+    /** 页面离场处置（pagehide 自动调；测试可直调）。 */
+    suspend,
   };
 }
