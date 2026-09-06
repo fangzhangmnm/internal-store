@@ -25,6 +25,7 @@ import "./safe-resolve.test.ts";
 import "./graph-network-error.test.ts";   // 2026-08-25 网络层翻译（CloudNetworkError）
 import "./ifmatch-guard.test.ts";   // 2026-08-25 全库 If-Match 语法护栏
 import "./idb-tx-guard.test.ts";   // 2026-08-26 IDB 事务形状语法护栏（0.3.6 收敛；行为面=tools/idb-tx-commit-check.mjs）
+import "./idb-deadline.test.mjs";   // 2026-09-06 0.11.5 挂死自愈：deadline / 重开重试 / onversionchange（假 IDB）
 import "./store-dispose-dirty.test.ts";   // 2026-08-26 0.4.0 批：dispose + dirty facet + CloudStaleRefError
 import "./collection-peek.test.mjs";   // 2026-08-30 0.11.0：collectionPeek 三态探针（纯读零记账）
 import "./auth-signin.test.mjs";              // 0.10.0 signIn popup/redirect 分流（⚠ 2026-08-31 发现自 0.10.0 起从未注册进套件，今补）
