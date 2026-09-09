@@ -19,6 +19,7 @@ export type StoreTextKey =
   | "trash.emptyBackups"  // trash：清空备份箱
   | "file.encrypting"     // create-store：加密 {name}
   | "file.decrypting"     // create-store：解除加密 {name}
+  | "file.rekeying"       // create-store：换密码重封 {name}（0.12.0）
   | "file.reuploading"    // create-store：重新上传
   | "folder.creating"     // create-store：新建文件夹
   | "folder.deleting";    // create-store：删除文件夹
@@ -39,6 +40,7 @@ const STORE_TEXT_EN: Record<StoreTextKey, string> = {
   "trash.emptyBackups": "Emptying backup box…",
   "file.encrypting": "Encrypting {name}…",
   "file.decrypting": "Decrypting {name}…",
+  "file.rekeying": "Re-keying {name}…",
   "file.reuploading": "Re-uploading…",
   "folder.creating": "Creating folder…",
   "folder.deleting": "Deleting folder…",

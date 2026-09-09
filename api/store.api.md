@@ -11,11 +11,15 @@ export type Account = any;
 export type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
 
 // @public
+export type AuthChangeReason = "init" | "signIn" | "silent" | "expired" | "signOut";
+
+// @public
 export interface AuthState {
     account: Account;
     notConfigured?: boolean;
     probedAccount?: Account;
     probing?: boolean;
+    reason?: AuthChangeReason;
     signedIn: boolean;
 }
 
@@ -61,6 +65,7 @@ export interface CloudProvider {
     getItemByPath(path: string): Promise<CloudItem | null>;
     list(folder?: string): Promise<CloudItem[]>;
     move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
+    onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
     rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
@@ -439,6 +444,7 @@ export interface ListContext {
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
+    clearDirIndexCache?(): Promise<void>;
     close?(): void;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
@@ -519,6 +525,14 @@ export interface PersistenceState {
     supported: boolean;
 }
 
+// @public (undocumented)
+export interface ProviderAuthEvent {
+    // (undocumented)
+    reason?: AuthChangeReason;
+    // (undocumented)
+    signedIn: boolean;
+}
+
 // @public
 export interface PullResult {
     blob: Blob;
@@ -568,6 +582,12 @@ export interface RawFile {
     open(): Promise<Blob | null>;
     openStream(): Promise<FileStream | null>;
     pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
+    rekey(opts: {
+        newPassword: string;
+        isOnline?: () => boolean;
+    }): Promise<{
+        status: string;
+    }>;
     reupload(): Promise<{
         status: string;
     }>;
@@ -719,7 +739,7 @@ export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 export type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
 
 // @public (undocumented)
-export type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.reuploading" | "folder.creating" | "folder.deleting";
+export type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
 
 // @public (undocumented)
 export type StoreTextParams = Record<string, string>;

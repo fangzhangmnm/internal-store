@@ -33,6 +33,8 @@ export interface CloudProvider {
     getItemByPath(path: string): Promise<CloudItem | null>;
     list(folder?: string): Promise<CloudItem[]>;
     move(ref: string, targetFolderRef: string, opts?: MoveOpts): Promise<CloudItem>;
+    // Warning: (ae-forgotten-export) The symbol "ProviderAuthEvent" needs to be exported by the entry point index.d.ts
+    onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
     rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
 }
@@ -97,6 +99,7 @@ export interface FolderDeleteResult {
 export interface LocalCache {
     appKeys(): Promise<string[]>;
     backup(name: string): Promise<string>;
+    clearDirIndexCache?(): Promise<void>;
     close?(): void;
     exists(name: string): Promise<boolean>;
     get(name: string): Promise<Blob | null>;
@@ -154,6 +157,10 @@ export interface MockLocalBacking {
 // @public
 export interface MockProvider extends CloudProvider {
     _dump(): CloudItem[];
+    _emitAuth(ev: {
+        signedIn: boolean;
+        reason?: "init" | "signIn" | "silent" | "expired" | "signOut";
+    }): void;
     injectFault(spec: Fault): MockProvider;
     _seed(path: string, bytes: Bytes | string): CloudItem;
 }

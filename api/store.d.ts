@@ -4,6 +4,9 @@ export declare type Account = any;
 /** 采纳验真回调（云字节覆盖本地前验明文；= StoreConfig.validateAdopt 的函数形状）。 */
 export declare type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
 
+/** auth 转变的原因（0.11.6）：store 侧只对 "signOut" 有反应；其余给 UI/诊断。 */
+export declare type AuthChangeReason = "init" | "signIn" | "silent" | "expired" | "signOut";
+
 /** initAuth / getAuthState 返回的 auth 状态。 */
 export declare interface AuthState {
     /** 是否已登录（单一源 activeAccount 的派生读）。 */
@@ -16,6 +19,8 @@ export declare interface AuthState {
     probing?: boolean;
     /** 正在探测的缓存 account。 */
     probedAccount?: Account;
+    /** 这次转变的原因（0.11.6）：signIn / silent（后台续签成功）/ expired（静默失败清 account）/ signOut（明确登出）。 */
+    reason?: AuthChangeReason;
 }
 
 /** busy 遮罩包装的函数形状（= StoreUI.busy；深模块 opts 里透传用）。 */
@@ -83,6 +88,9 @@ export declare interface CloudProvider {
     copy(ref: string, targetFolderRef: string, newName: string): Promise<CloudItem>;
     /** 改名。 */
     rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
+    /** 可选（0.11.6）：auth 转变订阅。store 只认 reason "signOut"（明确登出 → 清 dir-index-cache，本地帧不再掺云端名单）；
+     *  凭证过期（expired）/ 静默失败**不算**登出——名单照掺（user 2026-09-06 批「凭证过期仍显示云端名单」）。folder provider 无此面。 */
+    onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
 }
 
 export declare class CloudStaleRefError extends Error {
@@ -640,6 +648,8 @@ export declare interface LocalCache {
     getDirIndexCache?(folder: string): Promise<string | null>;
     /** 写某夹目录索引缓存 JSON 串（覆盖写）。 */
     putDirIndexCache?(folder: string, json: string): Promise<void>;
+    /** 清整个 dir-index-cache 分区（0.11.6：明确登出时调；缺席 → 清不了，本地帧照掺）。 */
+    clearDirIndexCache?(): Promise<void>;
     /** 关底层持久连接 + 拒后续（store.dispose 用）。可选：注入的 mock 不实现 → dispose 跳过（无连接可关）。 */
     close?(): void;
 }
@@ -723,6 +733,11 @@ export declare interface PersistenceState {
     supported: boolean;
     /** 本 origin 已获持久化（Chromium：storage pressure 下不清 persistent bucket；其余平台语义见头注释）。 */
     persisted: boolean;
+}
+
+export declare interface ProviderAuthEvent {
+    signedIn: boolean;
+    reason?: AuthChangeReason;
 }
 
 /** pull 的结果：拉到的字节 + 权威 item（H7：分片末响应无 item 时拉权威 etag）+ 建议落地名（撞名 caller 用）。 */
@@ -814,6 +829,16 @@ export declare interface RawFile {
     }>;
     /** 密文→明文（同 encrypt 红线）。 */
     decrypt(opts?: {
+        isOnline?: () => boolean;
+    }): Promise<{
+        status: string;
+    }>;
+    /** 换密码（0.12.0，user 2026-09-09「保留换密码，加 api」）：密文→密文，**不经明文中间态**。旧密码经 crypt.getPassword seam
+     *  非交互解（无/错 → locked，任何持久改动前出局）；newPassword 显式传入；内存重打包（peek 照 makePeek 重生）→ 先本地后云
+     *  If-Match（同 encrypt 红线）。**宿主换密码只准走这个**：decrypt()→encrypt() 会把明文 push 上云（OneDrive 版本历史永久留明文）。
+     *  status：swapped / cloud-deferred / conflict / offline / locked / no-local / not-encrypted。newPassword 为空 = 调用方 bug，抛。 */
+    rekey(opts: {
+        newPassword: string;
         isOnline?: () => boolean;
     }): Promise<{
         status: string;
@@ -1043,7 +1068,7 @@ export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 /** 宿主翻译注入面（StoreUI.text）。返回 undefined = 该 key 落回英文缺省。 */
 export declare type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
 
-export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.reuploading" | "folder.creating" | "folder.deleting";
+export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
 
 export declare type StoreTextParams = Record<string, string>;
 

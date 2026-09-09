@@ -267,6 +267,11 @@ export interface RawFile {
   encrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;
   /** 密文→明文（同 encrypt 红线）。 */
   decrypt(opts?: { isOnline?: () => boolean }): Promise<{ status: string }>;
+  /** 换密码（0.12.0，user 2026-09-09「保留换密码，加 api」）：密文→密文，**不经明文中间态**。旧密码经 crypt.getPassword seam
+   *  非交互解（无/错 → locked，任何持久改动前出局）；newPassword 显式传入；内存重打包（peek 照 makePeek 重生）→ 先本地后云
+   *  If-Match（同 encrypt 红线）。**宿主换密码只准走这个**：decrypt()→encrypt() 会把明文 push 上云（OneDrive 版本历史永久留明文）。
+   *  status：swapped / cloud-deferred / conflict / offline / locked / no-local / not-encrypted。newPassword 为空 = 调用方 bug，抛。 */
+  rekey(opts: { newPassword: string; isOnline?: () => boolean }): Promise<{ status: string }>;
   /** app 解锁循环（busy 外）便宜验：解 peek，不碰 7z。 */
   verifyPassword(pw: string): Promise<boolean>;
 }
@@ -797,6 +802,27 @@ export function createStore(config: StoreConfig) {
       return await encSwap(name, await toU8(res.dataBlob), online, false);
     }));
   }
+  // 换密码（0.12.0；user 2026-09-09「保留换密码，加 api」）：密文 → 密文，**不经明文中间态**。
+  //   以前宿主只能 decrypt()→encrypt() 换钥匙（WebXiaoHeiWu 换密码迁移就是这么写的）：中间那一步把明文 push 上云——
+  //   OneDrive 保留版本历史 = 明文永久留在微软那里；断网/关页 = 一批文件停在明文态（2026-09-09 加密合规审计 ①②）。
+  //   这里：旧密码经 seam 非交互解（无/错 → locked，任何持久改动前出局）、新密码显式传入、内存里重打包（peek 照 makePeek
+  //   重生）→ encSwap(encrypted=true)：本地与云端只见新容器；明文只活在这个闭包的内存里。
+  async function encRekey(name: string, newPassword: string, online: () => boolean): Promise<{ status: string }> {
+    if (!newPassword) throw new Error(`rekey: newPassword required (${name})`);   // 调用方 bug 不是用户态：响亮，不进 busy
+    return busyK("file.rekeying", { name }, () => sub.serialize(name, async () => {
+      const blob = await local.get(name);
+      if (!blob) return { status: "no-local" };
+      const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
+      if (!(await enc.looksEncryptedContainer(asBlob))) return { status: "not-encrypted" };
+      if (cloud.getETag(name) != null && !online()) return { status: "offline" };          // 两端要一起换（同 encrypt/decrypt）
+      const res = await seal.withPassword(name, (pw) => enc.unpackContainer(asBlob, pw));   // 旧密码：seam 非交互；无/错 → null
+      if (!res) return { status: "locked" };
+      let peek: Uint8Array | null = null;
+      if (config.crypt?.makePeek) { try { peek = await config.crypt.makePeek(res.dataBlob); } catch { peek = null; } }
+      const container = await enc.packContainer({ dataBytes: await toU8(res.dataBlob), fileName: name, ext: config.crypt?.ext, peek, password: newPassword });
+      return await encSwap(name, await toU8(container), online, true);
+    }));
+  }
 
   // ── file 工厂（重载：isZip 编译期分流）──
   //   mode="new"（新建文档）：首次 save 前查占用，已占用 → 抛 CloudNameCollisionError（**绝不静默覆盖同名**）。
@@ -955,6 +981,7 @@ export function createStore(config: StoreConfig) {
       isEncrypted() { return encIsEncrypted(name); },
       encrypt(opts) { roGuard("encrypt"); return encEncrypt(name, opts?.isOnline ?? isOnline); },
       decrypt(opts) { roGuard("decrypt"); return encDecrypt(name, opts?.isOnline ?? isOnline); },
+      rekey(opts) { roGuard("rekey"); return encRekey(name, opts.newPassword, opts.isOnline ?? isOnline); },
       verifyPassword(pw) { return encVerify(name, pw); },
     };
   }

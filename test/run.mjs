@@ -6,6 +6,7 @@ import { run } from "./runner.mjs";
 // 契约/低层
 import "./onedrive-provider.contract.test.mjs";
 import "./enc-at-rest.test.mjs";
+import "./enc-rekey.test.mjs";        // 0.12.0 换密码不经明文（rekey）
 import "./substrate.test.mjs";
 import "./folder-merge.test.mjs";
 import "./folder-flow.test.mjs";

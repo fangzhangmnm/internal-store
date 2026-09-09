@@ -253,6 +253,7 @@ const store = createStore({
 ```
 - **透明封解**：照常 `f.save(bytes)` / `f.open()`，库按文件 at-rest 态自动加/解密（SSoT=字节本身）。未解锁（无/错密码）→ `open` 返 `null`、`save` 抛 `LOCKED`（**绝不静默存明文**）。
 - **at-rest 切换**：`f.encrypt()` 明文→密文、`f.decrypt()` 密文→明文。红线：先本地落地、再云端 If-Match 跟进；失败标脏锚 parentBase 交 push 流接力（绝不只换一端=静默撤销加密）；曾同步但离线→拒；错密码在任何持久改动前出局。
+- **换密码**（0.12.0，user 2026-09-09「保留换密码，加 api」）：`f.rekey({ newPassword })` 密文→密文：旧密码经 `getPassword` seam 非交互解、新密码显式传入、内存重打包、只把**新容器**推云。宿主换密码**必须走这个**，不许 decrypt()→encrypt()——那条路把明文推上云（OneDrive 版本历史会永久留一份明文；中途断网 = 一批文件停在明文态）。status 同 encrypt：swapped / cloud-deferred / conflict / offline / locked / no-local / not-encrypted。
 - **解锁循环（app 在 busy 外做）**：`f.verifyPassword(pw)` 便宜验（解 peek，不碰 7z）→ app 自己存密码 → 重跑 flow。
 - **预览**：`ZipFile.getPeek({bytesLength, zipEntry})` 取尾片 + 库内 zip 解析该 entry（本地切片或云端 byte-range，不全量下载）。明文→PNG blob；加密→**密文** peek blob（`ENC_PEEK_MIME`，不解密→你缓存原样存密文=明文不落盘）；密文再经 `decryptPeek(blob)` 非交互解（内存密码；锁定→null）。写侧 peek 经 `crypt.makePeek` 自动派生（无显式 `setPeek`）。
 - **导入辅助**（文件还没进 store、无 name 可查 peek）：`store.encryption.isEncryptedBlob(blob)` 便宜分流 →
