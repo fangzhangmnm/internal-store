@@ -22,5 +22,7 @@ export function setStoreErrorReporter(fn: Reporter): void {
 
 /** 深模块上报入口。未装配（如纯 mock 测试未接 ui）→ 静默 no-op（不 throw、不 console）。 */
 export function reportStoreError(err: unknown, level: StoreErrorLevel = "error"): void {
+  // 0.12.1：IdbSuspendedError = 页面正在进 bfcache / 已冻结时被弃的事务——不是数据错，任何级别一律降到 log（别在复活的页面上弹横幅）。
+  if ((err as { name?: unknown } | null)?.name === "IdbSuspendedError" && level !== "log") level = "log";
   reporter?.(err, level);
 }

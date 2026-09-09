@@ -132,6 +132,42 @@ function _logSilentFailure(where: string, account: Account, e: unknown): void {
 let activeAccount: Account = null;
 let initPromise: Promise<AuthState> | null = null;
 
+// ── 0.12.1（user 2026-09-09「IDB都做」#60-D）：取 token 单飞 + 需交互闩 ──
+//   案发 2026-09-08 黑匣子：RT 过期后同一毫秒 6 个 getTokenFor 并发 → 6 个隐藏 iframe 往返、6 组多行日志、多条 E 级横幅；之后每个后台调用
+//   都再跑一遍 iframe。① 单飞：同账号在飞的 acquireTokenSilent 共享一个 promise（一次失败一条日志）。② 闩：一旦 InteractionRequired
+//   （login_required / interaction_required / consent_required），同账号后续调用在 INTERACTION_LATCH_MS 内直接抛同一个错——不进 MSAL、
+//   不开 iframe、不刷日志；显式登录成功（redirect 回程 / popup / 后台 silent / retrySilentSignIn）或 signOut 解闩；到期自动放行一次
+//   （别的 tab 登录后本 tab 的 MSAL 缓存已更新，闩不能永久）。网络类错误不上闩（只单飞）。
+const INTERACTION_LATCH_MS = 60_000;
+const _inflight = new Map<string, Promise<string>>();
+const _latched = new Map<string, { until: number; err: unknown; suppressed: number }>();
+function _isInteractionRequired(e: unknown): boolean {
+  const err = e as { name?: unknown; errorCode?: unknown } | null;
+  return err?.name === "InteractionRequiredAuthError" || /^(login_required|interaction_required|consent_required)$/.test(String(err?.errorCode ?? ""));
+}
+function _clearLatch(): void { _latched.clear(); }
+function _acquireSingleFlight(key: string, account: Account, where: string): Promise<string> {
+  const l = _latched.get(key);
+  if (l) {
+    if (Date.now() < l.until) { l.suppressed++; return Promise.reject(l.err); }   // 闩住：fail-fast，同一个错
+    _latched.delete(key);
+  }
+  const inflight = _inflight.get(key);
+  if (inflight) return inflight;
+  const p = (async (): Promise<string> => {
+    try {
+      const result = await pca.acquireTokenSilent({ scopes: SCOPES, account });
+      return result.accessToken as string;
+    } catch (e) {
+      _logSilentFailure(where, account, e);
+      if (_isInteractionRequired(e)) _latched.set(key, { until: Date.now() + INTERACTION_LATCH_MS, err: e, suppressed: 0 });
+      throw e;
+    } finally { _inflight.delete(key); }
+  })();
+  _inflight.set(key, p);
+  return p;
+}
+
 /** initAuth / getAuthState 返回的 auth 状态。 */
 export interface AuthState {
   /** 是否已登录（单一源 activeAccount 的派生读）。 */
@@ -257,7 +293,7 @@ export async function initAuth(): Promise<AuthState> {
     if (response?.account) {
       pca.setActiveAccount(response.account);
       activeAccount = response.account;
-      _emitAuth("signIn");                          // 登录 redirect 回来 → 通知 UI（按钮变蓝）
+      _clearLatch(); _emitAuth("signIn");           // 登录 redirect 回来 → 解闩 + 通知 UI（按钮变蓝）
       return { signedIn: true, account: activeAccount };
     }
 
@@ -290,7 +326,7 @@ async function _probeSilent(account: Account): Promise<void> {
     await pca.acquireTokenSilent({ scopes: SCOPES, account });
     pca.setActiveAccount(account);
     activeAccount = account;
-    _emitAuth("silent");                            // 后台 silent 成功 → 通知 UI
+    _clearLatch(); _emitAuth("silent");             // 后台 silent 成功 → 解闩 + 通知 UI
   } catch (e) { _logSilentFailure("boot-probe", account, e); /* 拿不到 token = 未真登录；UI 保持未登录，用户可显式登录 */ }
 }
 
@@ -314,7 +350,7 @@ export async function signIn(opts?: { prompt?: "select_account"; mode?: "popup" 
     if (response?.account) {
       pca.setActiveAccount(response.account);
       activeAccount = response.account;
-      _emitAuth("signIn");                     // popup 弹回 → 通知 UI（与 redirect 回程 initAuth 同一广播面）
+      _clearLatch(); _emitAuth("signIn");      // popup 弹回 → 解闩 + 通知 UI（与 redirect 回程 initAuth 同一广播面）
     }
     return response;
   }
@@ -325,7 +361,7 @@ export async function signOut(): Promise<void> {
   if (!pca || !activeAccount) return;
   const account = activeAccount;
   activeAccount = null;
-  _emitAuth("signOut");                             // 登出 → 立即通知 UI（按钮变灰）
+  _clearLatch(); _emitAuth("signOut");              // 登出 → 解闩 + 立即通知 UI（按钮变灰）
   try { await pca.clearCache({ account }); }
   catch (e) { console.warn("clearCache failed:", e); }
   try { pca.setActiveAccount(null); } catch (_) {}
@@ -333,18 +369,16 @@ export async function signOut(): Promise<void> {
 
 export async function getToken(): Promise<string> {
   if (!pca || !activeAccount) throw new Error("Not signed in");
+  const account = activeAccount;
   try {
-    const result = await pca.acquireTokenSilent({ scopes: SCOPES, account: activeAccount });
-    return result.accessToken;
+    return await _acquireSingleFlight(String(account?.homeAccountId ?? ""), account, "getToken");   // 0.12.1 单飞 + 闩（日志在里面记，一次失败一条）
   } catch (e) {
-    _logSilentFailure("getToken", activeAccount, e);
     // silent 失败 = token 过期/失效 → 清 activeAccount + 通知 UI（按钮变灰，回到"未登录"）。
     // **绝不在此 acquireTokenRedirect**：getToken 只在后台 graph 请求里被调；后台数据同步
     //   触发交互式跳转 = boot 重定向循环（silent 失败→跳转→重载→再 silent 失败…一直转）/
     //   阅读中被劫持导航。交互式重新登录只走显式 signIn()（user-gesture loginRedirect），
     //   后台同步在此降级为离线（调用方 try/catch 收成 offline，本地仍可读、脏不丢）。
-    activeAccount = null;
-    _emitAuth("expired");
+    if (activeAccount === account) { activeAccount = null; _emitAuth("expired"); }   // 单飞下并发调用共享同一个失败：只清一次、只广播一次
     throw e;
   }
 }
@@ -362,10 +396,7 @@ export async function getTokenFor(homeAccountId: string): Promise<string> {
   if (!pca) throw new Error("Auth not initialized");
   const account = pca.getAccountByHomeId(homeAccountId);
   if (!account) throw new Error(`Account not signed in on this device: ${homeAccountId}`);
-  try {
-    const result = await pca.acquireTokenSilent({ scopes: SCOPES, account });
-    return result.accessToken;
-  } catch (e) { _logSilentFailure("getTokenFor", account, e); throw e; }
+  return _acquireSingleFlight(homeAccountId, account, "getTokenFor");   // 0.12.1 单飞 + 闩；失败不动全局 activeAccount（拍板 §1.4 ②不变）
 }
 
 // 当从离线变成在线时调一次。boot 时 acquireTokenSilent 因网络抛错 → activeAccount
@@ -384,7 +415,7 @@ export async function retrySilentSignIn(): Promise<boolean> {
     await pca.acquireTokenSilent({ scopes: SCOPES, account: cached[0] });
     pca.setActiveAccount(cached[0]);
     activeAccount = cached[0];
-    _emitAuth("silent");                            // online 后 silent 补登 → 通知 UI
+    _clearLatch(); _emitAuth("silent");             // online 后 silent 补登 → 解闩 + 通知 UI
     return true;
   } catch (e) {
     _logSilentFailure("retry-silent", cached[0], e);

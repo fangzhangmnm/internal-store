@@ -2,8 +2,8 @@
 // node 无 IDB → 假 indexedDB：可控「open 永不回」「某条连接的事务永不 complete」「版本变更」。
 // 钉：① 正常路径不受 deadline 影响；② 第一条连接挂死 → 超时后丢连接、重开、重试一次成功（open 计数 2、旧连接被 close）；
 //     ③ 重试仍挂死 → 抛 IdbTimeoutError（name 可识别）；④ open 本身挂死 → 同样 IdbTimeoutError 且重试过一次；
-//     ⑤ onversionchange → 老连接自己 close，下一 op 重开；⑥（0.11.6）pagehide：在飞 readonly 被 abort（IdbSuspendedError）、
-//     readwrite 放行、无 readwrite 时关连接、下一 op 重开；close() 摘掉 pagehide 监听。
+//     ⑤ onversionchange → 老连接自己 close，下一 op 重开；⑥（0.12.1 改判 0.11.6）pagehide persisted=true：在飞读写全弃
+//     （IdbSuspendedError）、关连接、闸门落下（pageshow 前新 op 立即拒）、pageshow 后重开；persisted=false 什么都不做；close() 摘掉两个监听。
 import { test, assert, eq } from "./runner.mjs";
 import { createIdbCache, IdbTimeoutError, IdbSuspendedError, setIdbOpTimeoutForTests, idbOpTimeoutMs } from "../src/idb-store.ts";
 
@@ -95,50 +95,55 @@ function withWindow(fn) {
   globalThis.window = { addEventListener(type, f) { handlers[type] = f; }, removeEventListener(type) { delete handlers[type]; } };
   return Promise.resolve().then(() => fn(handlers)).finally(() => { if (prev === undefined) delete globalThis.window; else globalThis.window = prev; });
 }
-test("idb-deadline · pagehide：在飞 readonly 事务被 abort → IdbSuspendedError（不重试）、连接关掉、下一 op 重开", async () => {
+test("idb-deadline · pagehide persisted=true：在飞读写全弃（IdbSuspendedError）、连接关、闸门落下、pageshow 后重开", async () => {
   const f = fakeIdb({ txHang: () => true });
   await withWindow(async (handlers) => {
     await withFake(f, 5000, async () => {
       const c = createIdbCache("t.db");
-      assert(typeof handlers.pagehide === "function", "注册了 pagehide 监听");
-      const p = c.keys().catch((e) => e);
-      await new Promise((r) => setTimeout(r, 5));     // 让 open 完成、事务开出来
-      handlers.pagehide();
-      const err = await p;
-      assert(err instanceof IdbSuspendedError && err.name === "IdbSuspendedError", `应抛 IdbSuspendedError，得 ${err && err.name}: ${err && err.message}`);
-      assert(f.dbs[0].closed, "无 readwrite 在飞 → 连接关掉");
-      eq(f.opens(), 1, "suspend 弃读不重试（不是超时）");
-      const f2 = fakeIdb(); globalThis.indexedDB = f2.idb;   // 下一 op：重开（换成会回的假库）
-      eq(await c.get("z"), "v:z"); eq(f2.opens(), 1, "下一 op 重开连接");
+      assert(typeof handlers.pagehide === "function" && typeof handlers.pageshow === "function", "注册了 pagehide + pageshow 监听");
+      const pr = c.keys().catch((e) => e);
+      const pw = c.put("k", { blob: null, updatedAt: 0 }).catch((e) => e);
+      await new Promise((r) => setTimeout(r, 5));     // 让 open 完成、两笔事务开出来
+      handlers.pagehide({ persisted: true });
+      const [er, ew] = await Promise.all([pr, pw]);
+      assert(er instanceof IdbSuspendedError, `readonly 应 IdbSuspendedError，得 ${er && er.name}`);
+      assert(ew instanceof IdbSuspendedError, `★readwrite 也弃（冻结页里的写永远 commit 不了，只会持锁），得 ${ew && ew.name}`);
+      assert(f.dbs[0].closed, "连接关掉");
+      eq(f.opens(), 1, "弃不重试（不是超时）");
+      const gated = await c.get("z").catch((e) => e);
+      assert(gated instanceof IdbSuspendedError, "★闸门：pageshow 前新 op 立即拒");
+      eq(f.opens(), 1, "闸门期间不开新连接");
+      const f2 = fakeIdb(); globalThis.indexedDB = f2.idb;   // 复活后下一 op：重开（换成会回的假库）
+      handlers.pageshow({ persisted: true });
+      eq(await c.get("z"), "v:z"); eq(f2.opens(), 1, "pageshow 后下一 op 重开连接");
     });
   });
 });
-test("idb-deadline · pagehide：在飞 readwrite 放行（不 abort、连接不关）", async () => {
+test("idb-deadline · pagehide persisted=false：什么都不做（页面在销毁：在飞写尽量跑完、连接不关、锁随页面死）", async () => {
   const f = fakeIdb({ txHang: () => true });
   await withWindow(async (handlers) => {
     await withFake(f, 5000, async () => {
       const c = createIdbCache("t.db");
       const p = c.put("k", { blob: null, updatedAt: 0 });
       await new Promise((r) => setTimeout(r, 5));
-      handlers.pagehide();
+      handlers.pagehide({ persisted: false });
       await new Promise((r) => setTimeout(r, 5));
-      assert(!f.dbs[0].closed, "有 readwrite 在飞 → 连接不关");
-      eq(f.dbs[0].n, 1);
+      assert(!f.dbs[0].closed, "连接不关");
       let settled = false; p.then(() => { settled = true; }, () => { settled = true; });
       await new Promise((r) => setTimeout(r, 5));
-      assert(!settled, "readwrite 没被腰斩（仍在飞）");
+      assert(!settled, "在飞写没被腰斩");
       c.close();   // 收尾：关连接（挂着的假事务随测试结束丢弃）
     });
   });
 });
-test("idb-deadline · close() 摘掉 pagehide 监听", async () => {
+test("idb-deadline · close() 摘掉 pagehide / pageshow 监听", async () => {
   const f = fakeIdb();
   await withWindow(async (handlers) => {
     await withFake(f, 5000, async () => {
       const c = createIdbCache("t.db");
-      assert(handlers.pagehide, "有监听");
+      assert(handlers.pagehide && handlers.pageshow, "有监听");
       c.close();
-      assert(!handlers.pagehide, "close 后摘掉");
+      assert(!handlers.pagehide && !handlers.pageshow, "close 后摘掉");
     });
   });
 });

@@ -30,6 +30,15 @@
 //   的事务，同 origin 新页面对同一 object store 的事务排在它后面永远等。pagehide → abort 所有在飞 **readonly** 事务
 //   （读被弃 = reject IdbSuspendedError，页面反正要走）；readwrite **不腰斩**（抢救写照跑，「resolve 只认 oncomplete」照旧诚实）；
 //   随后若无 readwrite 在飞 → 关连接（冻结页面连连接都不留）。下一 op（bfcache 复活 / 新页面）自动重开。
+//
+// ★ 0.12.1 改判（user 2026-09-09「IDB都做」#60-B；WeebPaint ai-docs/20260909-bfcache-idb-lock-daily-reauth-analysis.md）：
+//   0.11.6 的「readwrite 放行」是个口子——app 在 pagehide 里无条件写 settings，suspend() 见 rw>0 就不关连接，页面带着活跃写事务被冻进
+//   bfcache（WebKit IDBDatabase 无 suspend/无 bfcache 阻断，事务原地冻结，锁一直握着），新页面全挂。而冻结页里的写**永远 commit 不了**
+//   （冻结前没有事件循环轮次让 success 事件派下来），驱逐时 stop() 一律 abort——放行救不了任何一笔写，只留下锁。所以：
+//   pagehide **persisted=true**（要进 bfcache；PageTransitionEvent 标准字段，非某浏览器怪癖）→ abort 全部在飞事务（读写都弃）、关连接、
+//   闸门落下：pageshow 之前新事务直接 reject IdbSuspendedError（不开连接、不排队）。persisted=false（页面销毁）→ 什么都不做：
+//   在飞写尽量跑完（Chrome 会让它完成；WebKit stop() 自会 abort），页面死了锁自然释放。IdbSuspendedError 在 reportStoreError 漏斗里
+//   降为 log 级（页面在离场，不是数据错）。
 
 import { reportStoreError } from "./error-handling.ts";   // QuotaExceededError 必 funnel（拍板 §1.1）
 
@@ -47,7 +56,7 @@ export function setIdbOpTimeoutForTests(ms: number): void { _idbOpTimeoutMs = ms
 export class IdbTimeoutError extends Error {
   constructor(op: string, ms: number) { super(`idb ${op} did not respond within ${ms}ms (connection wedged?)`); this.name = "IdbTimeoutError"; }
 }
-/** 页面离场（pagehide）时被主动 abort 的只读事务。name = "IdbSuspendedError"。 */
+/** 页面离场（pagehide persisted=true）时被主动 abort 的事务，或闸门期间（pageshow 前）被拒的新事务。name = "IdbSuspendedError"。不是数据错。 */
 export class IdbSuspendedError extends Error {
   constructor(op: string) { super(`idb ${op} aborted on pagehide (page leaving; not an error of the data)`); this.name = "IdbSuspendedError"; }
 }
@@ -66,19 +75,29 @@ export function createIdbCache(dbName: string) {
   let _closed = false;
   let _opens = 0;   // 诊断/测试：open 次数（重开可观测）
   interface ActiveTx { t: IDBTransaction; mode: IDBTransactionMode; suspended: boolean }
-  const _active = new Set<ActiveTx>();   // 在飞事务（pagehide 时按 mode 处置）
-  /** 页面离场：abort 在飞 readonly、readwrite 放行；无 readwrite → 关连接。幂等。 */
-  function suspend(): void {
-    let rw = 0;
-    for (const a of _active) {
-      if (a.mode === "readonly") { a.suspended = true; try { a.t.abort(); } catch { /* 已结束 */ } }
-      else rw++;
-    }
-    if (rw === 0) dropConnection(null);
+  const _active = new Set<ActiveTx>();   // 在飞事务（pagehide 时处置）
+  let _suspended = false;                // pagehide(persisted) 之后、pageshow 之前：本页在/正进 bfcache，不许再碰 IDB
+  /** 页面离场处置（0.12.1）。persisted=true：abort 全部在飞事务（读写都弃 → IdbSuspendedError）、关连接、闸门落下；
+   *  persisted=false：什么都不做（页面在销毁，在飞写尽量跑完，锁随页面死）。幂等。 */
+  function suspend(persisted = true): void {
+    if (!persisted) return;
+    _suspended = true;
+    let n = 0;
+    for (const a of _active) { a.suspended = true; n++; try { a.t.abort(); } catch { /* 已结束 */ } }
+    dropConnection(null);
+    if (_opens > 0) reportStoreError(new Error(`[idb] pagehide persisted=true → aborted ${n} in-flight tx, connection closed, gated until pageshow (${dbName})`), "log");
   }
-  const _onPageHide = (): void => suspend();
+  /** bfcache 复活（pageshow）：抬闸，下一 op 自动重开连接。 */
+  function resume(): void {
+    if (!_suspended) return;
+    _suspended = false;
+    reportStoreError(new Error(`[idb] pageshow → gate lifted, next op reopens (${dbName})`), "log");
+  }
+  const _onPageHide = (e: Event): void => suspend((e as { persisted?: unknown }).persisted === true);
+  const _onPageShow = (): void => resume();
   const _win = typeof window !== "undefined" && typeof window.addEventListener === "function" ? window : null;
   _win?.addEventListener("pagehide", _onPageHide);
+  _win?.addEventListener("pageshow", _onPageShow);
   /** 丢连接 memo（挂死 / 版本变更 / 强关）：下一 op 自动重开。只在 memo 还是当前这条时才清，迟到的老回调别误伤新连接。 */
   function dropConnection(which: Promise<IDBDatabase> | null): void {
     if (which !== null && _db !== which) return;
@@ -113,6 +132,7 @@ export function createIdbCache(dbName: string) {
   function close(): void {
     _closed = true;
     _win?.removeEventListener("pagehide", _onPageHide);
+    _win?.removeEventListener("pageshow", _onPageShow);
     dropConnection(null);
   }
 
@@ -123,6 +143,7 @@ export function createIdbCache(dbName: string) {
   //   request 级失败不单独接：错误冒泡到 t.onerror、事务随之 abort，统一走 fail()。
   // ② 超时 → 重开连接重试一次（run 会被再调一次：它只往 store 排请求，可重入）；再超时 → warning 上报 + 抛。
   function tx<T>(mode: IDBTransactionMode, run: (s: IDBObjectStore) => () => T, op = "tx"): Promise<T> {
+    if (_suspended) return Promise.reject(new IdbSuspendedError(`${mode} ${op}`));   // 闸门（0.12.1）：冻结/将冻结的页面不碰 IDB
     return txOnce(mode, run, op).catch((e: unknown) => {
       if (!(e instanceof IdbTimeoutError) || _closed) throw e;
       reportStoreError(new Error(`[idb] ${e.message} → reopening connection, retrying once`), "log");
@@ -214,5 +235,7 @@ export function createIdbCache(dbName: string) {
     _opens(): number { return _opens; },
     /** 页面离场处置（pagehide 自动调；测试可直调）。 */
     suspend,
+    /** bfcache 复活处置（pageshow 自动调；测试可直调）。 */
+    resume,
   };
 }

@@ -32,6 +32,7 @@ import "./collection-peek.test.mjs";   // 2026-08-30 0.11.0：collectionPeek 三
 import "./auth-signin.test.mjs";              // 0.10.0 signIn popup/redirect 分流（⚠ 2026-08-31 发现自 0.10.0 起从未注册进套件，今补）
 import "./auth-redirect-return.test.mjs";     // 0.11.1：redirect 回程失败上报 + 临时缓存落 localStorage
 import "./auth-silent-failure-log.test.mjs";  // 0.11.2：续签失败日志（失败码 + RT 盘点 + msal tail）
+import "./auth-single-flight.test.mjs";      // 0.12.1：取 token 单飞 + 需交互闩（#60-D）
 import "./folder-provider.contract.test.ts";   // 2026-08-26 folder provider（「folder 就是另一朵云」；fake FSA=Linux 口径+无 native move）
 import "./persistence.test.ts";   // 2026-08-27 persist 三件套（必填表态+纯查询感知+手势执行体；库永不自动调 persist()）
 import "./delete.test.ts";
