@@ -4,6 +4,13 @@
 **Status:** accepted（方向，2026-09-09 user 拍板）· **未实现**（user：「今天不用急着做」）
 — 延续 ADR-0012 的密码政策行（`do not pre-stretch` / `do not enforce`），**不推翻它**。
 
+> ⚠ **启封时必须重新评估——作者这一轮比较 sloppy。**
+> 本 ADR 由 2026-09-09 单轮对话推导而成，作者（Claude Opus 5）在同一轮里出过数次判断失误：
+> 把密钥分层的 rekey 收益说大了（已在「被否决的替代方案」一节自陈）、第一轮对口令强度问题的
+> 框架搞错了（与 ADR-0012 与 NIST 的既有结论相左，后自行修正）、并把同日的审计发现误投给了
+> 一个不相干的 agent。**方向是 user 拍板的；技术细节则未经原型、实测或第二人复核。**
+> 实现前请把每一条当作待验证的提案重新过一遍，不要当成已验证的结论。
+
 ## Context
 
 起点是一次算法侧的合规审计（「我们的加密符合 quantum readiness 吗」）。审计结论是**算法侧无事**：
@@ -113,8 +120,12 @@ iPad Safari 在 **standalone PWA（加到主屏）** 模式下的 AutoFill 行�
   isEncrypted/verifyPassword/decryptPeek/getEncryptedBlob；密码 seam `getPassword` 只读无 setter，
   rekey 在现有端口形状里表达不出来）；③ WeebPaint `gallery.ts:659` setPassword 早于 encrypt 成功，
   与 `enc-thumbs.ts:78` 注释相反。已转交 user 分派。
-  **注意与本 ADR 的耦合**：本 ADR 只覆盖**新建**的加密文件；存量弱口令文件要换口令就得重加密，
-  而重加密要走 decrypt → 撞上①。**所以①仍需先修。**
+  **注意与本 ADR 的耦合**：本 ADR 只覆盖**新建**的加密文件；存量文件的口令由用户自选、强度未知，要换口令就得重加密，
+  而重加密要走 decrypt → 撞上①。
+  **状态更新 2026-09-09（同日，写完本 ADR 之后）**：store **0.12.0 已落
+  `file(name).rekey({ newPassword })`——换密码不经明文**（另一 agent 实作，commit `ba8b21f`，
+  据 user「保留换密码，加 api」）。故②「无 rekey API」已失效、①的换密码路径已有正解。
+  上面三条原文保留作**发现出处**，勿据其判断代码现状。
 - **per-store 强制全量加密**（user 2026-09-09 提出的护栏思路：seal 路由谓词从「此 name 之前是否加密」
   改为读 policy，push 层再加一道 `!looksContainer → throw`）。**未拍板。**
 
