@@ -72,3 +72,15 @@ test("unsealForRead：明文 → 原样透传", async () => {
   const out = await s.unsealForRead("g", plain);
   eq(await out?.text(), "justtext", "明文不动");
 });
+
+// ── 2026-09-09 meta.bin 的 ext 按逻辑名推导（同 store 里 .txt 稿 + .xxx.zip 工程并存，store 级单值 crypt.ext 必错一种）──
+import { cryptExtFor } from "../src/seal.ts";
+test("cryptExtFor · 逻辑名有点 → 最后一个点之后；没点 / 隐藏名 / 尾点 → 回退 cfg.ext；夹名里的点不算", () => {
+  eq(cryptExtFor("a.txt", "dat"), "txt");
+  eq(cryptExtFor("夏音.webxiaoheiwu.zip", "txt"), "zip", "工程 ext=zip 而非 store 级的 txt");
+  eq(cryptExtFor("A/wall.ora", "dat"), "ora");
+  eq(cryptExtFor("dir.v2/name", "dat"), "dat", "夹名的点不算，回退");
+  eq(cryptExtFor(".hidden", "dat"), "dat");
+  eq(cryptExtFor("a.", "dat"), "dat");
+  eq(cryptExtFor("bare"), undefined, "无回退 → undefined（encryption 包再回退 bin）");
+});

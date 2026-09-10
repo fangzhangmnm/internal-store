@@ -61,6 +61,8 @@ const store = createStore({
   // ── 加密（§5）：不加密就不给（dormant，省 1.6MB）──
   // crypto: myCodec,                        // 选填：app 注入的 zip/7z codec（不注入 = 加密不可用）
   // crypt: { ext, getPassword, makePeek },  // 选填：扩展名 + 非交互密码源 + peek 派生
+  // toName: (cloudName) => name,            // 选填：云端名→身份（fileName/encFileName 的逆；**全库唯一的加密名判定**）。默认只去尾一个 .zip。
+  //                                          //   ⚠ 身份本身以 .zip 结尾的 app（明文 zip 工程 `X.webxiaoheiwu.zip`）**必配**，否则明文 zip 被当加密容器打不开（2026-09-09）
 });
 ```
 > **关于 `crypto`**：加密**逻辑**全在库内，唯一例外是重型 7z 引擎（wasm ~1.6MB）由 app vendor + 注入（包成 `crypto` codec）——体积大，不塞进每个 app 的 bundle。不注入 → 加密 dormant（packContainer 抛、其余照常；不加密的 app 就不 vendor，省 1.6MB）。KDF/GCM 走内置 WebCrypto，不用注入。

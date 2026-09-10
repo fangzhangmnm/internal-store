@@ -7,7 +7,7 @@
 import { toU8, createSubstrate } from "./substrate.ts";
 import type { Bytes } from "./substrate.ts";
 import { createLocalHead } from "./local-head.ts";
-import { createSeal } from "./seal.ts";
+import { createSeal, cryptExtFor } from "./seal.ts";
 import { createSafeResolve, type ResolveChoice } from "./safe-resolve.ts";
 import { createPush } from "./push.ts";
 import { createFreshness, type RefreshOpts, type FreshResult } from "./freshness.ts";
@@ -22,7 +22,7 @@ import { createCollection, emptyCollectionBytes, type Collection, type Collectio
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
-import { createCloudSync, CloudNameCollisionError } from "./cloud-sync.ts";
+import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
 import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage } from "./download-session.ts";
@@ -112,7 +112,8 @@ export interface StoreConfig {
   reconcilePolicy: "app-driven" | "none";
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
-    /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
+    /** 真扩展名**回退值** → meta.bin。2026-09-09 起 meta.bin 的 ext 优先按逻辑名最后一个点推导（同 store 里 .txt 稿 + .xxx.zip 工程并存）；
+     *  只有名字没有点（裸名宿主）才用这里的值。 */
     ext?: string;
     /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
     makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
@@ -146,6 +147,11 @@ export interface StoreConfig {
   fileName?: (name: string) => string;
   /** 加密容器的云端文件名（如把 name 追加 ".zip"；ADR-0012）。 */
   encFileName?: (name: string) => string;
+  /** 云端文件名 → store name（fileName / encFileName 的**逆**）。**不给 = 只去尾部一个 .zip**（默认与 encFileName「追加 .zip」互逆）。
+   *  这是全库唯一的「这个云端名是不是加密容器」判定：名字经它变了 = 加密件（列举身份、回收站无戳兜底同吃）。
+   *  ⚠ **身份本身以 .zip 结尾的 app（明文 zip 工程，如 `X.webxiaoheiwu.zip`）必须配**，否则明文 zip 被还原成 `X.webxiaoheiwu`
+   *  并当加密容器去解 → 打不开。写法：只在去掉 .zip 后剩下的名字仍是本 app 的合法身份时才去（如以 `.txt` / `.webxiaoheiwu.zip` 结尾）。 */
+  toName?: (cloudName: string) => string;
   /** offload 离线守卫（默认 navigator.onLine）。 */
   isOnline?: () => boolean;
   /** **连接态由 store 自持**（网盘模型：app 不再每次列举传 ctx）。ctor 注入一次；不给 → 恒 true
@@ -358,7 +364,9 @@ export function createStore(config: StoreConfig) {
   //   files 实例：身份=全名（fileName 恒等；encFileName 追加 .zip，加密容器外扩展名 ADR-0012 无损可逆）；
   //     appKey="files" → `${ns}.files.etag:`；**manageDirty:false**——文件 dirty 权威在 local-head 的 `${ns}.files.dirty:`，
   //     若 cloud-sync 也写同键，push 成功写 "0" 会与「push 期间用户新编辑写 '1'」竞态、把未推编辑误判 clean 被驱逐（§A 最狠红线）。
-  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: config.fileName ?? ((n: string) => n), encFileName: config.encFileName ?? ((n: string) => `${n}.zip`), appKey: "files", manageDirty: false });
+  //   toName：云端名 → 身份（fileName/encFileName 的逆）——全库唯一加密名判定 seam，cloud-sync 与 mergeTrash 共用同一个函数。
+  const toName = config.toName ?? defaultCloudToName;
+  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: config.fileName ?? ((n: string) => n), encFileName: config.encFileName ?? ((n: string) => `${n}.zip`), toName, appKey: "files", manageDirty: false });
   //   collections 实例：云端落 `/.${appId}/<name>.json`（隐藏夹，isHidden 过滤出图库）；appKey="collections" → `${ns}.collections.etag:`/`.dirty:`。
   //     store.collection(name) 走它。name 无后缀，store 追加 `.json`。
   //     （**无保留名**：2026-07-13 起 `settings` 也只是个普通 collection 名，assertValidCollectionName 只校验文件名合法性。）
@@ -587,7 +595,7 @@ export function createStore(config: StoreConfig) {
     getPassword,
     getPrev: (n) => local.get(n),
     makePeek: config.crypt?.makePeek,   // 明文→peek（app 域，如 ora 缩略图）；不给 → 容器无 peek
-    ext: config.crypt?.ext,             // 真扩展名 → meta.bin
+    ext: config.crypt?.ext,             // 真扩展名回退（seal 内按逻辑名推导，cryptExtFor）→ meta.bin
   });
 
   // ── flow 深模块 ──
@@ -649,7 +657,7 @@ export function createStore(config: StoreConfig) {
       const all = await cloud.listAll().catch(() => null);
       if (all && all.complete) live = new Set(all.files.map((f) => f.name ?? f.path));   // 只在权威（complete）时填 → 非权威=空集=conflictLive 不误报
     }
-    return mergeTrash(localItems, cloudItems, live);
+    return mergeTrash(localItems, cloudItems, live, toName);
   }
 
   // dirty 名单（0.4.0 dirty facet 的枚举腿）：durable dirty 轨 = local-head 的相对键 `files.dirty:<name>`（值 "1"）。
@@ -786,7 +794,7 @@ export function createStore(config: StoreConfig) {
       if (!pw) return { status: "locked" };                      // 首次加密密码由 app 调用前放进 getPassword seam
       let peek: Uint8Array | null = null;
       if (config.crypt?.makePeek) { try { peek = await config.crypt.makePeek(asBlob); } catch { peek = null; } }
-      const container = await enc.packContainer({ dataBytes: await toU8(asBlob), fileName: name, ext: config.crypt?.ext, peek, password: pw });
+      const container = await enc.packContainer({ dataBytes: await toU8(asBlob), fileName: name, ext: cryptExtFor(name, config.crypt?.ext), peek, password: pw });
       return await encSwap(name, await toU8(container), online, true);
     }));
   }
@@ -819,7 +827,7 @@ export function createStore(config: StoreConfig) {
       if (!res) return { status: "locked" };
       let peek: Uint8Array | null = null;
       if (config.crypt?.makePeek) { try { peek = await config.crypt.makePeek(res.dataBlob); } catch { peek = null; } }
-      const container = await enc.packContainer({ dataBytes: await toU8(res.dataBlob), fileName: name, ext: config.crypt?.ext, peek, password: newPassword });
+      const container = await enc.packContainer({ dataBytes: await toU8(res.dataBlob), fileName: name, ext: cryptExtFor(name, config.crypt?.ext), peek, password: newPassword });
       return await encSwap(name, await toU8(container), online, true);
     }));
   }

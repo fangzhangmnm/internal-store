@@ -88,6 +88,11 @@ interface CloudSyncCfg {
  * @param {string} [cfg.appKey="sync"]  kv key 前缀
  * @param {()=>number} [cfg.now]  时钟（测试注入；默认 Date.now）
  */
+/** 默认的「云端文件名 → 身份」映射：只去尾部一个 .zip（ADR-0012 加密容器外扩展名）。
+ *  X.dat→X.dat、X.dat.zip→X.dat、Y.zip→Y、Y.zip.zip→Y.zip；与默认 encFileName「追加 .zip」互逆、无损。
+ *  ⚠ 对「身份本身以 .zip 结尾的明文文件」它是错的（Y.zip 会被还原成 Y 并被当加密件）——这类 app 配 config.toName。 */
+export const defaultCloudToName = (cloudName: string): string => (cloudName.endsWith(".zip") ? cloudName.slice(0, -4) : cloudName);
+
 export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   const { provider, kv, fileName, encFileName = null, contentType = "application/octet-stream",
     trashFolder = ".trash", backupFolder = ".backup", appKey = "sync", manageDirty = true } = cfg;
@@ -108,9 +113,10 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   }
   // match(item)：哪些云端文件算"session"（扩展名 agnostic；默认所有非文件夹）。gallery 列表用。
   const match = cfg.match || ((it: CloudItem) => !it.isFolder);
-  // toName(item)：云端文件名 → **身份**（fileName 的逆）。薄默认（身份=全名）：只去尾部一个 .zip（加密容器外扩展名，ADR-0012）。
-  //   X.dat→X.dat、X.dat.zip→X.dat（新加密件）、Y.zip→Y、Y.zip.zip→Y.zip。与 encFileName「追加 .zip」互逆、无损（多扩展名不丢信息）。
-  const toName = cfg.toName || ((name: string) => (name.endsWith(".zip") ? name.slice(0, -4) : name));
+  // toName(item)：云端文件名 → **身份**（fileName / encFileName 的逆）。默认 = defaultCloudToName（只去尾部一个 .zip）。
+  //   「云端名经 toName 变了」= 它是加密容器名——这是全库唯一的加密名判定 seam（2026-09-09，trash-merge 兜底同吃）。
+  //   身份本身以 .zip 结尾的 app（明文 zip 工程）必须经 createStore config.toName 配自己的规则，否则明文 zip 被当加密容器。
+  const toName = cfg.toName || defaultCloudToName;
 
   const etagKey = (n: string) => `${appKey}.etag:${n}`;
   const dirtyKey = (n: string) => `${appKey}.dirty:${n}`;

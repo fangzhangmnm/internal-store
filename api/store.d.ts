@@ -1006,7 +1006,8 @@ export declare interface StoreConfig {
     reconcilePolicy: "app-driven" | "none";
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
-        /** 真扩展名 → meta.bin（"ora"/"txt"…），还原真名。 */
+        /** 真扩展名**回退值** → meta.bin。2026-09-09 起 meta.bin 的 ext 优先按逻辑名最后一个点推导（同 store 里 .txt 稿 + .xxx.zip 工程并存）；
+         *  只有名字没有点（裸名宿主）才用这里的值。 */
         ext?: string;
         /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
         makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
@@ -1035,6 +1036,11 @@ export declare interface StoreConfig {
     fileName?: (name: string) => string;
     /** 加密容器的云端文件名（如把 name 追加 ".zip"；ADR-0012）。 */
     encFileName?: (name: string) => string;
+    /** 云端文件名 → store name（fileName / encFileName 的**逆**）。**不给 = 只去尾部一个 .zip**（默认与 encFileName「追加 .zip」互逆）。
+     *  这是全库唯一的「这个云端名是不是加密容器」判定：名字经它变了 = 加密件（列举身份、回收站无戳兜底同吃）。
+     *  ⚠ **身份本身以 .zip 结尾的 app（明文 zip 工程，如 `X.webxiaoheiwu.zip`）必须配**，否则明文 zip 被还原成 `X.webxiaoheiwu`
+     *  并当加密容器去解 → 打不开。写法：只在去掉 .zip 后剩下的名字仍是本 app 的合法身份时才去（如以 `.txt` / `.webxiaoheiwu.zip` 结尾）。 */
+    toName?: (cloudName: string) => string;
     /** offload 离线守卫（默认 navigator.onLine）。 */
     isOnline?: () => boolean;
     /** **连接态由 store 自持**（网盘模型：app 不再每次列举传 ctx）。ctor 注入一次；不给 → 恒 true

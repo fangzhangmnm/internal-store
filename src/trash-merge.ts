@@ -9,6 +9,7 @@
 // conflictLive（附录那条）：离线删排队 → 回线 replay 时云端已被别处改过 → edit-wins 取消云删 → 本地 trash 有、
 //   云端**还活着**（数据两存）。据传入的**权威** live 列表检出，标 conflictLive:true 供 UI surface（别丢）。
 
+import { defaultCloudToName } from "./cloud-sync.ts";
 import type { CloudItem, TrashEntry } from "./types.ts";
 
 /** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
@@ -34,12 +35,14 @@ export interface TrashItem {
 const STAMP_RE = /^(.*) \[((\d{14})-[0-9a-fA-F-]+)\](\.zip)?$/;
 const baseNameOf = (n: string): string => (n.includes("/") ? n.slice(n.lastIndexOf("/") + 1) : n);
 
-// 云端 trash 文件名 → { 原 basename, deleteEventId, 时间戳, 是否加密 }。无戳（异常/手工放入）→ 原名 + 裸 .zip 尾推断。
-function parseCloudTrashName(cloudName: string): { base: string; id: string | null; ts: string | null; encrypted: boolean } {
+// 云端 trash 文件名 → { 原 basename, deleteEventId, 时间戳, 是否加密 }。
+//   有戳：戳是分隔符，`(\.zip)?` 只可能是 encFileName 追加的那一个（原名自带的 .zip 在戳之前，不会被误吃）。
+//   无戳（异常/手工放入）→ 走 toName（全库唯一的加密名判定 seam）：名字变了 = 加密容器。
+function parseCloudTrashName(cloudName: string, toName: (n: string) => string): { base: string; id: string | null; ts: string | null; encrypted: boolean } {
   const m = cloudName.match(STAMP_RE);
   if (m) return { base: m[1], id: m[2], ts: m[3], encrypted: !!m[4] };
-  const encrypted = cloudName.endsWith(".zip");
-  return { base: encrypted ? cloudName.slice(0, -4) : cloudName, id: null, ts: null, encrypted };
+  const base = toName(cloudName);
+  return { base, id: null, ts: null, encrypted: base !== cloudName };
 }
 
 // 本地 trashKey → deleteEventId（`trash/<yyyymmddhhmmss-guid>:<name>`）。无戳（异常/手工放入）→ null。
@@ -57,11 +60,13 @@ const byTs = (a: { ts: string | null }, b: { ts: string | null }): number => (a.
  * @param localEntries  local.listTrash()/listBackup() 结果（name = 全路径原名）。
  * @param cloudEntries  cloud.listTrash()/listBackup() 结果（name = stamped 云端文件名）。
  * @param liveCloudNames 权威 live 云端身份集合（listAll.complete 时才传真值；离线/partial 传空 set → conflictLive 恒 false，绝不误报）。
+ * @param toName 云端文件名 → 身份（与 cloud-sync 同一个函数；无戳兜底的加密判定靠它）。默认 defaultCloudToName。
  */
 export function mergeTrash(
   localEntries: TrashEntry[],
   cloudEntries: CloudItem[],
   liveCloudNames: Set<string> = new Set(),
+  toName: (n: string) => string = defaultCloudToName,
 ): TrashItem[] {
   const localByBase = new Map<string, Array<{ entry: TrashEntry; id: string | null; ts: string | null }>>();
   for (const e of localEntries) {
@@ -73,7 +78,7 @@ export function mergeTrash(
   }
   const cloudByBase = new Map<string, Array<{ item: CloudItem; id: string | null; ts: string | null; encrypted: boolean }>>();
   for (const it of cloudEntries) {
-    const p = parseCloudTrashName(it.name);
+    const p = parseCloudTrashName(it.name, toName);
     const bucket = cloudByBase.get(p.base) ?? [];
     bucket.push({ item: it, id: p.id, ts: p.ts, encrypted: p.encrypted });
     cloudByBase.set(p.base, bucket);

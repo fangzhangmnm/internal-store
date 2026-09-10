@@ -723,6 +723,7 @@ export interface StoreConfig {
     staging?: StagingStore;
     stagingCapBytes?: number;
     stagingChunkBytes?: number;
+    toName?: (cloudName: string) => string;
     ui: StoreUI;
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }

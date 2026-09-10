@@ -17,4 +17,4 @@
 - `meta.bin` 里的真名扩展名 = 逻辑名的扩展名。
 
 ## 状态
-- 2026-09-09：已批，未动手。
+- 2026-09-09：已批。同日落地 **0.13.0**（`config.toName` 单 seam 穿到 cloud-sync 与 mergeTrash 兜底；`cryptExtFor` 按逻辑名推 ext；403 测绿，含 WXHW 规则的端到端 watchFolder 用例）。tgz 待 user 过目 `api/store.d.ts` diff 后 `release.sh` 打包。

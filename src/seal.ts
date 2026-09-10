@@ -32,6 +32,16 @@ export interface Seal {
   withPassword<T>(name: string, attempt: (pw: string) => Promise<T>): Promise<T | null>;   // 内存密码跑一次；无/错→null
 }
 
+/** meta.bin 里的「真扩展名」：优先从逻辑名的最后一个点推导（同一 store 里 .txt 稿与 .xxx.zip 工程并存时，
+ *  store 级单值 crypt.ext 对其中一种必错，2026-09-09）；名字没有点 → 回退 cfg.ext（裸名宿主）→ "bin"。
+ *  只看 basename（夹名里的点不算）。 */
+export function cryptExtFor(name: string, fallback?: string): string | undefined {
+  const base = name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
+  const dot = base.lastIndexOf(".");
+  if (dot > 0 && dot < base.length - 1) return base.slice(dot + 1);
+  return fallback;
+}
+
 export function createSeal(cfg: SealCfg): Seal {
   const { looksContainer, pack, unpack, getPassword, getPrev, makePeek, ext } = cfg;
 
@@ -55,7 +65,7 @@ export function createSeal(cfg: SealCfg): Seal {
     if (!pw) throw new LockedError(name);
     let peek: Uint8Array | null = null;
     if (makePeek) { try { peek = await makePeek(new Blob([plain as BlobPart])); } catch (e) { reportStoreError(e, "log"); peek = null; } }
-    const container = await pack({ dataBytes: plain, fileName: name, ext, peek, password: pw });
+    const container = await pack({ dataBytes: plain, fileName: name, ext: cryptExtFor(name, ext), peek, password: pw });
     return await toU8(container);
   }
 

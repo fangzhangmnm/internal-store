@@ -168,3 +168,73 @@ test("[getPeek] 加密容器（外层 zip 有 'peek' entry）→ 按名返回密
   eq(peek!.type, "application/x-sync-store-enc-peek", "返回密文标记 ENC_PEEK_MIME（app 手动解）");
   assert(bytesEq(new Uint8Array(await peek!.arrayBuffer()), cipher), "返回的是 peek entry 的密文字节（库不解密）");
 });
+
+// ── 2026-09-09 加密名判定 seam（config.toName）：身份本身以 .zip 结尾的明文工程（WXHW 2.0 `X.webxiaoheiwu.zip`）──
+//   默认 toName 去尾一个 .zip 会把明文 `X.webxiaoheiwu.zip` 还原成 `X.webxiaoheiwu` 并当加密容器 → 打不开。
+//   app 配自己的逆映射：只在去掉 .zip 后剩下的仍是本 app 合法身份（.txt / .webxiaoheiwu.zip）时才去。
+const WXHW_TO_NAME = (c: string): string =>
+  (c.endsWith(".zip") && /(\.txt|\.webxiaoheiwu\.zip)$/.test(c.slice(0, -4))) ? c.slice(0, -4) : c;
+
+test("[cloud-naming] config.toName：明文 zip 工程 X.webxiaoheiwu.zip 身份=原名、pull 命中明文路径（不被当加密件）", async () => {
+  const provider = createMockProvider();
+  provider._seed("夏音.webxiaoheiwu.zip", "PROJECT-ZIP");
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n, encFileName: APPEND_ZIP, toName: WXHW_TO_NAME });
+  const listing = createListing({ cloud, local: emptyLocal, head: cleanHead, pendingFolders: () => [] });
+
+  const snap = await listing.listFolder("", CTX_ON);
+  const paths = snap.items.map((i) => i.path);
+  assert(paths.includes("夏音.webxiaoheiwu.zip"), `明文工程身份应=原名，实得 ${JSON.stringify(paths)}`);
+  assert(!paths.includes("夏音.webxiaoheiwu"), "不许把明文 .zip 工程的 .zip 当加密容器外扩展名去掉");
+
+  const pulled = await cloud.pull("夏音.webxiaoheiwu.zip");
+  assert(!!pulled, "pull(原名) 应命中明文路径");
+  eq(td.decode(new Uint8Array(await pulled!.blob.arrayBuffer())), "PROJECT-ZIP");
+});
+
+test("[cloud-naming] config.toName：加密工程 X.webxiaoheiwu.zip.zip → 身份 X.webxiaoheiwu.zip；加密稿 note.txt.zip → note.txt", async () => {
+  const provider = createMockProvider();
+  provider._seed("secret.webxiaoheiwu.zip.zip", "CIPHER-PROJECT");
+  provider._seed("note.txt.zip", "CIPHER-NOTE");
+  provider._seed("draft.txt", "PLAIN-NOTE");
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n, encFileName: APPEND_ZIP, toName: WXHW_TO_NAME });
+  const listing = createListing({ cloud, local: emptyLocal, head: cleanHead, pendingFolders: () => [] });
+
+  const snap = await listing.listFolder("", CTX_ON);
+  const paths = snap.items.map((i) => i.path).sort();
+  eq(paths.join("|"), "draft.txt|note.txt|secret.webxiaoheiwu.zip", "三种名各归其位");
+
+  const p1 = await cloud.pull("secret.webxiaoheiwu.zip");
+  eq(td.decode(new Uint8Array(await p1!.blob.arrayBuffer())), "CIPHER-PROJECT", "加密工程经 encFileName 命中 .zip.zip");
+  const p2 = await cloud.pull("note.txt");
+  eq(td.decode(new Uint8Array(await p2!.blob.arrayBuffer())), "CIPHER-NOTE", "加密稿经 encFileName 命中 .txt.zip");
+});
+
+test("[cloud-naming] 不配 toName 的 app（WeebPaint）行为不变：默认仍只去尾一个 .zip（Y.zip→Y 是已知局限，靠 config.toName 解）", async () => {
+  const provider = createMockProvider();
+  provider._seed("Y.zip", "PLAIN-ZIP");
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n, encFileName: APPEND_ZIP });
+  const listing = createListing({ cloud, local: emptyLocal, head: cleanHead, pendingFolders: () => [] });
+  const snap = await listing.listFolder("", CTX_ON);
+  eq(snap.items.map((i) => i.path).join("|"), "Y", "默认映射字节不变（WeebPaint 未配 toName，其 .ora 身份无此问题）");
+});
+
+test("[cloud-naming] createStore(config.toName) 端到端：watchFolder 云端帧里明文工程身份=原名、加密工程去尾一个 .zip", async () => {
+  const provider = createMockProvider();
+  provider._seed("夏音.webxiaoheiwu.zip", "PROJECT-ZIP");
+  provider._seed("secret.webxiaoheiwu.zip.zip", "CIPHER-PROJECT");
+  provider._seed("note.txt.zip", "CIPHER-NOTE");
+  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "test", provider,
+    ui: { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => ({ choice: "cancel" as const }), reportError: () => {} },
+    validateAdopt: () => true, kv: memKv(), local: createMockLocal(),
+    isOnline: () => true, signedIn: () => true, skipMigration: true,
+    toName: WXHW_TO_NAME,
+  } as Parameters<typeof createStore>[0]);
+  const frames: string[][] = [];
+  const stop = store.files.watchFolder("", (snap) => { frames.push(snap.items.map((i) => i.path).sort()); });
+  for (let i = 0; i < 20 && !frames.some((f) => f.length === 3); i++) await new Promise((r) => setTimeout(r, 10));
+  stop();
+  const cloudFrame = frames.find((f) => f.length === 3);
+  assert(!!cloudFrame, `应收到含 3 项的云端帧，实得 ${JSON.stringify(frames)}`);
+  eq(cloudFrame!.join("|"), "note.txt|secret.webxiaoheiwu.zip|夏音.webxiaoheiwu.zip", "config.toName 穿到了 store 列举面");
+});
