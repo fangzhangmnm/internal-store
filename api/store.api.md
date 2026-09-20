@@ -223,6 +223,7 @@ export function createStore(config: StoreConfig): {
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
             onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
         }) => () => void;
+        onRenamed: (cb: (from: string, to: string) => void) => (() => void);
         usage: () => Promise<{
             bytes: number;
             count: number;
@@ -710,6 +711,7 @@ export interface StoreConfig {
     encryptionSaltFileName?: string;
     fileName?: (name: string) => string;
     getPassword?: (name: string) => string | null;
+    hiddenName?: (path: string) => boolean;
     isOnline?: () => boolean;
     kv?: Kv;
     local?: LocalCache;

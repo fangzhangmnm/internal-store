@@ -52,10 +52,12 @@ export interface ReconcileCfg {
   now?: () => number;                   // 时钟（测试注入；默认 Date.now）
   isOnline?: () => boolean;
   activeFileName?: () => string | null;     // 当前打开的 doc（全名身份）——**去抖 trash 绝不碰活动 doc**（K1，reconcileFolder 也用，避免 trash 掉开着的 clean 文件本地缓存）
+  hidden?: (name: string) => boolean;       // 0.14.0：宿主额外隐藏名（config.hiddenName）——隐藏项云端本就不列，绝不据此误判 gone
 }
 
 export function createReconcile(cfg: ReconcileCfg) {
   const { cloud, local, head, pending, isOnline, activeFileName: activeFileNameFn } = cfg;
+  const isHiddenAny = (n: string): boolean => isHidden(n) || !!cfg.hidden?.(n);
   const now = cfg.now || (() => Date.now());
   const skipName = (opt?: string): string | undefined => opt ?? activeFileNameFn?.() ?? undefined;   // 显式 opts 优先，否则用 store 自持的活动 doc
 
@@ -65,7 +67,7 @@ export function createReconcile(cfg: ReconcileCfg) {
   //   **非权威（partial/空/离线）→ 整个 no-op**：既不推进防抖、也不清 candidate（网抖不该动它）。dirty 孤儿 → ghost，永不碰。
   async function converge(localNames: string[], cloudNames: Set<string>, authoritative: boolean, activeFileName?: string): Promise<{ demoted: string[] }> {
     if (!authoritative) return { demoted: [] };
-    localNames = localNames.filter((n) => !isHidden(n));   // 隐藏项云端本就不列 → 别据「云端没有」误判 gone
+    localNames = localNames.filter((n) => !isHiddenAny(n));   // 隐藏项云端本就不列 → 别据「云端没有」误判 gone
     // 自愈/取消：candidate 重现（云端权威有）或已变 dirty（被编辑）→ 清标记。
     for (const name of localNames) {
       if (pending.isPending(name) && (cloudNames.has(name) || head.isDirtyAnywhere(name))) pending.clear(name);

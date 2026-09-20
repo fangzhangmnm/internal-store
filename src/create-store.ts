@@ -170,6 +170,10 @@ export interface StoreConfig {
   cloudGoneGraceMs?: number;
   /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
   activeFileName?: () => string | null;
+  /** 0.14.0：宿主额外的隐藏名判定（列举层，叠在 is-hidden 的 dot 规则之上）：命中的路径不进 watchFolder 帧、不进 cloud-gone 收敛
+   *  （写入方的半成品 `*.part` / `~*`、v1 遗留 `session.json` 之类——文件系统噪音不是文档；「夹里有什么」是 store 的事，不是图库的）。
+   *  ⚠ 只影响列举与收敛；nameOccupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。 */
+  hiddenName?: (path: string) => boolean;
   /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
    *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
    *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
@@ -351,7 +355,13 @@ export function createStore(config: StoreConfig) {
   const kv = namespacedKv(rawKv, ns.root);
   const local = config.local ?? createLocalCache(ns.dbName);              // 文件缓存（files/trash/backup 分区）；prod=idb、测试注入 mock
   const collectionLocal = config.local ?? createCollectionCache(ns.dbName);   // collections 分区缓存（collection 自带 `collections/` 前缀）
-  const isOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
+  const rawOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
+  const signedIn = config.signedIn ?? ((): boolean => true);
+  // 云腿的「在线」= 网络在线 ∧ 已登录（0.14.0，user 2026-09-19 拍板）：未登录时 Graph 什么都做不了，之前只看 navigator.onLine →
+  //   改名 / 删除 / 推送全走云腿：fetchMeta 抛「Not signed in」、doPush 重试 4 次退避 1.2s 才 cloudDeferred（JRB 冒烟抓到「本地件改名等 1 秒多」）。
+  //   现在未登录 = 云不可达 → 走各处已 vetted 的离线分支（离线 move / 离线删队列 / 补推队列），零网络零等待；回线登录后 drainOfflineQueue 收敛。
+  //   列举 ctx 仍分开报 {signedIn, online:rawOnline}（登出视角 / 掺快照 的判定要区分两者）。
+  const isOnline = (): boolean => rawOnline() && signedIn();
   // 加密密码源（对齐前身引擎非交互 getPassword）：优先 crypt.getPassword，兼容旧顶层；不给 → 恒 null（透传明文）。
   const getPassword = config.crypt?.getPassword ?? config.getPassword ?? ((): string | null => null);
   // 表态制运行时门（fail-fast，2026-08-28：tsc 只拦 TS 消费者——JS/漏喂测试静默漏网实测过）
@@ -366,7 +376,7 @@ export function createStore(config: StoreConfig) {
   //     若 cloud-sync 也写同键，push 成功写 "0" 会与「push 期间用户新编辑写 '1'」竞态、把未推编辑误判 clean 被驱逐（§A 最狠红线）。
   //   toName：云端名 → 身份（fileName/encFileName 的逆）——全库唯一加密名判定 seam，cloud-sync 与 mergeTrash 共用同一个函数。
   const toName = config.toName ?? defaultCloudToName;
-  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: config.fileName ?? ((n: string) => n), encFileName: config.encFileName ?? ((n: string) => `${n}.zip`), toName, appKey: "files", manageDirty: false });
+  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: config.fileName ?? ((n: string) => n), encFileName: config.encFileName ?? ((n: string) => `${n}.zip`), toName, appKey: "files", manageDirty: false, hidden: config.hiddenName });
   //   collections 实例：云端落 `/.${appId}/<name>.json`（隐藏夹，isHidden 过滤出图库）；appKey="collections" → `${ns}.collections.etag:`/`.dirty:`。
   //     store.collection(name) 走它。name 无后缀，store 追加 `.json`。
   //     （**无保留名**：2026-07-13 起 `settings` 也只是个普通 collection 名，assertValidCollectionName 只校验文件名合法性。）
@@ -389,7 +399,7 @@ export function createStore(config: StoreConfig) {
   // 云端防抖标记（candidate-gone）：clean cloud-gone 孤儿第一次权威见 gone 只标记，跨 GRACE 第二次+ 才 send trash（用户拍板 ~24h，2026-07-17）。
   const CLOUD_GONE_GRACE_MS = 24 * 3600 * 1000;
   const pendingGone = createPendingGone(kv, config.cloudGoneGraceMs ?? CLOUD_GONE_GRACE_MS);
-  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeFileName: config.activeFileName });
+  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeFileName: config.activeFileName, hidden: config.hiddenName });
 
   // ── 分片下载会话（A1）：staging tee + 播放优先/pin 严格串行调度。keepOffline / openStream 走它。──
   const stagingStore = config.staging ?? createStagingStore(ns.dbName);
@@ -466,14 +476,13 @@ export function createStore(config: StoreConfig) {
   }
 
   // ── 统一列举（README §2）：整个虚拟 FS 一次列举 = local ∪ cloud，每项带 syncState。mergeLocalCloud 收进库内。──
-  const listing = createListing({ cloud, local, head, pendingFolders: readPending, isPendingGone: (p) => pendingGone.isPending(p), pendingFolderDeletions: readFolderDel });
+  const listing = createListing({ cloud, local, head, pendingFolders: readPending, isPendingGone: (p) => pendingGone.isPending(p), pendingFolderDeletions: readFolderDel, hidden: config.hiddenName });
 
   // ── watchFolder（网盘模型）：订阅**一个**文件夹。app 只知「这一夹更新了」，分不出也不需分 local/remote。──────
   //   连接态 store 自持（config.signedIn/isOnline）——app 不再传 ctx。每次回调同 shape（FolderSnapshot，仅该夹直属子项）。
   //   两帧节律：① 立即本地帧（绝不空/throw，offline-first）② 云端帧（拉该夹一次 + 惰性 reconcileFolder，到了用**同一 cb** 再闪）。
   //   之后本夹任何本地写（save/rename/delete/建删夹）→ notifyFolderOf 重推本地帧（即时反映，无云往返；云端刷新只在订阅时/显式）。
-  const signedIn = config.signedIn ?? ((): boolean => true);
-  const ctxNow = (): ListContext => ({ signedIn: signedIn(), online: isOnline() });
+  const ctxNow = (): ListContext => ({ signedIn: signedIn(), online: rawOnline() });
   const LOCAL_CTX: ListContext = { signedIn: false, online: false };   // 强制本地视角（首帧/写后重画：云不可达 → 纯本地 union）
   type FolderWatcher = (s: FolderSnapshot) => void;
   const folderWatchers = new Map<string, Set<FolderWatcher>>();
@@ -687,11 +696,14 @@ export function createStore(config: StoreConfig) {
   const delSF = singleFlight("删除", (n: string) => { uploadReplay.remove(n); return del.del(n, { isOnline }); });   // 删=supersede：从补推队列摘掉（ADR-0018）   // 接 isOnline：离线删走 move-aside + base-etag 守卫的删队列（重连 drainDeleteQueue 重放）
   // file.tryMove(to)：改身份/移动的**唯一结果式入口**（file() 无 rename，editor-session 也走这里）——**本操作含目标占用检查**（第一行 nameOccupied，占用则不动字节直接返错）。
   //   ok:false 时调用方 surface（UI 拒绝/重问）；不抛 CloudNameCollisionError（内部护栏是兜底，这里预检过即 skip）。
+  // 0.14.0 身份变更事件（user 2026-09-19「改名事件源该在 store」）：任何入口的 tryMove 成功后同步回调；图库只是发起改名的一个前端，不是事件源。
+  const renameListeners = new Set<(from: string, to: string) => void>();
   const tryMoveSF = singleFlight("移动", async (from: string, to: string): Promise<TryMoveResult> => {
     const occ = await nameOccupied(to);
     if (occ) return { ok: false, reason: "name-collision", where: occ };
     const r = await identity.rename(from, to, { skipOccupiedCheck: true });   // 已 nameOccupied 预检，跳过内部重复
     notifyFolderOf(from); notifyFolderOf(to);                                 // 旧夹移出 + 新夹移入，两边重画
+    for (const cb of renameListeners) { try { cb(from, to); } catch (e) { ui.reportError(e, "warning"); } }   // 监听器抛错不许污染改名结果
     // 结果必须透出去：以前这里整个丢掉 r，于是 app 无条件报「已重命名（含云端）」——
     //   云端推失败(cloudDeferred)、旧名成孤儿(oldCloudOrphan)、旧名被留下(oldKept) 全被吞掉 = UI 谎报成功。
     return { ok: true, where: r.where, oldKept: r.oldKept, oldUnknown: r.oldUnknown, oldCloudOrphan: r.oldCloudOrphan, cloudDeferred: r.cloudDeferred, oldName: from };
@@ -1144,6 +1156,9 @@ export function createStore(config: StoreConfig) {
       }),
       /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
       watchFolder,
+      /** 0.14.0：身份变更事件——任何入口的 `file.tryMove` 成功后同步回调 `(from, to)`（库身份 = 全名；含离线 move 分支；撞名 ok:false 不发）。
+       *  宿主按路径键的伴生数据（阅读位置 / 切章规则 / 缩略图缓存）据此跟着搬。返回退订。dispose 清空。 */
+      onRenamed: (cb: (from: string, to: string) => void): (() => void) => { renameListeners.add(cb); return () => { renameListeners.delete(cb); }; },
       //   一次本地 IDB cursor（无网络），但仍是全表走一遍 → app 只在图库打开/刷新时调，别挂每帧。
       /** 本地已缓存文件的总占用（字节 + 件数），给 app 显示「本地存了多少」。**口径**：只量本库 files 分区，
        *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
@@ -1202,6 +1217,7 @@ export function createStore(config: StoreConfig) {
     async dispose(opts?: { drain?: boolean }): Promise<void> {
       if (_disposed) return;
       _disposed = true;                              // 先拒新调用（drain 才可能收敛）
+      renameListeners.clear();
       unAuth?.();                                    // 0.11.6：退订 provider auth 事件
       folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效
       if (opts?.drain !== false) await sub.drain();  // 等所有 serialize 链尾（push/local 写都在链上）

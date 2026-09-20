@@ -329,6 +329,9 @@ export declare function createStore(config: StoreConfig): {
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
             onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
         }) => () => void;
+        /** 0.14.0：身份变更事件——任何入口的 `file.tryMove` 成功后同步回调 `(from, to)`（库身份 = 全名；含离线 move 分支；撞名 ok:false 不发）。
+         *  宿主按路径键的伴生数据（阅读位置 / 切章规则 / 缩略图缓存）据此跟着搬。返回退订。dispose 清空。 */
+        onRenamed: (cb: (from: string, to: string) => void) => (() => void);
         /** 本地已缓存文件的总占用（字节 + 件数），给 app 显示「本地存了多少」。**口径**：只量本库 files 分区，
          *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
          *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
@@ -1056,6 +1059,10 @@ export declare interface StoreConfig {
     cloudGoneGraceMs?: number;
     /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
     activeFileName?: () => string | null;
+    /** 0.14.0：宿主额外的隐藏名判定（列举层，叠在 is-hidden 的 dot 规则之上）：命中的路径不进 watchFolder 帧、不进 cloud-gone 收敛
+     *  （写入方的半成品 `*.part` / `~*`、v1 遗留 `session.json` 之类——文件系统噪音不是文档；「夹里有什么」是 store 的事，不是图库的）。
+     *  ⚠ 只影响列举与收敛；nameOccupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。 */
+    hiddenName?: (path: string) => boolean;
     /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
      *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
      *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。

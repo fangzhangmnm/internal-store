@@ -54,6 +54,7 @@ import "./folder-delete.test.ts";
 import "./store-lost-response-claim.test.mjs";
 import "./migration.test.mjs";
 import "./store-narrow-waist.test.ts";
+import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOnline∧signedIn / hiddenName
 
 console.log("\n  @internal/store —— 云同步引擎契约测试\n");
 await run();

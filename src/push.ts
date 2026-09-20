@@ -18,6 +18,7 @@ const isConflict = (e: unknown) => !!e && ((e as { name?: string }).name === "Cl
 function retriable(e: unknown): boolean {
   const x = e as { status?: number; name?: string } | null;
   const s = x?.status;
+  if ((x as { message?: string } | null)?.message === "Not signed in") return false;   // 0.14.0：auth 缺席重试也不会好（1.2s 白退避）；正常路径已由 isOnline∧signedIn 早退，这里是兜底
   return (s == null || s === 429 || (s >= 500 && s <= 599)) && x?.name !== "CloudConflictError" && x?.name !== "CloudNameCollisionError";
 }
 

@@ -100,6 +100,7 @@ export interface ListingCfg {
   pendingFolders?: () => string[];   // 离线建、尚未确认上云的空文件夹（folder-registry；并进 folders 让它离线可见）
   isPendingGone?: (path: string) => boolean;   // clean cloud-gone 孤儿在防抖 grace 内（pending-gone 深模块）→ 显 pendingGone badge
   pendingFolderDeletions?: () => string[];   // 离线排队待删的已上云空夹（全路径）→ **从 folders 减去**（回线 drain 前先隐藏，不再 list）
+  hidden?: (name: string) => boolean;   // 0.14.0：宿主额外隐藏名（config.hiddenName），叠在 is-hidden 的 dot 规则之上
 }
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
@@ -134,6 +135,7 @@ export const toMs = (v: string | number | undefined): number | undefined => {
 };
 
 export function createListing(cfg: ListingCfg) {
+  const isHiddenAny = (n: string): boolean => isHidden(n) || !!cfg.hidden?.(n);
   const { cloud, local, head, pendingFolders, isPendingGone, pendingFolderDeletions } = cfg;
 
   // 一个 path 的原始事实 → Item（cloud/local 两轴 + head → classifier）。listAllItems 与 listFolder 共用。
@@ -191,7 +193,7 @@ export function createListing(cfg: ListingCfg) {
     // 身份 = **全名（c.name = toName(云端文件名)）**：明文 X.dat 恒等、加密 X.dat.zip 去尾 .zip → 都归一到 X.dat。
     //   本地 key（appKeys / 迁移后）也是全名 X.dat → 两轴按同一 key 归一；否则 cloud 与 local 分裂成两项、open 对不上
     //   （=0B/打开空白的根因，v390）。app 在边界用 sessionFileName 把裸 session 名转全名；encFileName 负责加密件的 .zip 追加。
-    for (const c of cloudRes?.files ?? []) { if (isHidden(c.name)) continue; cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }); }
+    for (const c of cloudRes?.files ?? []) { if (isHiddenAny(c.name)) continue; cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }); }
 
     // 本地：只看本夹前缀下的 key；直属文件 → 参与列举，更深的 → 记 immediate 子夹。隐藏项（末段 dot）全跳。
     const localDirect = new Set<string>();
@@ -201,15 +203,15 @@ export function createListing(cfg: ListingCfg) {
       const rest = k.slice(prefix.length);
       if (!rest) continue;
       const slash = rest.indexOf("/");
-      if (slash >= 0) { const sub = prefix + rest.slice(0, slash); if (!isHidden(sub)) subfolders.add(sub); }
-      else if (!isHidden(k)) localDirect.add(k);
+      if (slash >= 0) { const sub = prefix + rest.slice(0, slash); if (!isHiddenAny(sub)) subfolders.add(sub); }
+      else if (!isHiddenAny(k)) localDirect.add(k);
     }
-    for (const f of cloudRes?.folders ?? []) { if (!isHidden(f)) subfolders.add(f); }   // 云端 immediate 子夹（含空夹）
+    for (const f of cloudRes?.folders ?? []) { if (!isHiddenAny(f)) subfolders.add(f); }   // 云端 immediate 子夹（含空夹）
     for (const p of pendingFolders?.() ?? []) {                   // 离线建的空夹：取本夹下的 immediate 段
       if (folder && !p.startsWith(prefix)) continue;
       const rest = folder ? p.slice(prefix.length) : p;
       const seg = rest.includes("/") ? rest.slice(0, rest.indexOf("/")) : rest;
-      if (seg && !isHidden(seg)) subfolders.add(prefix + seg);
+      if (seg && !isHiddenAny(seg)) subfolders.add(prefix + seg);
     }
     const paths = new Set<string>([...cloudMap.keys(), ...localDirect]);
     const localStats = await statLocal(localDirect);
@@ -223,12 +225,12 @@ export function createListing(cfg: ListingCfg) {
     const stale = opts?.staleCloud != null;
     if (opts?.staleCloud) {
       for (const f of opts.staleCloud.files) {
-        if (paths.has(f.name) || isHidden(f.name)) continue;
+        if (paths.has(f.name) || isHiddenAny(f.name)) continue;
         const rest = folder ? (f.name.startsWith(prefix) ? f.name.slice(prefix.length) : "") : f.name;
         if (!rest || rest.includes("/")) continue;   // 越界/非直属 → 丢
         items.push({ path: f.name, syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
       }
-      for (const sf of opts.staleCloud.folders) if (!isHidden(sf)) subfolders.add(sf);
+      for (const sf of opts.staleCloud.folders) if (!isHiddenAny(sf)) subfolders.add(sf);
     }
     // **post-union 减去**离线排队待删的空夹（否则 remote frame / stale 快照每次把它从 folders 闪回）。
     for (const d of pendingFolderDeletions?.() ?? []) subfolders.delete(d);
@@ -246,10 +248,10 @@ export function createListing(cfg: ListingCfg) {
 
     const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number }>();
     for (const c of cloudRes?.files ?? []) {
-      if (isHidden(c.name)) continue;
+      if (isHiddenAny(c.name)) continue;
       cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) });   // 身份=session name（裸），见 listFolder 同处注释
     }
-    const localSet = new Set((await local.appKeys()).filter((k) => !isHidden(k)));
+    const localSet = new Set((await local.appKeys()).filter((k) => !isHiddenAny(k)));
 
     const paths = new Set<string>();
     for (const p of cloudMap.keys()) paths.add(p);
@@ -261,8 +263,8 @@ export function createListing(cfg: ListingCfg) {
 
     // folders = 云 folders(可达时) ∪ 本地 pending 空夹（离线建的）。去重 + 隐藏项（末段 dot）跳过。
     const folderSet = new Set<string>();
-    for (const f of cloudRes?.folders ?? []) if (!isHidden(f)) folderSet.add(f);
-    for (const p of pendingFolders?.() ?? []) if (!isHidden(p)) folderSet.add(p);
+    for (const f of cloudRes?.folders ?? []) if (!isHiddenAny(f)) folderSet.add(f);
+    for (const p of pendingFolders?.() ?? []) if (!isHiddenAny(p)) folderSet.add(p);
     for (const d of pendingFolderDeletions?.() ?? []) folderSet.delete(d);   // post-union 减去待删空夹
 
     return { items, folders: [...folderSet], complete: cloudReachable ? cloudRes!.complete : false };
