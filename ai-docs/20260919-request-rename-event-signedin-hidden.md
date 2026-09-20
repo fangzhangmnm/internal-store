@@ -7,7 +7,7 @@
 
 - 语义：任何入口的 `file.tryMove` **成功后**同步回调 `(from, to)`（库身份 = 全名；含离线 move 分支；撞名 `ok:false` 不发；监听器抛错 → `ui.reportError(warning)`，不污染改名结果）。dispose 清空。
 - 为什么在 store：改名是**身份变更**（MASTER §A「身份 = path/name」），伴生数据（JRB 的阅读位置 / 切章规则、WeebPaint 的缩略图缓存）按路径键，必须跟着身份走；发起改名的可能是图库、编辑器、任何 app 代码——事件源只能在身份的唯一入口。gallery 0.3.1 曾把它做成 `GalleryScreenDeps.onRenamed`，0.3.2 撤。
-- 没做：`restoreTrash` 恢复到别名（撞名自动 (2)）也是身份变更，**目前不发**——边缘，等有消费者要。
+- **不发的**：`restoreTrash`（含撞名自动 (2)）——user 2026-09-19「从数据模型上我觉得这个不是 rename」，对：live 命名空间只有 created / renamed / deleted 三种事件，删除那一刻身份退出命名空间，回收站条目是带「原名」元数据的档案，恢复 = **物化一个新身份**（created），(2) 只是新名字的选择。按路径键的伴生数据属于活身份，删后即孤儿；恢复同名时孤儿复活是键相等的巧合不是契约。真要跟得是 `onCreated / onDeleted` 事件族 + app 自决，无消费者不加。固有 wart：删 A 再新建**不同**的同名 A 继承旧伴生数据（路径键的性质，接受）。
 
 ## 2. 云腿「在线」= `rawOnline() ∧ signedIn()`
 
