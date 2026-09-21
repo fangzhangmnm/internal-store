@@ -83,7 +83,7 @@ const store = createStore({
 
 | 拿到的 | 方法 | 章节 |
 |---|---|---|
-| `store.file(name, {isZip, mode})` → `RawFile`/`ZipFile` | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
+| `store.file(name, {isZip, mode})` → `RawFile`/`ZipFile` | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · getHead({bytesLength,source}) · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry,source})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
 | `store.collection(name, {manual?, local?, getInitData?})` | **单例**（同名返同一对象）。`setItem · deleteItem · getItem(id,def) · getEntry · entries · keys · onChange · init · reconcileWithRemote · flushLocal · isDirty`（`{local:true}` = **不推云**的设备本地变体；`getInitData` = 新库 seed，uat=1；删除=value:null 墓碑） | §3 |
 | `store.files.watchFolder(folder, cb)` | **唯一列举面**：订阅一个夹 → 立即本地帧、云端到了同一 cb 再闪（无 list/listAll/localKeys）。Item.syncState 含 `pendingGone`（cloud-gone clean 孤儿、防抖 grace 内） | §2 |
 | `store.files.nameOccupied(name)` → **boolean** | 名字占用（在线云端+本地都看，离线只看本地）。新建/另存/改名前预检 | §2 |
@@ -153,6 +153,7 @@ const p = await zip.getPeek({ bytesLength: 131072, zipEntry: "Thumbnails/thumbna
 ```
 - `isZip:false` → **`RawFile`**：原始字节直存（云端文件 = 原始内容，双击能开，守 anti-abandonware）。**无预览图**。
 - `isZip:true` → **`ZipFile`**：库把 zip 尾片解析全包（**你不写任何 zip 代码**）。`getPeek({bytesLength, zipEntry})` 返明文 entry 的 PNG／或加密容器的**密文** peek（`ENC_PEEK_MIME`，不解密，供你缓存原样存密文=明文不落盘），密文再经 `decryptPeek(blob)` 非交互解。写侧 peek 经 `crypt.makePeek` 自动派生（无显式 `setPeek`，§5）。
+- **`file.getHead({bytesLength, source})` 头片 peek（0.15.0，首个消费者 CatsUp `.glb` 封面）**：文件**开头** n 字节的明文 Blob（无 type，格式盲）——「头在前」格式（GLB / PDF / ID3 / RIFF）的预览面；「目录在尾」的 zip 走 `ZipFile.getPeek`。本地有 → `Blob.slice` 零网络；无 → 云端 byte-range **不整份下载、不落本地**。`source` 必填同 getPeek（"cloud" 绝不落回本地）。**加密件 → null**（密文外壳不是头片，库绝不为预览解密）；云端不可达 → **抛**（未知 ≠ 没有，缓存层据此不缓存）。
 - peek/预览是**格式无关的不透明 binary blob**（jpg/png/随便，库不看、不构造、不解码）。
 
 ---

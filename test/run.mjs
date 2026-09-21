@@ -20,6 +20,7 @@ import "./read-only-files.test.mjs";
 import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";
 import "./zip-peek.test.mjs";
+import "./get-head.test.ts";   // 2026-09-20 0.15.0：RawFile.getHead 头片 peek（CatsUp .glb 封面）
 // 红线对抗 battery（If-Match/parentBase/conflict→backup/move-aside/…）
 import "./push.test.ts";
 import "./safe-resolve.test.ts";

@@ -245,31 +245,32 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   }
 
   // 尾部 byte-range（纯读）：peek 预览纯云端文件用。store.getTailBytes 的云端腿。
-  async function pullTail(name: string, n: number): Promise<{ bytes: Uint8Array; item: CloudItem } | null> {
-    const { item } = await _find(name);
+  async function pullTail(name: string, n: number): Promise<{ bytes: Uint8Array; item: CloudItem; encrypted: boolean } | null> {
+    const { item, enc } = await _find(name);
     if (!item) return null;
     const offset = Math.max(0, (item.size || 0) - n);
     const raw = await provider.downloadRange(item.ref, offset, Math.min(n, item.size || n));
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());
-    return { bytes, item };
+    return { bytes, item, encrypted: enc };
   }
 
   // 任意绝对偏移 byte-range（纯读）：getPeek 解 zip 时，CD / 目标 entry 溢出尾片就用它二次拉。
   //   offset/length 对 item.size 钳边；空区间直接返空（不打网络）。
-  async function pullRange(name: string, offset: number, length: number): Promise<{ bytes: Uint8Array; item: CloudItem } | null> {
-    const { item } = await _find(name);
+  //   encrypted：命中的是 encFileName 那份（加密容器）——getHead 据此拒给头片（密文头对 app 无意义，且绝不在库外解）。
+  async function pullRange(name: string, offset: number, length: number): Promise<{ bytes: Uint8Array; item: CloudItem; encrypted: boolean } | null> {
+    const { item, enc } = await _find(name);
     if (!item) return null;
     const size = item.size || 0;
     const off = Math.max(0, Math.min(offset, size));
     const len = Math.max(0, Math.min(length, size - off));
-    if (len === 0) return { bytes: new Uint8Array(0), item };
+    if (len === 0) return { bytes: new Uint8Array(0), item, encrypted: enc };
     const raw = await provider.downloadRange(item.ref, off, len);
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());
-    return { bytes, item };
+    return { bytes, item, encrypted: enc };
   }
 
   // move-aside：原文件 → ensureFolder(.trash) → move，**始终加 [ts] 后缀**（多次删同名永不冲突）。

@@ -217,10 +217,10 @@ export interface CloudSync {
   pull(name: string): Promise<PullResult | null>;
   /** 只取轻量元信息（比对 etag 用），不下载内容。 */
   fetchMeta(name: string): Promise<FetchMetaResult | null>;
-  /** 尾部 byte-range 纯读（peek 预览纯云端文件用；store.getTailBytes 的云端腿）。 */
-  pullTail(name: string, n: number): Promise<{ bytes: Bytes; item: CloudItem } | null>;
-  /** 任意绝对偏移 byte-range 纯读（getPeek 的「CD / entry 溢出尾片时二次拉」用）。越界自动钳。 */
-  pullRange(name: string, offset: number, length: number): Promise<{ bytes: Bytes; item: CloudItem } | null>;
+  /** 尾部 byte-range 纯读（peek 预览纯云端文件用；store.getTailBytes 的云端腿）。encrypted = 命中的是加密容器名（0.15.0）。 */
+  pullTail(name: string, n: number): Promise<{ bytes: Bytes; item: CloudItem; encrypted: boolean } | null>;
+  /** 任意绝对偏移 byte-range 纯读（getPeek 的「CD / entry 溢出尾片时二次拉」、getHead 的头片）。越界自动钳。encrypted 同上。 */
+  pullRange(name: string, offset: number, length: number): Promise<{ bytes: Bytes; item: CloudItem; encrypted: boolean } | null>;
   /** 弱覆盖：覆盖云端 + 留底。 */
   weakOverride(name: string, bytes: Bytes, opts?: { encrypted?: boolean }): Promise<WeakOverrideResult>;
   /** 移进云端 .trash。deleteEventId 同上——两条腿必须是同一个，否则回收站里一次删除会裂成两行/误配。 */

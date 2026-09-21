@@ -237,6 +237,15 @@ export interface RawFile {
   save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown }): Promise<SaveResult>;
   /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
   open(): Promise<Blob | null>;
+  /** 头片 peek（0.15.0，首个消费者 = CatsUp `.glb` 封面：glTF 把 thumbnail 放 BIN 首段）：文件**开头** bytesLength 字节的
+   *  **明文**字节 Blob（无 type，格式盲——GLB / PDF / ID3 / RIFF 这类「头在前」格式的预览面；zip 这类「目录在尾」的走
+   *  `ZipFile.getPeek`）。**不整份下载**：本地有副本 → `Blob.slice`（不碰网）；无 → 云端 byte-range（`pullRange(0,n)`），
+   *  拉到的头片**不落本地**。bytesLength 超过文件 → 整份。
+   *  source **必填无默认**（同 getPeek 2026-08-21 护栏）："local" = 本地优先、无本地才落云端；"cloud" = **只看云端**、
+   *  无 provider / 离线 / 云端无 → null，**绝不静默落回本地**（cloud-newer 刷新用；否则「新 token 配旧字节」假新鲜缓存重现）。
+   *  **加密件 → null**（本地经 looksEncryptedContainer、云端经加密名判定）：at-rest 头片是密文容器的外壳，app 拿到只会误判；
+   *  库绝不为了预览去解密（解密只走 open）。云端不可达 → **抛**（不是 null）：调用方据此「未知不缓存」（gallery thumb 契约）。 */
+  getHead(opts: { bytesLength: number; source: "local" | "cloud" }): Promise<Blob | null>;
   // （原 store.refresh(name)，2026-07 收上 file。）
   /** 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op
    *  （绝不在事件里弹 sheet，后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。 */
@@ -933,6 +942,25 @@ export function createStore(config: StoreConfig) {
         // 本地没有、过路模式（autoCacheOpenedFile:false，流式消费）→ 整份拉云、**不落本地**，直接返字节
         const pulled = await cloud.pull(name).catch((e) => { ui.reportError(e); return null; });
         return pulled ? await seal.unsealForRead(name, pulled.blob) : null;   // range/streaming（按需取片）是 ⚠TODO 优化
+      },
+      // 头片 peek（0.15.0）：本地切片 / 云端 pullRange(0,n)，加密件 null，云端不可达抛（JSDoc 见 RawFile.getHead）。
+      //   与 openPeekSource 同一路由纪律：source="cloud" 跳过本地分支；"local" 无本地才落云端。不经 openStream——那是 2 MiB
+      //   分片 + staging tee 的流式面，为 10 KB 封面开会话是错的工具（每个 cloud-only tile 落 2 MiB 暂存）。
+      async getHead(o) {
+        await migrationReady;
+        const n = Math.max(0, Math.floor(o.bytesLength));
+        if (o.source !== "cloud") {
+          const blob = await local.get(name);
+          if (blob) {
+            const b = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
+            if (await enc.looksEncryptedContainer(b)) return null;   // 密文外壳不是头片
+            return b.slice(0, Math.min(n, b.size));
+          }
+        }
+        if (!cloud.pullRange || !isOnline()) return null;            // 云腿闸 = isOnline ∧ signedIn（0.14.0）：不可能成功的云腿不打
+        const r = await cloud.pullRange(name, 0, n);                 // 不可达 → 抛给调用方（未知 ≠ 没有）
+        if (!r || r.encrypted) return null;
+        return new Blob([(r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as ArrayBufferLike)) as BlobPart]);
       },
       pullIfClean(opts) { return fresh.refresh(name, { isOnline, ...opts }); },   // 事件驱动干净快进（clean→FF、dirty→no-op）；默认注入 store 的 isOnline（离线早退，不空跑 fetchMeta）
       tryMove(to) { roGuard("tryMove"); return tryMoveSF(name, to); },

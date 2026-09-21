@@ -111,15 +111,17 @@ export declare interface CloudSync {
     pull(name: string): Promise<PullResult | null>;
     /** 只取轻量元信息（比对 etag 用），不下载内容。 */
     fetchMeta(name: string): Promise<FetchMetaResult | null>;
-    /** 尾部 byte-range 纯读（peek 预览纯云端文件用；store.getTailBytes 的云端腿）。 */
+    /** 尾部 byte-range 纯读（peek 预览纯云端文件用；store.getTailBytes 的云端腿）。encrypted = 命中的是加密容器名（0.15.0）。 */
     pullTail(name: string, n: number): Promise<{
         bytes: Bytes;
         item: CloudItem;
+        encrypted: boolean;
     } | null>;
-    /** 任意绝对偏移 byte-range 纯读（getPeek 的「CD / entry 溢出尾片时二次拉」用）。越界自动钳。 */
+    /** 任意绝对偏移 byte-range 纯读（getPeek 的「CD / entry 溢出尾片时二次拉」、getHead 的头片）。越界自动钳。encrypted 同上。 */
     pullRange(name: string, offset: number, length: number): Promise<{
         bytes: Bytes;
         item: CloudItem;
+        encrypted: boolean;
     } | null>;
     /** 弱覆盖：覆盖云端 + 留底。 */
     weakOverride(name: string, bytes: Bytes, opts?: {
@@ -790,6 +792,18 @@ export declare interface RawFile {
     }): Promise<SaveResult>;
     /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
     open(): Promise<Blob | null>;
+    /** 头片 peek（0.15.0，首个消费者 = CatsUp `.glb` 封面：glTF 把 thumbnail 放 BIN 首段）：文件**开头** bytesLength 字节的
+     *  **明文**字节 Blob（无 type，格式盲——GLB / PDF / ID3 / RIFF 这类「头在前」格式的预览面；zip 这类「目录在尾」的走
+     *  `ZipFile.getPeek`）。**不整份下载**：本地有副本 → `Blob.slice`（不碰网）；无 → 云端 byte-range（`pullRange(0,n)`），
+     *  拉到的头片**不落本地**。bytesLength 超过文件 → 整份。
+     *  source **必填无默认**（同 getPeek 2026-08-21 护栏）："local" = 本地优先、无本地才落云端；"cloud" = **只看云端**、
+     *  无 provider / 离线 / 云端无 → null，**绝不静默落回本地**（cloud-newer 刷新用；否则「新 token 配旧字节」假新鲜缓存重现）。
+     *  **加密件 → null**（本地经 looksEncryptedContainer、云端经加密名判定）：at-rest 头片是密文容器的外壳，app 拿到只会误判；
+     *  库绝不为了预览去解密（解密只走 open）。云端不可达 → **抛**（不是 null）：调用方据此「未知不缓存」（gallery thumb 契约）。 */
+    getHead(opts: {
+        bytesLength: number;
+        source: "local" | "cloud";
+    }): Promise<Blob | null>;
     /** 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op
      *  （绝不在事件里弹 sheet，后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。 */
     pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;

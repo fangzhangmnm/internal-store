@@ -104,10 +104,12 @@ export interface CloudSync {
     pullRange(name: string, offset: number, length: number): Promise<{
         bytes: Bytes;
         item: CloudItem;
+        encrypted: boolean;
     } | null>;
     pullTail(name: string, n: number): Promise<{
         bytes: Bytes;
         item: CloudItem;
+        encrypted: boolean;
     } | null>;
     purge(cloudRef: string, eTag?: string | null): Promise<unknown>;
     push(name: string, bytes: Bytes | Blob, opts?: {
@@ -574,6 +576,10 @@ export interface RawFile {
     }): Promise<{
         status: string;
     }>;
+    getHead(opts: {
+        bytesLength: number;
+        source: "local" | "cloud";
+    }): Promise<Blob | null>;
     isEncrypted(): Promise<boolean>;
     isKeptOffline(): Promise<boolean>;
     keepOffline(opts?: {
