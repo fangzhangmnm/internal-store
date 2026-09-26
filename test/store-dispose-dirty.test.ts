@@ -94,3 +94,29 @@ test("[stale-ref] cloud.restore/purge 对失效 ref → CloudStaleRefError（预
     catch (e) { eq((e as Error).name, "CloudStaleRefError", `404 必须收敛进错误族，实际 ${(e as Error)?.name}: ${(e as Error)?.message}`); }
   }
 });
+
+// ── 0.15.1：加密件推送不要密码——本地 at-rest 字节直推（WXHW user 2026-09-26「为什么推加密件需要密码。不就是二进制吗」）──
+test("[dirty] 加密件、锁着（getPassword=null）：pushAll 照推 → pushed=1、云端字节 = 本地容器逐位相同、账清", async () => {
+  let pw: string | null = "pw"; let online = false;
+  const kv = dumpKv(); const local = createMockLocal(); const provider = createMockProvider();
+  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "wp", provider, ui: STUB_UI, crypt: { ext: "txt", getPassword: () => pw },
+    validateAdopt: () => true, kv, local,
+    fileName: (n: string) => n, isOnline: () => online, signedIn: () => online, skipMigration: true,
+  });
+  await store.file("密.txt", { isZip: false, mode: "new" }).save(enc("SECRET-v1"), { tryPush: false });   // 登出态落盘（tryPush:false 不进离线上传队列）
+  const r0 = await store.file("密.txt", { isZip: false, mode: "existing" }).encrypt({ isOnline: () => online });   // 有密码时封（离线：云腿 deferred）
+  assert(r0.status !== "locked" && r0.status !== "offline", `encrypt offline on a never-synced file: ${r0.status}`);
+  const atRest = await local.get("密.txt"); assert(atRest, "本地有字节");
+  const atRestU8 = atRest instanceof Blob ? new Uint8Array(await atRest.arrayBuffer()) : new Uint8Array(atRest as Uint8Array);
+  assert(await createMockEncryption().looksEncryptedContainer(atRestU8), "本地 at-rest 已是容器");
+  eq(await store.files.dirty.count(), 1, "未推账 =1");
+  pw = null; online = true;   // reload 后密码没了 + 登录回线
+  const r = await store.files.dirty.pushAll();
+  eq(`${r.pushed}/${r.failed.length}`, "1/0", "锁着照推：推上 1、失败 0（以前 = locked 失败留 dirty）");
+  eq(await store.files.dirty.count(), 0, "账清");
+  const item = await provider.getItemByPath("密.txt.zip"); assert(item, "云端有容器（at-rest 名 .zip）");
+  const cloudBytes = new Uint8Array(await (await provider.download(item.ref ?? item.id, { path: "密.txt.zip" })).arrayBuffer());
+  eq(cloudBytes.length, atRestU8.length, "云端字节长度 = 本地容器");
+  assert(cloudBytes.every((b, i) => b === atRestU8[i]), "★云端 = 本地 at-rest 容器逐位相同（没解壳、没重封）");
+});

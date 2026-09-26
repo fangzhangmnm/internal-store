@@ -319,7 +319,7 @@ export declare function createStore(config: StoreConfig): {
              *  watchFolder）；bool 用 `count() > 0` 白送。口径 = durable dirty 轨（任何 tab 的未推都算）。 */
             count: () => Promise<number>;
             /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
-             *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/加密锁定/落地未确认都算失败留 dirty，
+             *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/落地未确认都算失败留 dirty（0.15.1 起**加密锁定不再是失败原因**：at-rest 字节直推，不要密码），
              *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
              *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
             pushAll: () => Promise<{

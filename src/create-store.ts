@@ -638,14 +638,15 @@ export function createStore(config: StoreConfig) {
   }
   // 后台 push 实例：与 pushMod 同深模块编排，唯 busy 换透传——drain 不锁屏（ADR-0018 §4：非 busy 后台）。
   const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn() });
+  // 0.15.1（2026-09-26，WXHW user「为什么推加密件需要密码。不就是二进制吗」→「修」）：**本地 at-rest 字节直推，不解壳不重封**。
+  //   以前先 unsealForRead 得明文再交 doPush 重新 sealForWrite —— 等于要密码才能把已经封好的容器搬上云；锁着（无密码）= status "locked" 留 dirty，
+  //   pushAll / 离线补推在锁屏 / reload 后全推不动。sealForWrite 本就对「已是容器」原样透传（搬运路径），明文文件也原样（prev 非容器），
+  //   所以直推 = 同一份字节、同一条 vetted push（If-Match / N6 / 撞名 surface / B5 重试逐字节相等）。锁着的加密件从此照推。
   async function pushLocalBytes(name: string): Promise<{ status: string }> {
     const blob = await local.get(name);
     if (!blob) return { status: "no-local" };
-    const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
-    const plain = await seal.unsealForRead(name, asBlob);   // 得明文（不加密宿主=原字节）
-    if (!plain) return { status: "locked" };
-    const plainU8 = await toU8(plain);
-    return pushBg.doPush(name, { encode: () => plainU8 });   // 非 busy、未串行（uploadReplay 已 per-name serialize）；CloudNameCollisionError 抛出→出队 surface
+    const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
+    return pushBg.doPush(name, { encode: () => atRest });   // 非 busy、未串行（uploadReplay 已 per-name serialize）；CloudNameCollisionError 抛出→出队 surface
   }
   const uploadReplay = createUploadReplay({
     kv, local, head, isOnline, serialize: sub.serialize, pushLocal: pushLocalBytes,
@@ -1162,7 +1163,7 @@ export function createStore(config: StoreConfig) {
          *  watchFolder）；bool 用 `count() > 0` 白送。口径 = durable dirty 轨（任何 tab 的未推都算）。 */
         count: async (): Promise<number> => dirtyNames().length,
         /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
-         *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/加密锁定/落地未确认都算失败留 dirty，
+         *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/落地未确认都算失败留 dirty（0.15.1 起**加密锁定不再是失败原因**：at-rest 字节直推，不要密码），
          *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
          *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
         pushAll: async (): Promise<{ pushed: number; failed: string[] }> => {
