@@ -102,13 +102,15 @@ export function createFreshness(cfg: FreshnessCfg) {
       if (!dirty) {                                       // clean → 静默快进（无 sheet；safePull 因 clean 跳备份——!base 例外，谱系未知必备份）
         const r = await safeResolve.safePull(name, { adopt });
         // 快进没承诺过什么 → 失败只 info（状态栏，不 banner；captive portal 下每次 open 都会走到这里）。
-        if (!r.ok) reportStoreError(new Error(`「${name}」云端有新版本但暂时取不到（${pullFailText(r.reason)}），已打开本地版本`), "info");
+        if (!r.ok && r.reason !== "edited-during-pull") reportStoreError(new Error(`「${name}」云端有新版本但暂时取不到（${pullFailText(r.reason)}），已打开本地版本`), "info");   // 途中保存导致的作罢不是故障：本地有了未推改动，之后推送自会撞冲突面
         return r.ok ? { source: "fast-forwarded", backupName: r.backupName } : { source: "local", reason: r.reason, error: r.error };
       }
       // dirty 分叉 → 交 ui（takeCloud=拉 / keepMine|cancel=留本地）
       const choice = onNewer ? await onNewer({ name, cloudEtag: meta.etag, baseEtag: base, cloudTime: meta.lastModified }) : "cancel";
       if (choice === "takeCloud") {
-        const r = await safeResolve.safePull(name, { adopt });
+        // forceBackup：这里本来就是 dirty（必备份），加它不改变备份行为；它表达的是「用户明确选了换世界线」——
+        //   下载途中又保存过时，safePull 据此把那一份再备份一次然后照用户的意思覆盖，而不是作罢（0.15.2）。
+        const r = await safeResolve.safePull(name, { adopt, forceBackup: true });
         // 用户显式选了「用云端」却没成 → warning（banner）：绝不让用户以为打开的是云端版（反煤气灯）。
         if (!r.ok) reportStoreError(new Error(`「${name}」未能取回云端版本（${pullFailText(r.reason)}），本次打开的仍是本地版本`), "warning");
         return r.ok ? { source: "pulled", backupName: r.backupName } : { source: "local", reason: r.reason, backupName: r.backupName, error: r.error };
@@ -137,9 +139,10 @@ export function createFreshness(cfg: FreshnessCfg) {
       if (probe) {
         const winner = await Promise.race([pulling.then((r) => ({ r })), Promise.resolve(probe).then(() => null)]);
         if (winner == null) { pulling.catch((e) => reportStoreError(e, "log")); return { status: "escaped" }; }
-        return winner.r.ok ? { status: "fast-forwarded" } : { status: "ff-failed", reason: winner.r.reason };
+        return winner.r.ok ? { status: "fast-forwarded" } : winner.r.reason === "edited-during-pull" ? { status: "dirty-skip" } : { status: "ff-failed", reason: winner.r.reason };
       }
       const r = await pulling;
+      if (!r.ok && r.reason === "edited-during-pull") return { status: "dirty-skip" };   // 0.15.2：下载途中本地有了改动 → 这次快进作罢（同「本来就脏」）
       return r.ok ? { status: "fast-forwarded" } : { status: "ff-failed", reason: r.reason };
     });
   }

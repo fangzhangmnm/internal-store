@@ -22,7 +22,10 @@ import type { AdoptFn } from "./types.ts";
 export interface SafeResolveCfg {
   cloud: Pick<CloudSync, "pull" | "weakOverride">;
   local: Pick<LocalCache, "backup" | "save">;
-  head: Pick<LocalHead, "isDirtyAnywhere" | "markSynced" | "seenBase">;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "markSynced" | "seenBase"> & Partial<Pick<LocalHead, "editCount">>;
+  /** 同名串行链（substrate.serialize）。用户保存的本地写在这条链上；「核对 + 覆盖本地 + 提交谱系」也必须在这条链上，
+   *  否则两次写谁后落盘说不准（0.15.2）。不给 = 不串行（单元测试的替身场景）。 */
+  serialize?: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   localDirty?: () => boolean;                                  // 活动 doc 未落盘（substrate.edits.localDirty）
   // N2 采纳云字节前的校验闸——**必传，无 noop 默认**（store 格式盲，逻辑 app 给）。验的是**解密后的明文**
   //   （库对加密透明）：app 看到的是真明文文档，不是密文容器。挡 captive-portal HTML / 损坏云副本覆盖好本地。
@@ -38,10 +41,11 @@ export type ResolveStatus = "resolved" | "unresolved" | "cancelled";
 export interface ResolveConflictResult { status: ResolveStatus; resolution?: string; reason?: string; backupName?: string; backedUp?: string | null }
 
 export interface SafeResolve {
-  safePull(name: string, opts?: { adopt?: AdoptFn; forceBackup?: boolean }): Promise<SafePullResult>;
+  /** inChain：调用方已经站在这个名字的串行链上（推送撞冲突后的 resolveConflict）→ 临界段直接跑，不再排队（否则自己等自己）。 */
+  safePull(name: string, opts?: { adopt?: AdoptFn; forceBackup?: boolean; inChain?: boolean }): Promise<SafePullResult>;
   tryHeal(name: string, bytes: Bytes): Promise<boolean>;
   weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }>;
-  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn }): Promise<ResolveConflictResult>;
+  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean }): Promise<ResolveConflictResult>;
 }
 
 export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
@@ -52,7 +56,9 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
     unseal = (_n, blob) => Promise.resolve(blob),
     onReplacing = () => {},
     looksEncrypted = () => Promise.resolve(false),
+    serialize = (_n, fn) => fn(),
   } = cfg;
+  const editCount = (name: string): number => head.editCount?.(name) ?? 0;
 
   // 安全拉取覆盖：先 backup（dirty 才备；失败即 abort，绝不 pull/覆盖）→ 拉 → 校验 → 覆盖 → 采纳后置 etag → adopt。
   // 持久态只在原子点改；强退任一 await 点可重入。
@@ -60,9 +66,21 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   //   takeCloud 是「文件版本模型」的换世界线，不是 workspace 操作——被换掉的当前世界线**无条件**先进 .backup。
   //   （clean-skip 的「本地可从云重取」论据在 takeCloud 场景恰恰失效过：本地随后覆写云端时，云端那版就不再兜底。）
   //   freshness 的静默快进（clean fast-forward）不传它——ADR-0016 的不 spam .backup 决策不动。
-  async function safePull(name: string, { adopt, forceBackup = false }: { adopt?: AdoptFn; forceBackup?: boolean } = {}): Promise<SafePullResult> {
+  //
+  // 0.15.2「途中又保存」守卫（WXHW 两台设备端到端测试 2026-09-29 顺藤摸到；user「同步库的一个洞 修」）：
+  //   下载要花时间。开头判过一次脏之后，用户的 save() 可能在下载途中落了新字节——以前下载完照样覆盖并 markSynced，
+  //   那份字节既不在本地也不在备份箱，dirty 还被清掉。现在：开头记下这个文件的保存计数 e0；下载、校验完之后进**临界段**
+  //   （站在同名串行链上，和用户保存的本地写互斥）：
+  //     ① 计数变了 = 途中保存过。静默快进（没人要求换世界线）→ **作罢**，本地分毫不动，dirty 照旧，之后推送自会撞冲突面；
+  //        用户点了「云端覆盖本地」（forceBackup）→ 把途中保存的那一份**再备份一次**，然后照用户的意思覆盖。
+  //     ② 覆盖本地。
+  //     ③ 再看一眼计数：覆盖的那一下又保存了（它的本地写排在我们后面，马上会落成最终字节）→ **不提交谱系**：
+  //        本地最终是「旧世界 + 新改动」，dirty 和 parent 都还是 recordEdit 留下的样子（parent = 旧 base），
+  //        下次推送 If-Match 旧 etag → 412 → 冲突面。提交了才是事故：谱系指向云端新版、标成干净，下次推送静默盖掉云端赢家。
+  async function safePull(name: string, { adopt, forceBackup = false, inChain = false }: { adopt?: AdoptFn; forceBackup?: boolean; inChain?: boolean } = {}): Promise<SafePullResult> {
     onReplacing(true);
     try {
+      const e0 = editCount(name);
       let backupName: string | undefined;
       // clean 本地 = 可从云重取的已知版本，无未见内容可丢 → 跳 backup（ADR-0016，不 spam .backup）。
       //   ⚠ 该论据的前提是**谱系已知**（seenBase 非 null：本地 == 云端某已知版）。!base（从未 synced /
@@ -80,10 +98,22 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
       //   锁定解不开 → 退验加密容器封套（captive-portal HTML 不是合法容器；无密码时能做的最强校验）。
       const ok = plain != null ? await validateAdopt(plain) : await looksEncrypted(r.blob);
       if (!ok) return { ok: false, reason: "invalid-cloud-bytes", backupName };
-      await local.save(name, r.blob);                       // 覆盖本地（存 at-rest/sealed 字节；dirty 时原件已备份）
-      head.markSynced(name, r.item?.eTag ?? null);          // 采纳后置（R1）：etag/dirty 只在 save 成功后推进
+      const commit = async (): Promise<SafePullResult> => {
+        const e1 = editCount(name);
+        if (e1 !== e0) {                                      // ① 途中保存过
+          if (!forceBackup) return { ok: false, reason: "edited-during-pull", backupName };
+          try { backupName = await local.backup(name); }
+          catch (e) { reportStoreError(e, "warning"); return { ok: false, reason: "backup-failed", backupName, error: e }; }
+        }
+        await local.save(name, r.blob);                       // ② 覆盖本地（存 at-rest/sealed 字节；dirty 时原件已备份）
+        if (editCount(name) !== e1) return { ok: false, reason: "edited-during-pull", backupName };   // ③ 不提交谱系
+        head.markSynced(name, r.item?.eTag ?? null);          // 采纳后置（R1）：etag/dirty 只在 save 成功后推进
+        return { ok: true, backupName };
+      };
+      const done = inChain ? await commit() : await serialize(name, commit);
+      if (!done.ok) return done;
       if (adopt && plain != null) await adopt(plain, name); // 复用已解密明文；锁定解不开则只快进落盘、不 adopt
-      return { ok: true, backupName };
+      return done;
     } finally {
       onReplacing(false);
     }
@@ -114,9 +144,9 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   }
 
   // 3 选项派发（README.md §7）：takeCloud=safePull · keepMine=weakOverride · cancel=什么都不动（留 dirty）。
-  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn } = {}): Promise<ResolveConflictResult> {
+  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean } = {}): Promise<ResolveConflictResult> {
     if (choice === "takeCloud") {
-      const r = await safePull(name, { adopt: ctx.adopt, forceBackup: true });   // 换世界线 → 当前世界线无条件进 .backup（user 2026-08-25 拍板）
+      const r = await safePull(name, { adopt: ctx.adopt, forceBackup: true, inChain: ctx.inChain });   // 换世界线 → 当前世界线无条件进 .backup（user 2026-08-25 拍板）
       return r.ok
         ? { status: "resolved", resolution: "takeCloud", backupName: r.backupName }
         : { status: "unresolved", reason: r.reason, backupName: r.backupName };

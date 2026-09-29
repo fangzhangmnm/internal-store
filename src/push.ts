@@ -26,7 +26,7 @@ type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
 
 export interface PushCfg {
   cloud: Pick<CloudSync, "push">;
-  head: Pick<LocalHead, "ifMatchFor" | "onPushed" | "recordEdit">;
+  head: Pick<LocalHead, "ifMatchFor" | "onPushed" | "recordEdit"> & Partial<Pick<LocalHead, "editCount">>;
   seal: Pick<Seal, "sealForWrite" | "isContainer">;
   safeResolve: Pick<SafeResolve, "tryHeal" | "resolveConflict">;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
@@ -62,6 +62,10 @@ export function createPush(cfg: PushCfg) {
   async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false }: PushOpts): Promise<PushResult> {
     const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
     const v0 = getEditVersion();
+    // 0.15.2：这个文件的保存计数。全局游标（getEditVersion）要宿主自己推进，拆库后没人推进过 → dirtyAfter 恒 false：
+    //   推送途中 save() 又落了新字节，推完却把 dirty 清掉。计数由 recordEdit 自己涨，不靠宿主。
+    const e0 = head.editCount?.(name) ?? 0;
+    const editedSince = (): boolean => getEditVersion() !== v0 || (head.editCount?.(name) ?? 0) !== e0;
     // encode 出明文 → seal 按 at-rest 态包壳（调用方对加密零感知）。只编码+包壳一次，重试复用（B5 逐字节比对要相等）。
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);
@@ -76,18 +80,18 @@ export function createPush(cfg: PushCfg) {
           //   合法驱逐（MASTER §A「dirty 永不驱逐」直接失守），UI 还显示「已同步」。
           //   → 不调 onPushed（dirty/parent 原样保住），报 deferred，让上层重推。
           if (!(item && item.eTag)) return { status: "deferred", dirtyAfter: true };
-          const dirtyAfter = getEditVersion() !== v0;   // PUT 期间又改过 → 仍 unpushed
+          const dirtyAfter = editedSince();   // PUT 期间又改过 → 仍 unpushed
           head.onPushed(name, item.eTag, dirtyAfter);
           return { status: "pushed", dirtyAfter };
         } catch (e: unknown) {
           if (isConflict(e)) {
             if (await safeResolve.tryHeal(name, bytes)) {   // lost-response 自愈
-              const dirtyAfter = getEditVersion() !== v0;
+              const dirtyAfter = editedSince();
               if (dirtyAfter) head.recordEdit(name);        // 编辑发生在推期间 → 基于刚自愈的版本重标脏（B2）
               return { status: "healed", dirtyAfter };
             }
             const choice = onConflict ? await onConflict({ name }) : "cancel";   // 真分叉 → 交 ui 选（默认 cancel=留 dirty）
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt });
+            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
           // 谱系断裂：无 base 推撞上云端同名（cloud-sync 的 409 + 尾字节 differ → CloudNameCollisionError）。
           //   两种情形共用这一个错误，但该走的路完全相反：
@@ -100,7 +104,7 @@ export function createPush(cfg: PushCfg) {
           //   两条路都不盲目覆盖、都不丢字节；差别只是 ② 给了用户一条出路。
           if (surfaceCollision && (e as { name?: string })?.name === "CloudNameCollisionError") {
             const choice = onConflict ? await onConflict({ name }) : "cancel";
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt });
+            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
           if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(backoffMs * attempt); continue; }
           throw e;

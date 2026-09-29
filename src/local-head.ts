@@ -40,6 +40,10 @@ export interface LocalHead {
   //   （converge/freshness/删除警告……），per-tab 视角看不见别 tab 的 durable dirty → §A 失守。
   //   全局问题一律用 isDirtyAnywhere；本方法只喂谱系/episode。
   isDirtyAnywhere(name: string): boolean;      // 任何 tab 有未推字节吗（durable ∨ 内存）——**驱逐守卫专用**
+  /** 这个文件在本 tab 被保存（recordEdit）过几次（0.15.2）。只增不减、只在内存里。用法只有一种：
+   *  一段要花时间的动作（推送 / 拉云覆盖）开头记一个数，结尾再看——变了 = 途中又保存过，那次保存的字节不在我手里这一版里。
+   *  取代从没人推进过的全局编辑游标（substrate.edits）：那个要宿主自己调 mark()，拆库之后没有任何宿主调过。 */
+  editCount(name: string): number;
   // ── 写（状态迁移）──
   recordEdit(name: string): void;              // 唯一标脏：原子 dirty + 头一次捕获 _parent←_base
   markSeen(name: string, etag: string | null): void;     // 看到云版(open/refresh meta)：set _base；dirty 缺 parent(reload)→re-capture
@@ -52,6 +56,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   const _base = new Map<string, string | null>();     // 本 tab 已见云 tip（内存，per-tab）
   const _parent = new Map<string, string | null>();   // 未推枝分叉自哪（内存，per-tab）
   const _dirtyMem = new Map<string, boolean>();       // per-tab 活 dirty 视图（覆盖 kv durable）
+  const _edits = new Map<string, number>();           // per-tab 保存计数（0.15.2，见接口注释）
   const dirtyKey = (n: string) => `${keyPrefix}.dirty:${n}`;
 
   function isDirtyThisTab(name: string): boolean {
@@ -95,6 +100,7 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
   }
 
   function recordEdit(name: string): void {
+    _edits.set(name, (_edits.get(name) ?? 0) + 1);
     if (!isDirtyThisTab(name)) {                                  // clean→dirty 边沿：头一次捕获（episode 内幂等）
       _parent.set(name, _base.has(name) ? _base.get(name)! : null);
     }
@@ -163,5 +169,5 @@ export function createLocalHead({ kv, getCloudEtag, setCloudEtag, keyPrefix = "h
     setCloudEtag?.(name, null);
   }
 
-  return { ifMatchFor, seenBase, isDirtyThisTab, isDirtyAnywhere, recordEdit, markSeen, markSynced, onPushed, forget };
+  return { ifMatchFor, seenBase, isDirtyThisTab, isDirtyAnywhere, recordEdit, markSeen, markSynced, onPushed, forget, editCount: (name: string) => _edits.get(name) ?? 0 };
 }

@@ -620,6 +620,7 @@ export function createStore(config: StoreConfig) {
   const safeResolve = createSafeResolve({
     cloud, local, head,
     localDirty: () => sub.edits.localDirty(),
+    serialize: sub.serialize,                           // 0.15.2：拉云覆盖的临界段与用户保存的本地写同链互斥
     validateAdopt,
     unseal: (n, blob) => seal.unsealForRead(n, blob),   // 返明文；加密但锁定 → null（safePull 退验封套）
     looksEncrypted: (b) => enc.looksEncryptedContainer(b),
