@@ -1,8 +1,8 @@
 # 提案：文档种类表——把「只有一种扩展名」这个假设连根拔掉
 > created 20260929 · by Claude Fable 5.1 · as-of store 0.15.2 / gallery 0.5.0
-> 状态：**只是提案，没有动任何代码，等 user 定方向。** 它取代同日的 `docExts` 提案（那份在分支 `wip/0.16-doc-exts` 上）。
+> 状态：**已批准，开工**（user 2026-09-29「好，你和另外一个agent协调好了就可以开始做了 identifier, folder, suffix先这样吧」）。它取代同日的 `docExts` 提案（那个分支作废）。
 > 范围跨两个库（store + gallery）和四个宿主；文档放在 store 仓是因为身份归 store 管。
-> **用词被 user 打回过一次**（2026-09-29「type? extension? name是个坏名字」）：§5 到 §8 已换成候选新词，**词还没定**，见 §5.0。文件名等词定了再改。edited by Claude Fable 5.1 2026-09-29
+> 用词经三轮定稿（user 2026-09-29「type? extension? name是个坏名字」→ 逐词批复 → 「identifier, folder, suffix先这样吧」）：**identifier / folder / stem / suffix / kind**，见 §5.1 末尾的定稿表。§7 的 .h 已按定稿改。edited by Claude Fable 5.1 2026-09-29
 
 ## 0. 一句话
 
@@ -117,10 +117,22 @@ path、folder、文件名、扩展名这些词属于底下那一层，那里它�
 | | binder | 夹子，最贴近中文的「夹」 |
 | | place | 最朴素，「放在哪」 |
 | 人看的、人打的那一截 | stem | user「随便」，沿用 |
-| 文档身份的结尾 | **suffix（已定）** | user 第三轮：「suffix应该没问题吧…ending是坏名字」。ending 作废 |
+| 文档身份的结尾 | **suffix（已定）** | user 第三轮：「suffix应该没问题吧…ending是坏名字」。ending 作废。第四轮我建议过 docSuffix，user 定「suffix先这样吧」 |
 | app 给这种文档起的标签 | kind | user「同意」 |
 
 界面上给用户看的字仍然是「文件夹」，因为对用户来说它在 OneDrive 里确实就是个文件夹；这里定的只是代码和文档里身份这一层的词。
+
+**定稿（2026-09-29 第四轮）**：
+
+| 概念 | 定为 | user 原话 |
+|---|---|---|
+| 身份那一整串 | `identifier` | 「我就是想找一个和id不一样的词，我以为id是identity, 那么有什么是改名会变的?但是语义就是identifier啊，比如你同一家飞机transponder总是会设不同的数字」——id 会被读成 identity（永远不变）；identifier 是分配给它的号，可以重设，改名就是重设 |
+| 最后一个 `/` 前面那一截 | `folder` | 「放在哪 那不就是folder吗，为什么你会纠结」 |
+| 人看的、人打的那一截 | `stem` | 「随便」 |
+| 文档身份的结尾 | `suffix` | 「identifier, folder, suffix先这样吧」。接口注释必写「整串比对，不数点」 |
+| app 给这种文档起的标签 | `kind` | 「同意」 |
+
+模块叫 `store.identifiers`，只有 `parse` 和 `join`。store 现有接口里指身份的 `Item.path`、`file(name)`、`nameOccupied`、`activeFileName`、`hiddenName` 一并改成 identifier 的说法。
 
 **「多点的情况怎么办」**，分五种：
 
@@ -194,46 +206,52 @@ interface GalleryScreenDeps { naming?: NameBoundary; isZipDoc?(fullName): boolea
 export interface DocKind {
   /** app 自己的标签（开放集）。库原样带着，不解释。几行可以是同一个 kind。 */
   kind: string;
-  /** 路径以什么结尾，含点，可以多段：".txt" / ".webxiaoheiwu.zip"。大小写不敏感。 */
+  /** 身份以什么结尾，含点，可以多段：".txt" / ".webxiaoheiwu.zip"。**整串比对，不数点**；大小写不敏感。 */
   suffix: string;
   /** 明文字节是什么容器。"zip" = 能按条目名取一小段（封面）；"raw" = 不能。库仍然不看内容。 */
   container: "raw" | "zip";
 }
-/** 一条文档路径切开之后。 */
-export interface DocPath {
-  path: string;      // 身份
-  folder: string;    // "" = 根
-  stem: string;      // 主干
-  suffix: string;    // 命中的后缀，保留路径里原有的大小写
+/** 一条文档身份切开之后。 */
+export interface DocIdentifier {
+  identifier: string;   // 身份本身
+  folder: string;       // 最后一个 / 之前；"" = 最外层
+  stem: string;         // 主干
+  suffix: string;       // 命中的后缀，保留身份里原有的大小写
   kind: string;
   container: "raw" | "zip";
 }
-export interface Paths {
+export interface Identifiers {
   /** 切开。不是本 app 的文档 → null。几个后缀都命中取最长的。 */
-  parse(path: string): DocPath | null;
+  parse(identifier: string): DocIdentifier | null;
   /** 拼回去。 */
   join(parts: { folder: string; stem: string; suffix: string }): string;
 }
 export interface StoreConfig {
-  /** 必填表态（和 persistence / reconcilePolicy 同一类）。 */
+  /** 必填表态（和 persistence / reconcilePolicy 同一类）。空数组 = 明确声明本 app 没有文档种类。 */
   docKinds: readonly DocKind[];
-  // 删除：fileName / encFileName / toName / crypt.ext
+  /** 列举时藏起来的非文档噪音（原 hiddenName）。 */
+  hidden?: (identifier: string) => boolean;
+  /** 当前打开的文档（原 activeFileName）。 */
+  activeIdentifier?: () => string | null;
+  // 删除：fileName / encFileName / toName / crypt.ext / hiddenName / activeFileName
 }
+export interface Item { identifier: string; syncState; size?; lastModified? }   // 原 path
 export interface Store {
-  paths: Paths;
+  identifiers: Identifiers;
   /** 任何文件（文档、图片、杂物）。 */
-  file(path: string, opts: { mode: "new" | "existing" }): RawFile;
+  file(identifier: string, opts: { mode: "new" | "existing" }): RawFile;
   /** 只准用于 container 是 "zip" 的文档，否则抛。多出 getPeek / decryptPeek。 */
-  zip(path: string, opts: { mode: "new" | "existing" }): ZipFile;
+  zip(identifier: string, opts: { mode: "new" | "existing" }): ZipFile;
+  files: { occupied(identifier: string): Promise<boolean>; /* 原 nameOccupied */ … };
 }
 
 // ── gallery ──
-export interface GItem { path: string; stem: string; kind: string; syncState; size?; lastModified? }
+export interface GItem { identifier: string; stem: string; kind: string; syncState; size?; lastModified? }
 export interface GalleryPolicy {
   /** 不是文档的文件里哪些算图片（WeebPaint 的云盘图片）。 */
-  isImage?(path: string): boolean;
+  isImage?(identifier: string): boolean;
   /** 哪几个种类有缩略图。不给 = 都没有。 */
-  thumbs?: { kinds: readonly string[]; dbName: string; fetch(path, source): Promise<Blob | null> };
+  thumbs?: { kinds: readonly string[]; dbName: string; fetch(identifier, source): Promise<Blob | null> };
 }
 // 删除：NameBoundary、naming、policy.naming、policy.isDoc、isZipDoc、hasThumb、thumbs.has、uniqueBareName 的 naming 参数
 ```
@@ -291,9 +309,9 @@ user 2026-09-29：「还有几个问题要问我？」
 
 | # | 问题 | 我的建议 |
 |---|---|---|
-| 1 | 身份那一整串在代码里叫什么。user 提了 identifier | `id`，它就是 identifier 的缩写 |
-| 2 | 身份里最后一个 `/` 前面那一截叫什么 | 见 §5.1。这一截和云盘上真实的文件夹是同一串字 |
-| 3 | 批不批 store 0.16.0 和 gallery 0.6.0 两个 minor 按本提案做 | — |
+| 1 | 身份那一整串在代码里叫什么 | 定 `identifier`（第四轮） |
+| 2 | 身份里最后一个 `/` 前面那一截叫什么 | 定 `folder`（第四轮） |
+| 3 | 批不批 store 0.16.0 和 gallery 0.6.0 两个 minor 按本提案做 | **已批**（「好，你和另外一个agent协调好了就可以开始做了」）；和参考窗库会话已打过招呼 |
 
 已经定了、不用再问的：
 
