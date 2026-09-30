@@ -56,7 +56,8 @@ import "./store-lost-response-claim.test.mjs";
 import "./migration.test.mjs";
 import "./store-narrow-waist.test.ts";
 import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOnline∧signedIn / hiddenName
-import "./edit-race.test.ts";   // 0.15.2：保存与推 / 拉撞车（编辑游标没人推进的洞）
+import "./edit-race.test.ts";
+import "./identifiers.test.ts";   // 0.16.0：身份的语法（docKinds 表）
 
 console.log("\n  @internal/store —— 云同步引擎契约测试\n");
 await run();
