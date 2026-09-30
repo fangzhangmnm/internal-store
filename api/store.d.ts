@@ -261,7 +261,9 @@ export declare function createFolderProvider(root: FolderDirHandle): CloudProvid
 /** LocalCache 工厂（prod=IDB）：files/trash/backup 三分区的本地持久层，内容无关、只存不透明 blob。
  *  dbName 必须已带命名空间（createStore 传 `${appId}.${databaseId}`）——同 origin 兄弟 PWA /
  *  多 store 实例隔离，见 idb-store.ts 头注释。 */
-export declare function createLocalCache(dbName: string): LocalCache;
+export declare function createLocalCache(dbName: string, opts?: {
+    identifiers?: Identifiers;
+}): LocalCache;
 
 /** config 驱动的完整 OneDrive CloudProvider（MSAL + Graph + 适配器）。**浏览器专属**；auth 流程只能真机验。
  *
@@ -285,20 +287,15 @@ export declare function createOneDriveProvider(config?: OneDriveConfig): {
  *  红线全在各深模块内 enforce；这里只接线 + 把 ui bundle 映射到各 flow 的回调。 */
 export declare function createStore(config: StoreConfig): {
     /** 文件对象工厂（含 tryMove/pullIfClean/save/open/delete/reupload…）。 */
-    file: {
-        (name: string, opts: {
-            isZip: true;
-            mode: "new" | "existing";
-        }): ZipFile;
-        (name: string, opts: {
-            isZip: false;
-            mode: "new" | "existing";
-        }): RawFile;
-        (name: string, opts: {
-            isZip: boolean;
-            mode: "new" | "existing";
-        }): RawFile | ZipFile;
-    };
+    file: (identifier: string, opts: {
+        mode: "new" | "existing";
+    }) => RawFile;
+    /** zip 容器文档（多 getPeek / decryptPeek）；种类不是 zip 容器 → 抛。 */
+    zip: (identifier: string, opts: {
+        mode: "new" | "existing";
+    }) => ZipFile;
+    /** 身份的语法（0.16.0）：parse / join。gallery 和宿主直接用它，别再自己切名字。 */
+    identifiers: Identifiers;
     /** collection 工厂（app schema 全局单例；设置/状态全走它）。 */
     collection: (name: string, opts?: {
         manual?: boolean;
@@ -309,8 +306,8 @@ export declare function createStore(config: StoreConfig): {
     /** 所有「不挂在单个 file 上」的文件域操作（列举订阅 / 文件夹增删 / 离线队列 / 回收站备份箱 / 名字占用 / 全库收敛）。
      *  **唯一列举面 = files.watchFolder（订阅当前夹）**：立即本地帧、云端到了同一 cb 再闪。 */
     files: {
-        /** 名字占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。 */
-        nameOccupied: (name: string) => Promise<boolean>;
+        /** 身份占用（**boolean**）：在线云端+本地都看，离线只看本地（靠 push conflictBehavior:fail 兜底）。app 新建/另存/改名前预检。0.16.0 起叫 occupied（原 nameOccupied）。 */
+        occupied: (identifier: string) => Promise<boolean>;
         /** persist 感知面（三件套之①）：纯查询快照（零弹窗，任何时刻可调）——app 画「本地缓存未受保护」badge 用。
          *  执行体（手势时刻调）= 顶层 export 的 requestStoragePersistence()；档位定性见 persistence.ts 头注释。 */
         persistence: () => Promise<PersistenceState>;
@@ -364,7 +361,7 @@ export declare function createStore(config: StoreConfig): {
         /** **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），
          *  绝不自动/轮询——全树 listAll 是重活。 */
         reconcileAll: (opts?: {
-            activeFileName?: string;
+            activeIdentifier?: string;
         }) => Promise<{
             demoted: string[];
         }>;
@@ -401,6 +398,29 @@ export declare interface DelResult {
     deferred?: number;
 }
 
+/** 一条文档身份切开之后。 */
+export declare interface DocIdentifier {
+    /** 身份本身，原样。 */
+    identifier: string;
+    /** 最后一个 `/` 之前；"" = 最外层。 */
+    folder: string;
+    /** 主干。 */
+    stem: string;
+    /** 命中的后缀，保留身份里原有的大小写。 */
+    suffix: string;
+    kind: string;
+    container: "raw" | "zip";
+}
+
+export declare interface DocKind {
+    /** app 自己的标签（开放集，如 "book" / "draft" / "painting"）。几行可以是同一个 kind（同一种文档几种拼法）。 */
+    kind: string;
+    /** 身份以什么结尾，含点，可以多段：".txt" / ".webxiaoheiwu.zip"。整串比对，不数点；大小写不敏感。 */
+    suffix: string;
+    /** 明文字节是什么容器。"zip" = 能按条目名取一小段（封面 peek，`store.zip()`）；"raw" = 不能。库仍然不看内容。 */
+    container: "raw" | "zip";
+}
+
 /** emptyTrash（批量彻底删）的选项。 */
 export declare interface EmptyTrashOpts {
     /** 在线判定注入。 */
@@ -413,7 +433,7 @@ export declare interface EmptyTrashOpts {
     scope?: "local" | "cloud" | "both";
 }
 
-/** 加密容器的 at-rest 字节（branded）。唯一发牌方 = ZipFile.getEncryptedBlob()。
+/** 加密容器的 at-rest 字节（branded）。唯一发牌方 = RawFile.getEncryptedBlob()。
  *  只收密文的下游（导出 / 拷贝 / checkpoint）用它当形参类型 → 传明文 Blob 编译不过。 */
 export declare type EncryptedBlob = Blob & {
     readonly __encryptedAtRest: unique symbol;
@@ -511,8 +531,8 @@ export declare interface FolderFileHandle {
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
 export declare interface FolderSnapshot {
-    /** 本夹路径（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。 */
-    path: string;
+    /** 本夹（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。0.16.0 起叫 folder（原 path）。 */
+    folder: string;
     /** 直属文件项。 */
     items: Item[];
     /** immediate 子夹全路径。 */
@@ -576,6 +596,19 @@ export declare interface GraphTransport {
     ensureSubfolder(name: string): Promise<string>;
 }
 
+export declare interface Identifiers {
+    /** 报进来的表（已冻结）。 */
+    readonly kinds: readonly DocKind[];
+    /** 切开。不是本 app 的文档 → null。几个后缀都命中取最长的；主干不能为空（身份整个就是后缀不算文档）。 */
+    parse(identifier: string): DocIdentifier | null;
+    /** 拼回去：`folder/stem + suffix`（folder 为空就没有斜杠）。不检查 suffix 在不在表里——拼非文档的名字也允许。 */
+    join(parts: {
+        folder: string;
+        stem: string;
+        suffix: string;
+    }): string;
+}
+
 /** 有本地副本 → 离线可读。 */
 export declare function isCached(s: SyncState): boolean;
 
@@ -584,8 +617,9 @@ export declare function isDirty(s: SyncState): boolean;
 
 /** 统一列举的一项（local ∪ cloud 归并后）。 */
 export declare interface Item {
-    /** 身份 = approot 相对路径。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）。 */
-    path: string;
+    /** 身份（identifier，语法见 identifiers.ts）= `文件夹/主干后缀`。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）。
+     *  0.16.0 起不再叫 path：它**不是**云端真实路径（加密件在云端多一个 .zip），底下那一层才叫 path。 */
+    identifier: string;
     /** 按 ListContext 解析好的 badge —— Item 上就这一个状态字段（防下游 AI 重推导越狱）。 */
     syncState: SyncState;
     /** 字节大小（云端 authoritative，否则本地缓存记录）。 */
@@ -860,6 +894,18 @@ export declare interface RawFile {
     }): Promise<{
         status: string;
     }>;
+    /** 本地 at-rest 字节**原样**（内容盲，不解壳）——仅当这份是加密容器时给，否则 null。0.16.0 起在 RawFile 上（原只在 ZipFile：
+     *  raw 容器的加密稿（WXHW 的 txt）以前拿不到密文原样，gallery 复制加密 txt 因此失败）。
+     *
+     *  为什么需要：`open()` 是**透明解壳**的（拿到的是明文），所以「原样搬密文」的场景——
+     *  导出加密作品、拷贝加密作品、给加密作品存 checkpoint——以前根本没有接口，
+     *  只能退化成「解密再存/再导出」，那就是明文落盘/明文外流（红线）。
+     *
+     *  返回 EncryptedBlob（branded）：下游只收密文的 sink 用这个类型签名，
+     *  传普通 Blob 直接编译错 —— 把「别把明文当密文传」从人的自觉变成编译期约束。
+     *  ⚠ 诚实的边界：TS 证明不了「这坨字节运行时真是密文」；brand 挡的是编码错误，
+     *    运行时真相由本方法保证（它是唯一发牌方，非加密件一律返 null）。 */
+    getEncryptedBlob(): Promise<EncryptedBlob | null>;
     /** app 解锁循环（busy 外）便宜验：解 peek，不碰 7z。 */
     verifyPassword(pw: string): Promise<boolean>;
 }
@@ -1023,9 +1069,6 @@ export declare interface StoreConfig {
     reconcilePolicy: "app-driven" | "none";
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
-        /** 真扩展名**回退值** → meta.bin。2026-09-09 起 meta.bin 的 ext 优先按逻辑名最后一个点推导（同 store 里 .txt 稿 + .xxx.zip 工程并存）；
-         *  只有名字没有点（裸名宿主）才用这里的值。 */
-        ext?: string;
         /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
         makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
         /** 同步、非交互、只读内存（唯一密码源）；app 持密码 + 解锁循环在 busy 外。 */
@@ -1049,15 +1092,11 @@ export declare interface StoreConfig {
      *  store 格式盲、自己验不了内容 → 逻辑 app 给（验是不是真文档字节）。
      *  **库对加密透明**：验的是**解密后的明文**，不是密文容器。 */
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
-    /** store name → 云端文件名（如把 name 追加 ".dat"）。**不给 = 恒等**（名字本身含扩展名的 app）。 */
-    fileName?: (name: string) => string;
-    /** 加密容器的云端文件名（如把 name 追加 ".zip"；ADR-0012）。 */
-    encFileName?: (name: string) => string;
-    /** 云端文件名 → store name（fileName / encFileName 的**逆**）。**不给 = 只去尾部一个 .zip**（默认与 encFileName「追加 .zip」互逆）。
-     *  这是全库唯一的「这个云端名是不是加密容器」判定：名字经它变了 = 加密件（列举身份、回收站无戳兜底同吃）。
-     *  ⚠ **身份本身以 .zip 结尾的 app（明文 zip 工程，如 `X.webxiaoheiwu.zip`）必须配**，否则明文 zip 被还原成 `X.webxiaoheiwu`
-     *  并当加密容器去解 → 打不开。写法：只在去掉 .zip 后剩下的名字仍是本 app 的合法身份时才去（如以 `.txt` / `.webxiaoheiwu.zip` 结尾）。 */
-    toName?: (cloudName: string) => string;
+    /** **必填表态**：本 app 有哪几种文档、各自以什么结尾、明文是什么容器。空数组 = 明确声明本 app 没有文档种类（只放不透明文件）。
+     *  库里所有「切身份、拼身份、云端名是不是加密容器」全部由这张表推导（store.identifiers）；0.15.2 的 fileName / encFileName / toName /
+     *  crypt.ext 四个回调和 file() 的 isZip 都被它取代。表有歧义（见 identifiers.validateDocKinds）→ createStore 当场抛。
+     *  身份 = 云端文件名（加密容器在云端多一个 .zip，库自己管）；身份里不带后缀的旧写法（裸名 + fileName 追加）不再支持。 */
+    docKinds: readonly DocKind[];
     /** offload 离线守卫（默认 navigator.onLine）。 */
     isOnline?: () => boolean;
     /** **连接态由 store 自持**（网盘模型：app 不再每次列举传 ctx）。ctor 注入一次；不给 → 恒 true
@@ -1071,12 +1110,12 @@ export declare interface StoreConfig {
     skipMigration?: boolean;
     /** 云端防抖窗口覆盖（测试注入小值；prod 缺省 ~24h）。 */
     cloudGoneGraceMs?: number;
-    /** 当前打开的 doc（全名身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。 */
-    activeFileName?: () => string | null;
-    /** 0.14.0：宿主额外的隐藏名判定（列举层，叠在 is-hidden 的 dot 规则之上）：命中的路径不进 watchFolder 帧、不进 cloud-gone 收敛
+    /** 当前打开的文档（身份）：cloud-gone 去抖 trash 绝不碰它（连 watchFolder 自动 reconcileFolder 也跳过）。0.16.0 起叫 activeIdentifier（原 activeFileName）。 */
+    activeIdentifier?: () => string | null;
+    /** 0.14.0：宿主额外的隐藏判定（列举层，叠在 is-hidden 的 dot 规则之上）：命中的身份不进 watchFolder 帧、不进 cloud-gone 收敛
      *  （写入方的半成品 `*.part` / `~*`、v1 遗留 `session.json` 之类——文件系统噪音不是文档；「夹里有什么」是 store 的事，不是图库的）。
-     *  ⚠ 只影响列举与收敛；nameOccupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。 */
-    hiddenName?: (path: string) => boolean;
+     *  ⚠ 只影响列举与收敛；files.occupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。0.16.0 起叫 hidden（原 hiddenName）。 */
+    hidden?: (identifier: string) => boolean;
     /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
      *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
      *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
@@ -1150,8 +1189,8 @@ export declare interface TrashEntry {
 
 /** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
 export declare interface TrashItem {
-    /** 展示/恢复原名（local 行 = 全路径身份；cloud-only 行 = basename，folder context 在云端 trash 已丢）。 */
-    name: string;
+    /** 恢复目标身份（local 行 = 全身份；cloud-only 行 = 只剩最后一段，文件夹在云端回收站里已丢）。0.16.0 起叫 identifier（原 name）。 */
+    identifier: string;
     /** yyyymmddhhmmss（展示/排序；解析不出 → null）。 */
     ts: string | null;
     /** 痕迹所在端。 */
@@ -1212,6 +1251,9 @@ export declare interface UploadOpts {
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export declare type UploadReplayPolicy = "auto" | "ask" | "manual";
 
+/** 检查表：格式、重复、和加密后缀的歧义。有问题 → 抛（createStore 当场失败，绝不带着一张会认错文件的表跑起来）。 */
+export declare function validateDocKinds(docKinds: readonly DocKind[]): void;
+
 /** watchFolder 帧失败的阶段（0.11.1）：local = 本地帧（IDB 读/迁移门）产不出；remote = 云列举后的合帧产不出。 */
 export declare type WatchFolderErrorPhase = "local" | "remote";
 
@@ -1244,6 +1286,10 @@ export declare interface WipeReport {
     localStorageKeysRemoved: number;
 }
 
+/** 身份里插一段（副本 / 撞名时间戳 / 序号）：文档 → 主干后面、后缀前面；不是文档 → 最后一个点之前（没有点就接在末尾）。
+ *  两条腿（本地 / 云端）恢复撞名、gallery 复制都走这一个函数，别再各写各的。 */
+export declare function withStemTail(identifier: string, tail: string, ids: Identifiers): string;
+
 /** zip 容器文件对象：RawFile + 按 entry 名取字节的 peek 面（zip 解析在库内部，app 不碰 zip 布局）。 */
 export declare interface ZipFile extends RawFile {
     /** 从 zip 容器里**按文件名**抓 zipEntry 的字节。**明文** zip → entry 原始字节 Blob(**无 type**，格式盲，app 自解释)；
@@ -1260,17 +1306,6 @@ export declare interface ZipFile extends RawFile {
     }): Promise<Blob | null>;
     /** 把 getPeek 返回的密文 peek blob 非交互解密成明文（内存密码；锁定/错密码→null）。已是明文(非 ENC_PEEK_MIME)→原样返。 */
     decryptPeek(encPeek: Blob): Promise<Blob | null>;
-    /** 本地 at-rest 字节**原样**（内容盲，不解壳）——仅当这份是加密容器时给，否则 null。
-     *
-     *  为什么需要：`open()` 是**透明解壳**的（拿到的是明文），所以「原样搬密文」的场景——
-     *  导出加密作品、拷贝加密作品、给加密作品存 checkpoint——以前根本没有接口，
-     *  只能退化成「解密再存/再导出」，那就是明文落盘/明文外流（红线）。
-     *
-     *  返回 EncryptedBlob（branded）：下游只收密文的 sink 用这个类型签名，
-     *  传普通 Blob 直接编译错 —— 把「别把明文当密文传」从人的自觉变成编译期约束。
-     *  ⚠ 诚实的边界：TS 证明不了「这坨字节运行时真是密文」；brand 挡的是编码错误，
-     *    运行时真相由本方法保证（它是唯一发牌方，非加密件一律返 null）。 */
-    getEncryptedBlob(): Promise<EncryptedBlob | null>;
 }
 
 export { }

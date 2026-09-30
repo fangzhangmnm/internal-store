@@ -45,6 +45,7 @@ export function createMockEncryption(): EncryptionPort;
 // @public
 export function createMockLocal(opts?: {
     backing?: MockLocalBacking;
+    identifiers?: Identifiers;
 }): MockLocal;
 
 // @public (undocumented)
@@ -196,6 +197,10 @@ export interface UploadOpts {
     contentType?: string;
     eTag?: string | null;
 }
+
+// Warnings were encountered during analysis:
+//
+// dist/testing/mock-local.d.ts:35:5 - (ae-forgotten-export) The symbol "Identifiers" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

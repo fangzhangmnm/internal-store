@@ -55,14 +55,17 @@ const store = createStore({
   provider,                                  // 必填：云端低层（OneDrive / mock provider）
   ui,                                        // 必填：UI 回调 bundle，store 在决策点回调进来（见 §7）
   appId: "my-app",                         // **必填**：本 app 在本 origin 内的唯一命名空间（见下「⚠ appId 红线」）
+  docKinds: [                                // **必填表态**（0.16.0，§2.1）：本 app 有哪几种文档、各自以什么结尾、明文是什么容器。空数组 = 没有文档种类
+    { kind: "book", suffix: ".webxiaoheiwu.zip", container: "zip" },
+    { kind: "draft", suffix: ".txt", container: "raw" },
+  ],
   autoCacheOpenedFile: true,                          // 选填(默认 true)：消费模式。true=开即自动留本地(读者/编辑器)；false=过路/流式(开整份拉云不落本地，§2；range 按需取片是 ⚠TODO 优化)
   // （旧 syncedSettingsFileName 已删 2026-07-13：设置/状态全走 store.collection，见 §4）
   validateAdopt,                             // **所有 consumer 必填，禁 placeholder/noop**：采纳云字节覆盖本地前验真内容（如验 PDF magic）。**库对加密透明 → 验的是解密后明文**。防损坏/captive-portal HTML 拿合法 etag 覆盖好本地=丢内容。
   // ── 加密（§5）：不加密就不给（dormant，省 1.6MB）──
   // crypto: myCodec,                        // 选填：app 注入的 zip/7z codec（不注入 = 加密不可用）
-  // crypt: { ext, getPassword, makePeek },  // 选填：扩展名 + 非交互密码源 + peek 派生
-  // toName: (cloudName) => name,            // 选填：云端名→身份（fileName/encFileName 的逆；**全库唯一的加密名判定**）。默认只去尾一个 .zip。
-  //                                          //   ⚠ 身份本身以 .zip 结尾的 app（明文 zip 工程 `X.webxiaoheiwu.zip`）**必配**，否则明文 zip 被当加密容器打不开（2026-09-09）
+  // crypt: { getPassword, makePeek },       // 选填：非交互密码源 + peek 派生
+  // （0.15.2 的 fileName / encFileName / toName / crypt.ext 四个命名回调 0.16.0 已删：全部由 docKinds 表推导，见 §2.1）
 });
 ```
 > **关于 `crypto`**：加密**逻辑**全在库内，唯一例外是重型 7z 引擎（wasm ~1.6MB）由 app vendor + 注入（包成 `crypto` codec）——体积大，不塞进每个 app 的 bundle。不注入 → 加密 dormant（packContainer 抛、其余照常；不加密的 app 就不 vendor，省 1.6MB）。KDF/GCM 走内置 WebCrypto，不用注入。
@@ -83,14 +86,15 @@ const store = createStore({
 
 | 拿到的 | 方法 | 章节 |
 |---|---|---|
-| `store.file(name, {isZip, mode})` → `RawFile`/`ZipFile` | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · getHead({bytesLength,source}) · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry,source})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
+| `store.file(identifier, {mode})` → `RawFile`；`store.zip(identifier, {mode})` → `ZipFile`（只准 docKinds 里 container:"zip" 的种类，否则抛） | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · getHead({bytesLength,source}) · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry,source})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
 | `store.collection(name, {manual?, local?, getInitData?})` | **单例**（同名返同一对象）。`setItem · deleteItem · getItem(id,def) · getEntry · entries · keys · onChange · init · reconcileWithRemote · flushLocal · isDirty`（`{local:true}` = **不推云**的设备本地变体；`getInitData` = 新库 seed，uat=1；删除=value:null 墓碑） | §3 |
 | `store.files.watchFolder(folder, cb)` | **唯一列举面**：订阅一个夹 → 立即本地帧、云端到了同一 cb 再闪（无 list/listAll/localKeys）。Item.syncState 含 `pendingGone`（cloud-gone clean 孤儿、防抖 grace 内） | §2 |
-| `store.files.nameOccupied(name)` → **boolean** | 名字占用（在线云端+本地都看，离线只看本地）。新建/另存/改名前预检 | §2 |
+| `store.identifiers.parse(identifier)` / `.join({folder, stem, suffix})` | 身份的语法（0.16.0，§2.1）：切开 / 拼回去。gallery 和宿主都用它，别自己切名字 | §2.1 |
+| `store.files.occupied(identifier)` → **boolean** | 身份占用（在线云端+本地都看，离线只看本地）。新建/另存/改名前预检（原 nameOccupied） | §2 |
 | `store.files.ensureFolder · newFolder · deleteFolder` | 文件夹增删（删除「必须证实为空」库内强制；list 抛错/未权威→拒删） | §2 |
 | `store.files.drainOfflineQueue()` | 离线队列统一重放（按序：新文件夹→新上传→删文件→删文件夹深→浅）；app 在 online/boot/reconnect 调 | §6 |
 | `store.files.listTrash · listBackup · restoreTrash · purgeTrash · emptyTrash · emptyBackup` | 回收站/备份箱：**本地↔云聚合**列举（TrashItem：side/encrypted/conflictLive，只元数据无 blob）·恢复·彻底删·清空 | §2 |
-| `store.files.reconcileAll({activeFileName?})` | **全库** cloud-gone 收敛（仅用户显式指令）：clean 孤儿**去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT） | §6 |
+| `store.files.reconcileAll({activeIdentifier?})` | **全库** cloud-gone 收敛（仅用户显式指令）：clean 孤儿**去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT） | §6 |
 | `store.encryption.*` | **裸字节**级加密面（文件还没进 store、无 name 可查时）：`isEncryptedBlob`（便宜嗅探）· `tryDecryptEncryptedBlob`（验+解**合一**，null=错密码）· `isEncryptedPeekBlob` | §5 |
 | 加密（at-rest） | config 注入 `crypto`(zip/7z codec) + `crypt`(ext/makePeek/getPassword)；透明封解 + `file.encrypt/decrypt/getEncryptedBlob`；不注入 = dormant | §5 |
 
@@ -99,10 +103,10 @@ const store = createStore({
 ## 2. 文件 store —— 一个名字一个文件
 
 ```ts
-const f = store.file("papers/Wei 2011.pdf", { isZip: false, mode: "existing" });   // mode 必填：existing=打开已有、new=新建
+const f = store.file("papers/Wei 2011.pdf", { mode: "existing" });   // mode 必填：existing=打开已有、new=新建
 await f.save(bytes);          // 落盘 + 按节律推云（If-Match 守冲突）。mode:"new" 首存撞名 → 抛 CloudNameCollisionError（不覆盖）
 const blob = await f.open();  // 本地有则秒开；无则拉云 + 缓存本地（下次离线可读）
-await f.tryMove("papers/new.pdf");   // 改身份/移动**唯一入口**（含 nameOccupied 占用检查，结果式 {ok:false,where} 不抛）
+await f.tryMove("papers/new.pdf");   // 改身份/移动**唯一入口**（含 occupied 占用检查，结果式 {ok:false,where} 不抛）
 await f.reupload();           // candidate-gone「重新上传」：本地 clean 字节 no-base 推回空 path（撞名→collision surface；成功→synced）
 await f.delete();             // 销毁：本地副本→本地 .trash / 云端副本→云端 .trash（各自 move-aside，可恢复）
 ```
@@ -113,7 +117,7 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 - **`file.openStream()` 流式面（A1/A2，2026-08-15）**：大媒体按需取片——本地有副本走本地切片；无则开**分片下载会话**（2MiB 分片，按 eTag 钉版，拉到即落 `staging/` 暂存区 = tee）。句柄 `{ totalSize, read(off,len), prefetch(off,len), keep(), close() }`：`read`=播放优先级；`prefetch`=低优先（下一曲头部预拉）；`keep()`=升格正式本地副本（≡ keepOffline：**复用已流分片只补缺口，先播后 pin 不重下**）。调度全局一域：播放分片在飞时 **pin 严格串行且让路**（不 spike）。at-rest 字节面（加密件给密文；流式消费请只用于明文文件）。staging 是加速器不是正确性依赖（受全局 cap FIFO 兜底、坏了照样直连流）。
 - **列举唯一面 = `store.files.watchFolder(folder, cb)`**（订阅一夹→本地帧+云端帧同一 cb；无 `list`/`listAll`/`localKeys` 公开面）。snapshot `{ path, items, folders, complete, stale? }`，`complete:false` **别据此删缓存**。
 - **冷首帧目录索引缓存（A3，2026-08-15）**：每夹「上次完整云帧」持久化在 `dir-index-cache/` 分区（**非 SSoT，脏的**，只配画首帧） → 本地帧自动追加**上次所见的 cloud-only 缺项**（首帧不再近空、无需等网络）。掺了快照的帧带 `stale:true`（可能过时，云端帧到达即纠偏）。纪律：快照**只作显示**——绝不喂 reconcile/cloud-gone 判定、绝不改写本地项的 badge；登出视角不掺快照。同批修复：一次订阅只打**一遍** Graph（此前 reconcile+listing 各拉一次）。
-- `store.files.reconcileAll({activeFileName?})` — **全库** cloud-gone 收敛（仅用户显式指令）：曾 synced 的 clean 孤儿 → **去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈；`activeFileName` 跳过当前打开的 doc）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT）。dirty/从没同步/partial-or-空列表 一律不动。详见 CONTEXT.md。
+- `store.files.reconcileAll({activeIdentifier?})` — **全库** cloud-gone 收敛（仅用户显式指令）：曾 synced 的 clean 孤儿 → **去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈；`activeFileName` 跳过当前打开的 doc）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT）。dirty/从没同步/partial-or-空列表 一律不动。详见 CONTEXT.md。
 
 ### 离线副本 —— keepOffline / offload（无 LRU、无 pin）
 
@@ -139,20 +143,41 @@ store.files.emptyBackup({ scope: "both" });                         // 清空备
 ```
 - `delete()` 把文件移入回收站（可恢复）；版本冲突时被替下的旧副本进备份（不丢）。`TrashItem.conflictLive`=离线删被回线 edit-wins 撤销→本地 trash 有、云端还活着（两存，UI surface）。
 
-### `opts.isZip` —— 决定能否带预览图
+### 2.1 身份的语法：`docKinds` 表 + `store.identifiers`（0.16.0）
 
-你的文件是不是 zip 容器格式（zip 容器件如 `.dat`（若实为 zip）是；`.pdf`/`.txt` 不是），创建时声明。库据此**在编译期**给两种不同的对象：
+> 提案与用词出处 = `ai-docs/20260929-proposal-doc-types.md`（user 2026-09-29 批）。用词：**identifier 身份 / folder / stem 主干 / suffix 后缀 / kind 种类**，别混用 name / path / 扩展名。
+
+**身份（identifier）** = 库对外说的「这是哪一份文档」，形如 `文件夹/主干后缀`：`草稿/第一章.txt`、`樱川.webxiaoheiwu.zip`。一个库里唯一；改名或挪文件夹就是换身份（`tryMove`，`files.onRenamed` 发事件）；加不加密、在哪台设备、上没上云它都不变。它**不是**云端真实路径：加密的稿在云端叫 `稿.txt.zip`，那是底下那一层的事，宿主看不见。
+
+**表报一次，其余推导。** `createStore({ docKinds })` 必填：每行 = 一种文档怎么拼（`suffix`，含点，可以多段，**整串比对不数点**，大小写不敏感）、是什么容器（`container: "zip" | "raw"`）、app 自己的标签（`kind`，开放集，库原样带着不解释）。空数组 = 明确声明没有文档种类。表有歧义（某个后缀去掉结尾 `.zip` 之后和表里另一个后缀互为结尾；或光秃秃的 `.zip`）→ `createStore` 当场抛。
+
+从这张表推导出来的（0.15.2 之前是七八个各答各的回调）：
+
+| 问题 | 答案从哪来 |
+|---|---|
+| 这个身份是不是文档、主干在哪、后缀从哪开始 | `store.identifiers.parse(identifier)` → `{ identifier, folder, stem, suffix, kind, container } \| null` |
+| 改名 / 复制 / 挪文件夹 / 撞名加戳 | 切开，换一格，`store.identifiers.join({ folder, stem, suffix })` 拼回去 |
+| 云端那个名字是不是加密容器 | 库内：去掉结尾一个 `.zip`，剩下的认得是文档 → 是 |
+| 这份能不能 `getPeek` | `store.zip(identifier)` 只准 container:"zip" 的种类，否则抛；别的一律 `store.file()` |
+| 从回收站 / 备份箱取回撞名叫什么 | 主干后面接 ` [yyyymmdd-hhmmss]`，后缀不动：`书 [20260929-143200].webxiaoheiwu.zip`，本地云端两条腿一样 |
+| 哪些能加密 | 只有声明过种类的文档（非文档封了云端名认不回来），否则 `encrypt()` 抛 |
 
 ```ts
-const raw = store.file("a.pdf", { isZip: false });   // 类型 RawFile
-raw.getPeek();   // ❌ 编译错：RawFile 没有 getPeek
+const d = store.identifiers.parse("草稿/樱川.webxiaoheiwu.zip");
+// → { identifier: "草稿/樱川.webxiaoheiwu.zip", folder: "草稿", stem: "樱川", suffix: ".webxiaoheiwu.zip", kind: "book", container: "zip" }
+store.identifiers.join({ folder: "草稿", stem: "樱川 副本", suffix: ".webxiaoheiwu.zip" });   // 复制：只动主干
+```
 
-const zip = store.file("a.dat", { isZip: true });    // 类型 ZipFile
-const p = await zip.getPeek({ bytesLength: 131072, zipEntry: "Thumbnails/thumbnail.png" });
+`store.file()` 收任何身份（文档、图片、杂物）；`store.zip()` 之上多 `getPeek` / `decryptPeek`：
+
+```ts
+const raw = store.file("a.pdf", { mode: "existing" });   // RawFile：save / open / getHead / tryMove / encrypt / getEncryptedBlob …
+const zip = store.zip("a.webxiaoheiwu.zip", { mode: "existing" });    // ZipFile：多 getPeek
+const p = await zip.getPeek({ bytesLength: 131072, zipEntry: "Thumbnails/thumbnail.png", source: "local" });
                                   // 一次尾片（本地切片或云端 byte-range）+ 库内 zip 解析，取该 entry 的 peek 字节，不全量下载
 ```
-- `isZip:false` → **`RawFile`**：原始字节直存（云端文件 = 原始内容，双击能开，守 anti-abandonware）。**无预览图**。
-- `isZip:true` → **`ZipFile`**：库把 zip 尾片解析全包（**你不写任何 zip 代码**）。`getPeek({bytesLength, zipEntry})` 返明文 entry 的 PNG／或加密容器的**密文** peek（`ENC_PEEK_MIME`，不解密，供你缓存原样存密文=明文不落盘），密文再经 `decryptPeek(blob)` 非交互解。写侧 peek 经 `crypt.makePeek` 自动派生（无显式 `setPeek`，§5）。
+- `RawFile`：原始字节直存（云端文件 = 原始内容，双击能开，守 anti-abandonware）。**无预览图**。
+- `ZipFile`：库把 zip 尾片解析全包（**你不写任何 zip 代码**）。`getPeek({bytesLength, zipEntry, source})` 返明文 entry 的字节／或加密容器的**密文** peek（`ENC_PEEK_MIME`，不解密，供你缓存原样存密文=明文不落 IDB），`decryptPeek` 用内存密码解。
 - **`file.getHead({bytesLength, source})` 头片 peek（0.15.0，首个消费者 CatsUp `.glb` 封面）**：文件**开头** n 字节的明文 Blob（无 type，格式盲）——「头在前」格式（GLB / PDF / ID3 / RIFF）的预览面；「目录在尾」的 zip 走 `ZipFile.getPeek`。本地有 → `Blob.slice` 零网络；无 → 云端 byte-range **不整份下载、不落本地**。`source` 必填同 getPeek（"cloud" 绝不落回本地）。**加密件 → null**（密文外壳不是头片，库绝不为预览解密）；云端不可达 → **抛**（未知 ≠ 没有，缓存层据此不缓存）。
 - peek/预览是**格式无关的不透明 binary blob**（jpg/png/随便，库不看、不构造、不解码）。
 

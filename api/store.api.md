@@ -183,7 +183,9 @@ export interface CollectionInitItem {
 export function createFolderProvider(root: FolderDirHandle): CloudProvider;
 
 // @public
-export function createLocalCache(dbName: string): LocalCache;
+export function createLocalCache(dbName: string, opts?: {
+    identifiers?: Identifiers;
+}): LocalCache;
 
 // @public
 export function createOneDriveProvider(config?: OneDriveConfig): {
@@ -193,27 +195,20 @@ export function createOneDriveProvider(config?: OneDriveConfig): {
 
 // @public
 export function createStore(config: StoreConfig): {
-    file: {
-        (name: string, opts: {
-            isZip: true;
-            mode: "new" | "existing";
-        }): ZipFile;
-        (name: string, opts: {
-            isZip: false;
-            mode: "new" | "existing";
-        }): RawFile;
-        (name: string, opts: {
-            isZip: boolean;
-            mode: "new" | "existing";
-        }): RawFile | ZipFile;
-    };
+    file: (identifier: string, opts: {
+        mode: "new" | "existing";
+    }) => RawFile;
+    zip: (identifier: string, opts: {
+        mode: "new" | "existing";
+    }) => ZipFile;
+    identifiers: Identifiers;
     collection: (name: string, opts?: {
         manual?: boolean;
         getInitData?: CollectionConfig["getInitData"];
     }) => Collection;
     collectionPeek: (name: string) => Promise<"absent" | "present" | "unknown">;
     files: {
-        nameOccupied: (name: string) => Promise<boolean>;
+        occupied: (identifier: string) => Promise<boolean>;
         persistence: () => Promise<PersistenceState>;
         dirty: {
             count: () => Promise<number>;
@@ -241,7 +236,7 @@ export function createStore(config: StoreConfig): {
         emptyTrash: (opts?: EmptyTrashOpts | undefined) => Promise<TrashResult>;
         emptyBackup: (opts?: EmptyTrashOpts | undefined) => Promise<TrashResult>;
         reconcileAll: (opts?: {
-            activeFileName?: string;
+            activeIdentifier?: string;
         }) => Promise<{
             demoted: string[];
         }>;
@@ -262,6 +257,25 @@ export interface DelResult {
     trashed?: unknown;
     trashKey?: string | null;
     where?: string;
+}
+
+// @public
+export interface DocIdentifier {
+    // (undocumented)
+    container: "raw" | "zip";
+    folder: string;
+    identifier: string;
+    // (undocumented)
+    kind: string;
+    stem: string;
+    suffix: string;
+}
+
+// @public (undocumented)
+export interface DocKind {
+    container: "raw" | "zip";
+    kind: string;
+    suffix: string;
 }
 
 // @public
@@ -376,9 +390,9 @@ export interface FolderFileHandle {
 // @public
 export interface FolderSnapshot {
     complete: boolean;
+    folder: string;
     folders: string[];
     items: Item[];
-    path: string;
     stale?: true;
 }
 
@@ -416,6 +430,17 @@ export interface GraphTransport {
     }): Promise<RawGraphItem | null>;
 }
 
+// @public (undocumented)
+export interface Identifiers {
+    join(parts: {
+        folder: string;
+        stem: string;
+        suffix: string;
+    }): string;
+    readonly kinds: readonly DocKind[];
+    parse(identifier: string): DocIdentifier | null;
+}
+
 // @public
 export function isCached(s: SyncState): boolean;
 
@@ -424,8 +449,8 @@ export function isDirty(s: SyncState): boolean;
 
 // @public
 export interface Item {
+    identifier: string;
     lastModified?: number;
-    path: string;
     size?: number;
     syncState: SyncState;
 }
@@ -576,6 +601,7 @@ export interface RawFile {
     }): Promise<{
         status: string;
     }>;
+    getEncryptedBlob(): Promise<EncryptedBlob | null>;
     getHead(opts: {
         bytesLength: number;
         source: "local" | "cloud";
@@ -702,22 +728,20 @@ export type Store = ReturnType<typeof createStore>;
 
 // @public (undocumented)
 export interface StoreConfig {
-    activeFileName?: () => string | null;
+    activeIdentifier?: () => string | null;
     appId: string;
     autoCacheOpenedFile?: boolean;
     cloudGoneGraceMs?: number;
     crypt?: {
-        ext?: string;
         makePeek?: (plain: Blob) => Promise<Uint8Array | null>;
         getPassword?: (name: string) => string | null;
     };
     databaseId?: string;
-    encFileName?: (name: string) => string;
+    docKinds: readonly DocKind[];
     encryption: EncryptionPort;
     encryptionSaltFileName?: string;
-    fileName?: (name: string) => string;
     getPassword?: (name: string) => string | null;
-    hiddenName?: (path: string) => boolean;
+    hidden?: (identifier: string) => boolean;
     isOnline?: () => boolean;
     kv?: Kv;
     local?: LocalCache;
@@ -731,7 +755,6 @@ export interface StoreConfig {
     staging?: StagingStore;
     stagingCapBytes?: number;
     stagingChunkBytes?: number;
-    toName?: (cloudName: string) => string;
     ui: StoreUI;
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }
@@ -791,8 +814,8 @@ export interface TrashItem {
     cloudRef: string | null;
     conflictLive: boolean;
     encrypted: boolean;
+    identifier: string;
     localKey: string | null;
-    name: string;
     side: "local" | "cloud" | "both";
     ts: string | null;
 }
@@ -833,6 +856,9 @@ export interface UploadOpts {
 export type UploadReplayPolicy = "auto" | "ask" | "manual";
 
 // @public
+export function validateDocKinds(docKinds: readonly DocKind[]): void;
+
+// @public
 export type WatchFolderErrorPhase = "local" | "remote";
 
 // @public
@@ -868,9 +894,11 @@ export interface WipeReport {
 }
 
 // @public
+export function withStemTail(identifier: string, tail: string, ids: Identifiers): string;
+
+// @public
 export interface ZipFile extends RawFile {
     decryptPeek(encPeek: Blob): Promise<Blob | null>;
-    getEncryptedBlob(): Promise<EncryptedBlob | null>;
     getPeek(opts: {
         bytesLength: number;
         zipEntry: string;

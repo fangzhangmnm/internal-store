@@ -1,5 +1,5 @@
 # 提案：文档种类表——把「只有一种扩展名」这个假设连根拔掉
-> created 20260929 · by Claude Fable 5.1 · as-of store 0.15.2 / gallery 0.5.0
+> created 20260929 · by Claude Fable 5.1 · as-of store **0.16.0**（第 1 刀已落地，见 §13）/ gallery 0.5.0
 > 状态：**已批准，开工**（user 2026-09-29「好，你和另外一个agent协调好了就可以开始做了 identifier, folder, suffix先这样吧」）。它取代同日的 `docExts` 提案（那个分支作废）。
 > 范围跨两个库（store + gallery）和四个宿主；文档放在 store 仓是因为身份归 store 管。
 > 用词经三轮定稿（user 2026-09-29「type? extension? name是个坏名字」→ 逐词批复 → 「identifier, folder, suffix先这样吧」）：**identifier / folder / stem / suffix / kind**，见 §5.1 末尾的定稿表。§7 的 .h 已按定稿改。edited by Claude Fable 5.1 2026-09-29
@@ -328,3 +328,22 @@ user 2026-09-29：「还有几个问题要问我？」
 | 模块名 | 不叫 `paths`（path 已被否），跟着身份的词走 | AI |
 | gallery 的条目改成带身份、主干、种类 | 是，第 2 刀的一部分 | AI，随第 3 问一起批 |
 | 加密容器里记的内容 | 一个字节都不改，见 §10 第 2 条 | AI |
+
+## 13. 第 1 刀落地：store 0.16.0（2026-09-29，edited by Claude Fable 5.1）
+
+按 §7 的 .h 做了，实现中形状变了的几处回写在这里：
+
+| 项 | 提案 | 落地 | 为什么 |
+|---|---|---|---|
+| `getEncryptedBlob` | 没提 | 从 ZipFile 挪到 RawFile | raw 容器的加密稿（WXHW 的 txt）以前拿不到密文原样，gallery 复制加密 txt 因此失败（§3 表里「txt 的复制没有多出文件，原因没查」的原因就是它：`getEncryptedBlob is not a function`） |
+| 加密 | 没提 | `encrypt()` 只准声明过种类的文档，否则抛 | 容器云端名 = 身份 + `.zip`，靠「去掉 .zip 剩下的认得是文档」认回来；非文档封了认不回 |
+| 加密后缀 `.zip` | 大小写没说 | 只认小写 | 容器是库自己封的、永远小写；大写 `.ZIP` 不是库写的，按明文原名对待，和 0.15.2 口径一致（语料对账因此逐条相同） |
+| `TrashItem.name`、`FolderSnapshot.path` | 没提 | 一并改成 `identifier` / `folder` | 同一个词只指一样东西 |
+| `withStemTail(identifier, tail, ids)` | 提案里 join 一个函数 | 多导出这一个小函数 | 复制 / 撞名加戳 / 序号三处都是「主干后面接一段」，一个函数省三份实现；非文档按最后一个点 |
+| `createLocalCache(dbName, { identifiers })` | 没提 | 可选参数 | 本地腿恢复撞名也要表；不给 = 按最后一个点 |
+| 加密容器 `meta.bin` 里的扩展名 | §10 第 2 条 | 一个字节不改（`cryptExtFor` 仍按最后一个点） | 同 §10 |
+| 测试 | — | 434 绿（+7 语料对账、+7 取回命名与守卫）；测试用的种类表 `test/kinds.mjs` | — |
+
+api 差异全文 = `git diff v0.15.2..v0.16.0 -- api/store.d.ts`。宿主升级时的编译错误就是迁移清单：
+`docKinds` 必填；`file(n, {isZip})` → `file(n, {mode})` / `zip(n, {mode})`；`Item.path` → `identifier`；`FolderSnapshot.path` → `folder`；`TrashItem.name` → `identifier`；
+`files.nameOccupied` → `occupied`；`activeFileName` → `activeIdentifier`；`hiddenName` → `hidden`；`reconcileAll({activeIdentifier})`；删 `fileName` / `encFileName` / `toName` / `crypt.ext`。
