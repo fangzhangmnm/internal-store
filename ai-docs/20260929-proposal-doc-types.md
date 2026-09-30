@@ -1,13 +1,14 @@
-# 提案：文档类型表——把「只有一种扩展名」这个假设连根拔掉
+# 提案：文档种类表——把「只有一种扩展名」这个假设连根拔掉
 > created 20260929 · by Claude Fable 5.1 · as-of store 0.15.2 / gallery 0.5.0
 > 状态：**只是提案，没有动任何代码，等 user 定方向。** 它取代同日的 `docExts` 提案（那份在分支 `wip/0.16-doc-exts` 上）。
-> 范围跨两个库（store + gallery）和四个宿主；文档放在 store 仓是因为名字的身份归 store 管。
+> 范围跨两个库（store + gallery）和四个宿主；文档放在 store 仓是因为身份归 store 管。
+> **用词被 user 打回过一次**（2026-09-29「type? extension? name是个坏名字」）：§5 到 §8 已换成候选新词，**词还没定**，见 §5.0。文件名等词定了再改。edited by Claude Fable 5.1 2026-09-29
 
 ## 0. 一句话
 
 全家的名字模型是跟着 WeebPaint 出生的：一个 app、一种文档、一个扩展名。在这个前提下，「这个文件是哪一种」是个常数，所以它从来没有成为一个概念。
 WXHW 2.0 同时有 txt 稿和书，这个前提不成立了。之后每坏一处就在那一处加一个回调，**每个回调都在用不同的话问宿主同一个问题**。
-提案：宿主把自己的文档类型**当数据报一次**，其余全部由库推导。
+提案：宿主把自己有哪几种文档、各自怎么拼**当数据报一次**，其余全部由库推导。
 
 ## 1. 起因
 
@@ -62,32 +63,58 @@ store 说全名（身份）。gallery 对宿主说裸名（`GItem.name`），中
 
 ## 5. 目标形状
 
-### 5.1 一套词
+### 5.0 用词（第一版被打回，下面是候选，等 user 定）
 
-| 词 | 意思 | 谁用 |
+user 2026-09-29：「type? extension? name是个坏名字」
+
+第一版用了 `docTypes` / `ext` / `store.names` / `DocName`。三个词各有各的毛病：
+
+| 第一版的词 | 毛病 | 候选 | 候选词的出处 |
+|---|---|---|---|
+| name | 整座屎山的源头就是这个词。它在不同地方分别指路径、最后一段、去掉扩展名的那截、显示出来的标题。第一版还拿它给新模块起名 | 不再用它指任何精确的东西 | — |
+| extension / ext | 这个词自带「最后一个点之后」的意思，代码正是被它骗的。`.webxiaoheiwu.zip` 按这个意思是两个扩展名。加密容器多出来的 `.zip` 也被叫成扩展名 | **suffix 后缀**：只说「以什么结尾」，不数点 | 新词 |
+| type | 撞 TypeScript 的 type、`Blob.type`、MIME type。更要紧的是第一版把两样东西混成了一样，见下 | **kind 种类** | 家规「开放集如 kind」；WXHW 已有 `DocKind`，gallery 已有 `AsideKind` |
+
+**第一版混掉的两样东西**：
+
+| | 是什么 | 归谁 | 谁读它 |
+|---|---|---|---|
+| 后缀 suffix | 这种文档在路径里怎么拼：`.webxiaoheiwu.zip` | 拼写 | store、gallery：在哪切、是不是文档 |
+| 种类 kind | 这是什么东西：书、稿 | app 的概念 | 宿主：交给哪个编辑器。库只原样带着，不解释 |
+
+两者不是一回事：一个种类可以有几种拼法（JRB 以后要是也收 `.md`，它和 `.txt` 是同一个种类）。第一版的 `DocType` 只有 `ext` 没有自己的名字，等于说「种类就是扩展名」，所以才会出现 type 和 extension 两个词指同一行的怪事。
+
+### 5.1 一套词（候选）
+
+| 词 | 意思 | 出处 |
 |---|---|---|
-| 路径 path | 身份。`夹/主干.扩展名`。跨模块传的只有它 | store、gallery、宿主之间 |
-| 主干 stem | 人看的、人打的那一截 | 只在界面 |
-| 类型 type | 类型表里的一行 | 库内推导 |
-| 加密后缀 | 云端加密容器多出来的那个 `.zip` | store 内部，宿主看不见 |
+| path 路径 | 身份。`文件夹/主干后缀`。跨模块传的只有它 | store 的 `Item.path` 本来就这么叫 |
+| folder 文件夹 | 路径里最后一个 `/` 之前 | store 的 `watchFolder` |
+| stem 主干 | 人看的、人打的那一截 | WXHW `parseDocName().stem`、JRB `stemOf` |
+| suffix 后缀 | 文档路径的结尾，含点 | 新词，顶替 extension |
+| kind 种类 | app 自己给这种文档起的标签 | 见上 |
+
+加密容器在云端多出来的那个 `.zip` 是 store 内部的事，宿主看不见，不给它起对外的词。
 
 ### 5.2 一张表，报一次
 
 ```ts
 createStore({
-  docTypes: [
-    { ext: ".webxiaoheiwu.zip", container: "zip" },
-    { ext: ".txt",              container: "raw" },
+  docKinds: [
+    { kind: "book",  suffix: ".webxiaoheiwu.zip", container: "zip" },
+    { kind: "draft", suffix: ".txt",              container: "raw" },
   ],
 })
-// WeebPaint：[{ ext: ".ora", container: "zip" }]
-// CatsUp：  [{ ext: ".glb", container: "raw" }]
-// JRB：     [{ ext: ".txt", container: "raw" }]
+// WeebPaint：[{ kind: "painting", suffix: ".ora", container: "zip" }]
+// CatsUp：  [{ kind: "model",    suffix: ".glb", container: "raw" }]
+// JRB：     [{ kind: "book",     suffix: ".txt", container: "raw" }]
 ```
 
-### 5.3 一个窄模块 `store.names`
+`kind` 的取值是各家自己的事，上面几个只是举例。
 
-所有「切名字、拼名字」只准在这里发生。库内和 gallery 都用它，宿主也可以用。
+### 5.3 一个窄模块 `store.paths`
+
+所有「切路径、拼路径」只准在这里发生。库内和 gallery 都用它，宿主也可以用。只有两个函数：切开，拼回去。改名、复制、挪文件夹、撞名加时间戳都是「切开，换一格，拼回去」。
 
 ## 6. 现状 .h（节选，全文 `api/store.d.ts`、gallery `api/gallery.d.ts`）
 
@@ -113,37 +140,37 @@ interface GalleryScreenDeps { naming?: NameBoundary; isZipDoc?(fullName): boolea
 
 ```ts
 // ── store ──
-/** 本 app 的一种文档。 */
-export interface DocType {
-  /** 扩展名，含点，可以多段：".txt" / ".webxiaoheiwu.zip"。大小写不敏感。 */
-  ext: string;
+/** 本 app 的一种文档怎么拼、是什么容器。 */
+export interface DocKind {
+  /** app 自己的标签（开放集）。库原样带着，不解释。几行可以是同一个 kind。 */
+  kind: string;
+  /** 路径以什么结尾，含点，可以多段：".txt" / ".webxiaoheiwu.zip"。大小写不敏感。 */
+  suffix: string;
   /** 明文字节是什么容器。"zip" = 能按条目名取一小段（封面）；"raw" = 不能。库仍然不看内容。 */
   container: "raw" | "zip";
 }
-export interface DocName {
+/** 一条文档路径切开之后。 */
+export interface DocPath {
   path: string;      // 身份
-  dir: string;       // "" = 根
+  folder: string;    // "" = 根
   stem: string;      // 主干
-  ext: string;       // 命中的扩展名，保留名字里原有的大小写
-  type: DocType;
+  suffix: string;    // 命中的后缀，保留路径里原有的大小写
+  kind: string;
+  container: "raw" | "zip";
 }
-export interface Names {
-  /** 不是本 app 的文档 → null。多种都命中取扩展名最长的。 */
-  parse(path: string): DocName | null;
-  /** 只换主干（改名）。 */
-  withStem(path: string, stem: string): string;
-  /** 主干后面接一段（副本 / 序号 / 时间戳），扩展名不动。 */
-  withSuffix(path: string, suffix: string): string;
-  /** 换文件夹。 */
-  withDir(path: string, dir: string): string;
+export interface Paths {
+  /** 切开。不是本 app 的文档 → null。几个后缀都命中取最长的。 */
+  parse(path: string): DocPath | null;
+  /** 拼回去。 */
+  join(parts: { folder: string; stem: string; suffix: string }): string;
 }
 export interface StoreConfig {
   /** 必填表态（和 persistence / reconcilePolicy 同一类）。 */
-  docTypes: readonly DocType[];
+  docKinds: readonly DocKind[];
   // 删除：fileName / encFileName / toName / crypt.ext
 }
 export interface Store {
-  names: Names;
+  paths: Paths;
   /** 任何文件（文档、图片、杂物）。 */
   file(path: string, opts: { mode: "new" | "existing" }): RawFile;
   /** 只准用于 container 是 "zip" 的文档，否则抛。多出 getPeek / decryptPeek。 */
@@ -151,12 +178,12 @@ export interface Store {
 }
 
 // ── gallery ──
-export interface GItem { path: string; stem: string; syncState; size?; lastModified? }
+export interface GItem { path: string; stem: string; kind: string; syncState; size?; lastModified? }
 export interface GalleryPolicy {
   /** 不是文档的文件里哪些算图片（WeebPaint 的云盘图片）。 */
   isImage?(path: string): boolean;
-  /** 哪几种文档有缩略图，按扩展名列。不给 = 都没有。 */
-  thumbs?: { types: readonly string[]; dbName: string; fetch(path, source): Promise<Blob | null> };
+  /** 哪几个种类有缩略图。不给 = 都没有。 */
+  thumbs?: { kinds: readonly string[]; dbName: string; fetch(path, source): Promise<Blob | null> };
 }
 // 删除：NameBoundary、naming、policy.naming、policy.isDoc、isZipDoc、hasThumb、thumbs.has、uniqueBareName 的 naming 参数
 ```
@@ -166,16 +193,16 @@ export interface GalleryPolicy {
 | 今天 | 以后 |
 |---|---|
 | `toName` | 删。云端名去掉结尾 `.zip` 后能被 `parse` 认出 → 是那份文档的加密容器；云端名自己能被认出 → 是明文文档 |
-| `crypt.ext` + `cryptExtFor` | 删。用 `type.ext`（见 §10 第 2 条） |
-| `docExts`、恢复撞名 | `names.withSuffix(path, " [戳]")`，两条腿同一个函数 |
-| 每次调用的 `isZip` | 删。`file()` / `zip()`，类型表说了算 |
+| `crypt.ext` + `cryptExtFor` | 删。用这条路径命中的后缀（见 §10 第 2 条） |
+| `docExts`、恢复撞名 | 切开，主干后面接 ` [戳]`，拼回去。两条腿同一个函数 |
+| 每次调用的 `isZip` | 删。`file()` / `zip()`，表说了算 |
 | `fileName` / `encFileName` | 删。身份就是云端文件名；加密后缀恒为 `.zip` |
-| gallery `isDoc` | `names.parse(path) != null` |
-| gallery `isZipDoc` | `type.container === "zip"` |
-| gallery `naming.display`、改名反推后缀 | `stem`、`names.withStem` |
-| gallery `copyTargetName`、`uniqueBareName` | `names.withSuffix` |
-| gallery `hasThumb` | 策略里按类型列 |
-| WXHW `doc-model.ts` 的三个正则 | 删，改读 `store.names` |
+| gallery `isDoc` | `paths.parse(path) != null` |
+| gallery `isZipDoc` | 切开之后的 `container` |
+| gallery `naming.display`、改名反推后缀 | 切开之后的 `stem`；改名 = 换主干拼回去 |
+| gallery `copyTargetName`、`uniqueBareName` | 主干后面接「副本」或序号，拼回去 |
+| gallery `hasThumb` | 策略里按种类列 |
+| WXHW `doc-model.ts` 的三个正则和 `docKind()` | 删，改读 `store.paths`，种类直接从切开的结果里拿 |
 
 净变化：store 配置少 4 个字段多 1 个，调用点少一个布尔；gallery 少 1 个接口和 6 个宿主钩子。
 
@@ -184,7 +211,7 @@ export interface GalleryPolicy {
 | 项 | 为什么不变 |
 |---|---|
 | 已存的数据 | 四个宿主在 store 里的身份本来就都是全名（WeebPaint / CatsUp / JRB 是在 gallery 边界上加的扩展名）。IDB、云端文件名、缩略图缓存的 key、阅读位置的 key 都不用动 |
-| 库不懂内容 | 类型表说的是名字的语法，不是内容。`container` 顶替的是今天已经在问的 `isZip` |
+| 库不懂内容 | 表说的是路径怎么拼，不是内容。`container` 顶替的是今天已经在问的 `isZip`；`kind` 库只带着不解释 |
 | 不是文档的文件 | 图片、杂物照旧存在，`parse` 返回 null，gallery 按 `isImage` 分流 |
 | 留底的命名 | `<原名> [<戳>-<guid>]` 不变，旧的回收站和备份箱条目照常列得出 |
 | 同步逻辑 | If-Match、冲突、留底、dirty 一行不碰。动的只有「名字怎么读」 |
@@ -202,8 +229,8 @@ export interface GalleryPolicy {
 
 | 刀 | 内容 | 版本 | 做完之后 |
 |---|---|---|---|
-| 1 | store：类型表、`store.names`、库内全部推导、删四个旧字段和 `isZip` | store 0.16.0 | WXHW 收货，备份箱入口上线 |
-| 2 | gallery：改吃 `store.names`，`GItem` 改成路径加主干，删 `NameBoundary` 和六个钩子 | gallery 0.6.0 | WXHW 收货，复制修好，`doc-model.ts` 的三个正则删掉 |
+| 1 | store：种类表、`store.paths`、库内全部推导、删四个旧字段和 `isZip` | store 0.16.0 | WXHW 收货，备份箱入口上线 |
+| 2 | gallery：改吃 `store.paths`，`GItem` 改成路径、主干、种类，删 `NameBoundary` 和六个钩子 | gallery 0.6.0 | WXHW 收货，复制修好，`doc-model.ts` 的三个正则删掉 |
 | 3 | WeebPaint / CatsUp / JRB 各自升级 | 各家自己的 session | 每家的 gallery 宿主少一段翻译代码 |
 
 每一刀自己是完整的，不留「新旧都认」的过渡层。第 1 刀和第 2 刀之间 WXHW 会短暂处于 store 已经是新模型、gallery 还在用 `naming` 的状态。那段时间 gallery 0.5.0 看名字只经宿主给的钩子，这一半没问题；但它调 `file()` 时还会多传一个 `isZip`，新 store 得容忍这个多余的字段（忽略它），这一点要在第 1 刀里写成测试。如果两刀连着做、WXHW 一次收两个库，这个中间状态就不存在。
@@ -212,6 +239,7 @@ export interface GalleryPolicy {
 
 1. 方向做不做。做的话 `docExts` 那份提案作废。
 2. 这一轮做到哪一刀。我建议第 1 刀和第 2 刀都做，第 3 刀留给各家。
-3. `docTypes` 必填还是可选。我建议必填：可选就意味着库里还得留着「猜」的那条路。
+3. 种类表必填还是可选。我建议必填：可选就意味着库里还得留着「猜」的那条路。
 4. `GItem.name` 从裸名改成路径是对四个宿主的破坏性改动，要不要。
 5. §10 第 2 条查清之后的结论，到时候单独问。
+6. **用词**（§5.0、§5.1）。另有一个连带问题：store 现有的对外接口里还有三处带 Name 的名字，指的其实都是路径——`files.nameOccupied`、`activeFileName`、`hiddenName`。要不要趁第 1 刀一起改掉（对宿主是破坏性的，但是机械替换）。函数签名里叫 `name` 的形参改成 `path` 不影响任何调用方，这个我会直接做。
