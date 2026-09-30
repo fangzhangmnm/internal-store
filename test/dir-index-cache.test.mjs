@@ -8,6 +8,7 @@
 //   · 红线：快照绝不喂 gone 判定——云列举失败时，快照里「没有」的本地 clean 文件分毫不动。
 //   · 写后重画（notifyFolderOf 本地帧）仍含 stale cloud-only 项（不闪没）。
 import { describe, it, assert, eq } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createListing } from "../src/listing.ts";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
@@ -20,7 +21,7 @@ const tick = () => new Promise((r) => setTimeout(r, 5));
 const UI = { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {}, onReplayStatus: () => {} };
 
 function mkStore({ provider = createMockProvider(), local = createMockLocal(), kv = memKv(), signedIn = () => true, online = () => true } = {}) {
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "test", provider, local, kv, ui: UI,
     validateAdopt: () => true, isOnline: online, signedIn, skipMigration: true,
   });
@@ -46,7 +47,7 @@ describe("dir-index-cache · 双拉修复", () => {
     await tick(); await tick(); un();
     assert(frames.length >= 2, `两帧到齐（实=${frames.length}）`);
     eq(listCalls, 1, "★双拉已修：现场云帧只拉一遍");
-    const cloudItem = frames.at(-1).items.find((i) => i.path === "a.mp3");
+    const cloudItem = frames.at(-1).items.find((i) => i.identifier === "a.mp3");
     assert(cloudItem && cloudItem.syncState === "cloud-only", "云端帧内容不受共享影响");
   });
 });
@@ -82,7 +83,7 @@ describe("dir-index-cache · 快照落底 + 冷首帧", () => {
     const f0 = frames[0];
     eq(f0.stale, true, "★首帧标 stale");
     eq(f0.complete, false, "stale 帧不权威");
-    const it0 = f0.items.find((i) => i.path === "a.mp3");
+    const it0 = f0.items.find((i) => i.identifier === "a.mp3");
     assert(it0 && it0.syncState === "cloud-only", `★冷首帧即显云端缺项（实=${it0 && it0.syncState}）`);
     eq(it0.size, 3, "size 从快照带出");
   });
@@ -111,7 +112,7 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const kv = memKv();
     {   // 第一世：open 拉到本地（everSynced）+ 快照落底
       const { store } = mkStore({ provider, local, kv });
-      await store.file("a.mp3", { isZip: false, mode: "existing" }).open();
+      await store.file("a.mp3", { mode: "existing" }).open();
       const { un } = watchFrames(store, ""); await tick(); await tick(); un();
     }
     // 云端悄悄变版（快照里的 eTag 已旧）；第二世 provider 挂死 → 只有 stale 首帧
@@ -121,7 +122,7 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const { store: s2 } = mkStore({ provider: p2, local, kv });
     const { frames, un } = watchFrames(s2, "");
     await tick(); un();
-    const hits = frames[0].items.filter((i) => i.path === "a.mp3");
+    const hits = frames[0].items.filter((i) => i.identifier === "a.mp3");
     eq(hits.length, 1, "不重复");
     // 2026-08-19 user 拍板更新：谱系在案（everSynced∧clean）离线显 synced（=已留离线语义）；
     // 本测核心不变——绝不被快照旧 eTag 拉成 newer-on-cloud（那要等真云端帧来纠偏）。
@@ -139,7 +140,7 @@ describe("dir-index-cache · badge/登出纪律", () => {
     await tick(); un();
     assert(frames.length >= 1);
     assert(frames[0].stale === true, "首帧带 stale 标");
-    const it = frames[0].items.find((i) => i.path === "a.mp3");
+    const it = frames[0].items.find((i) => i.identifier === "a.mp3");
     assert(it && it.syncState === "cloud-only", "★凭证过期首帧仍有云端项（cloud-only）");
   });
   it("0.11.6 明确登出（provider auth reason signOut）→ 清 dir-index-cache、在看的夹重画为纯本地；expired 不清", async () => {
@@ -152,14 +153,14 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const { store: s2 } = mkStore({ provider, local, kv, signedIn: () => signed, online: () => false });
     const { frames, un } = watchFrames(s2, "");
     await tick();
-    assert(frames.at(-1).items.some((i) => i.path === "a.mp3"), "登出前：掺快照");
+    assert(frames.at(-1).items.some((i) => i.identifier === "a.mp3"), "登出前：掺快照");
     provider._emitAuth({ signedIn: false, reason: "expired" }); await tick(); await tick();
     assert(local._dirIndex.size >= 1, "expired 不清缓存");
     const n0 = frames.length;
     provider._emitAuth({ signedIn: false, reason: "signOut" }); await tick(); await tick();
     eq(local._dirIndex.size, 0, "★signOut → dir-index-cache 分区清空");
     assert(frames.length > n0, "清完重画一帧");
-    assert(!frames.at(-1).items.some((i) => i.path === "a.mp3") && !frames.at(-1).stale, "★重画后纯本地、无 stale");
+    assert(!frames.at(-1).items.some((i) => i.identifier === "a.mp3") && !frames.at(-1).stale, "★重画后纯本地、无 stale");
     un();
   });
 
@@ -170,7 +171,7 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const kv = memKv();
     {   // 第一世：a.mp3 拉到本地（everSynced+clean）+ 快照落底
       const { store } = mkStore({ provider, local, kv });
-      await store.file("a.mp3", { isZip: false, mode: "existing" }).open();
+      await store.file("a.mp3", { mode: "existing" }).open();
       const { un } = watchFrames(store, ""); await tick(); await tick(); un();
     }
     // 第二世：云列举永远失败（快照在、且快照里其实有 a.mp3——就算快照被篡改成没有，也不许据快照判 gone）
@@ -195,11 +196,11 @@ describe("dir-index-cache · badge/登出纪律", () => {
     const { store: s2 } = mkStore({ provider: p2, local, kv });
     const { frames, un } = watchFrames(s2, "");
     await tick();
-    await s2.file("b.txt", { isZip: false, mode: "new" }).save(bytes("B"), { tryPush: false });   // → notifyFolderOf("") 重画
+    await s2.file("b.txt", { mode: "new" }).save(bytes("B"), { tryPush: false });   // → notifyFolderOf("") 重画
     await tick(); un();
     const last = frames.at(-1);
-    assert(last.items.some((i) => i.path === "b.txt"), "新文件在");
-    assert(last.items.some((i) => i.path === "a.mp3" && i.syncState === "cloud-only"), "★stale 云端项没闪没");
+    assert(last.items.some((i) => i.identifier === "b.txt"), "新文件在");
+    assert(last.items.some((i) => i.identifier === "a.mp3" && i.syncState === "cloud-only"), "★stale 云端项没闪没");
   });
 });
 
@@ -214,7 +215,7 @@ describe("dir-index-cache · listing 单元级 scope 守卫", () => {
       staleCloud: { files: [{ name: "A/ok.mp3" }, { name: "B/evil.mp3" }, { name: "A/deep/x.mp3" }, { name: "root.mp3" }], folders: [] },
     });
     eq(snap.items.length, 1, "只 A/ok.mp3 进来");
-    eq(snap.items[0].path, "A/ok.mp3");
+    eq(snap.items[0].identifier, "A/ok.mp3");
     eq(snap.stale, true);
   });
 });

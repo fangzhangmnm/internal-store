@@ -22,7 +22,6 @@ export interface SealCfg {
   getPassword: (name: string) => string | null;                                            // 同步、非交互、只读内存（唯一密码来源）
   getPrev: (name: string) => Promise<Blob | Uint8Array | null>;                            // 本地 at-rest 字节（判该 name 加密态）
   makePeek?: (plain: Blob) => Promise<Uint8Array | null>;                                  // 明文→不透明预览字节（app；store 不看内容）
-  ext?: string;
 }
 
 export interface Seal {
@@ -32,18 +31,18 @@ export interface Seal {
   withPassword<T>(name: string, attempt: (pw: string) => Promise<T>): Promise<T | null>;   // 内存密码跑一次；无/错→null
 }
 
-/** meta.bin 里的「真扩展名」：优先从逻辑名的最后一个点推导（同一 store 里 .txt 稿与 .xxx.zip 工程并存时，
- *  store 级单值 crypt.ext 对其中一种必错，2026-09-09）；名字没有点 → 回退 cfg.ext（裸名宿主）→ "bin"。
- *  只看 basename（夹名里的点不算）。 */
-export function cryptExtFor(name: string, fallback?: string): string | undefined {
+/** meta.bin 里的「真扩展名」：从身份最后一个点推导；没有点 → undefined（packContainer 落 "bin"）。只看最后一段（夹名里的点不算）。
+ *  0.16.0 定的：**这里故意仍按最后一个点取，不按 docKinds 的后缀取**——meta.bin 是人拿 7-Zip 手工恢复时看的辅助件，全家没有程序读它，
+ *  旁边的 `name` 已经记着完整身份；改它等于动用户文件里的字节，没有理由。0.15.2 的 crypt.ext 回退值已删（四个宿主的身份都带后缀，回退永远走不到）。 */
+export function cryptExtFor(name: string): string | undefined {
   const base = name.includes("/") ? name.slice(name.lastIndexOf("/") + 1) : name;
   const dot = base.lastIndexOf(".");
   if (dot > 0 && dot < base.length - 1) return base.slice(dot + 1);
-  return fallback;
+  return undefined;
 }
 
 export function createSeal(cfg: SealCfg): Seal {
-  const { looksContainer, pack, unpack, getPassword, getPrev, makePeek, ext } = cfg;
+  const { looksContainer, pack, unpack, getPassword, getPrev, makePeek } = cfg;
 
   function isContainer(bytes: Blob | Uint8Array): Promise<boolean> { return looksContainer(bytes); }
 
@@ -65,7 +64,7 @@ export function createSeal(cfg: SealCfg): Seal {
     if (!pw) throw new LockedError(name);
     let peek: Uint8Array | null = null;
     if (makePeek) { try { peek = await makePeek(new Blob([plain as BlobPart])); } catch (e) { reportStoreError(e, "log"); peek = null; } }
-    const container = await pack({ dataBytes: plain, fileName: name, ext: cryptExtFor(name, ext), peek, password: pw });
+    const container = await pack({ dataBytes: plain, fileName: name, ext: cryptExtFor(name), peek, password: pw });
     return await toU8(container);
   }
 

@@ -7,6 +7,7 @@
 //   user 2026-09-29「同步库的一个洞 修」。宿主（WXHW v2.1.15）已经在自己那层绕开了能碰到的路径；这里是库这一层自己承重。
 //   断言按数据安全词典序写：①云端赢家没被静默覆盖 ②本地刚保存的字节还在（在原位或在备份箱）③dirty / 谱系诚实。
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
@@ -50,9 +51,9 @@ function rig(choice: () => "keepMine" | "takeCloud" | "cancel" = () => "cancel")
     resolveConflict: async ({ occasion }: { occasion: string }) => { conflicts.push(occasion); return choice(); },
     reportError: () => {},
   } as never;
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local,
-    fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
+    isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
   const cloudText = async (name: string) => { const it = await provider.getItemByPath(name); return it ? asStr(await origDownload(it.ref)) : null; };
   const backups = async () => Promise.all(((local.listBackup ? await local.listBackup() : []) as Array<{ trashKey: string }>).map(async (b) => asStr(await (local as unknown as { getTrash?: (k: string) => Promise<Blob | null>; get(k: string): Promise<Blob | null> }).get(b.trashKey))));
@@ -61,7 +62,7 @@ function rig(choice: () => "keepMine" | "takeCloud" | "cancel" = () => "cancel")
 
 test("[edit-race] I1 推送期间又保存了一次 → 推完仍 dirty（那一次保存的字节还没上云）", async () => {
   const { store, up, cloudText, local } = rig();
-  const f = store.file("稿.txt", { isZip: false, mode: "existing" });
+  const f = store.file("稿.txt", { mode: "existing" });
   await f.save(enc("V0"), { tryPush: true });
   up.hold();
   const p1 = f.save(enc("V1"), { tryPush: true });            // 上传被按住
@@ -82,7 +83,7 @@ test("[edit-race] I1 推送期间又保存了一次 → 推完仍 dirty（那一
 
 test("[edit-race] I2 干净快进的下载途中又保存了一次 → 不覆盖、不清 dirty；之后推送照常撞冲突面", async () => {
   const { store, provider, down, cloudText, local, conflicts, backups } = rig(() => "cancel");
-  const f = store.file("稿.txt", { isZip: false, mode: "existing" });
+  const f = store.file("稿.txt", { mode: "existing" });
   await f.save(enc("V0"), { tryPush: true });
   provider._seed("稿.txt", "CLOUD-NEW");                       // 别的设备改了云端
   down.hold();
@@ -104,7 +105,7 @@ test("[edit-race] I2 干净快进的下载途中又保存了一次 → 不覆盖
 
 test("[edit-race] I2 冲突面选了云端、下载途中又保存了一次 → 那一次保存的字节也进备份箱，再换成云端版", async () => {
   const { store, provider, down, local, backups } = rig(() => "takeCloud");
-  const f = store.file("稿.txt", { isZip: false, mode: "existing" });
+  const f = store.file("稿.txt", { mode: "existing" });
   await f.save(enc("V0"), { tryPush: true });
   provider._seed("稿.txt", "CLOUD-NEW");
   await f.save(enc("MINE-1"), { tryPush: false });             // 本机有未推改动 → 打开时撞冲突面
@@ -124,7 +125,7 @@ test("[edit-race] I2 冲突面选了云端、下载途中又保存了一次 → 
 
 test("[edit-race] I2 云字节正在落盘的那一下又保存了一次 → 不标干净；后写的那份留在本地，推送撞冲突面", async () => {
   const { store, provider, localWrite, cloudText, local, conflicts } = rig(() => "cancel");
-  const f = store.file("稿.txt", { isZip: false, mode: "existing" });
+  const f = store.file("稿.txt", { mode: "existing" });
   await f.save(enc("V0"), { tryPush: true });
   provider._seed("稿.txt", "CLOUD-NEW");
   localWrite.hold();
@@ -144,7 +145,7 @@ test("[edit-race] I2 云字节正在落盘的那一下又保存了一次 → 不
 
 test("[edit-race] 没有撞车时一切照旧：干净快进成功、推送后干净", async () => {
   const { store, provider, local } = rig();
-  const f = store.file("稿.txt", { isZip: false, mode: "existing" });
+  const f = store.file("稿.txt", { mode: "existing" });
   await f.save(enc("V0"), { tryPush: true });
   eq(await store.files.dirty.count(), 0);
   provider._seed("稿.txt", "CLOUD-NEW");

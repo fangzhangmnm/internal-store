@@ -4,6 +4,7 @@
 //   collection 云端落 `.${appId}/<name>.json` + scaffold + backupFolder 默认 `.backup`。
 //   （localSettings/syncedSettings 已删 2026-07-13——设置/状态全走 collection。）
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { isHidden, assertValidFileName, assertValidCollectionName } from "../src/is-hidden.ts";
 import { namespacedKv } from "../src/kv-namespace.ts";
 import { createStore } from "../src/create-store.ts";
@@ -28,10 +29,10 @@ const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolv
 function mkStore(kv: ReturnType<typeof dumpKv>, provider = createMockProvider(), databaseId?: string) {
   return {
     provider,
-    store: createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    store: createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
       appId: "wp", databaseId, provider, ui: STUB_UI,
       validateAdopt: () => true, kv, local: createMockLocal(),
-      fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
+      isOnline: () => true, signedIn: () => true, skipMigration: true,
     }),
   };
 }
@@ -146,8 +147,8 @@ test("collection.flushLocal 正常路径 → ok:true", async () => {
 test("createStore 表态制 fail-fast：缺 encryption / 缺 reconcilePolicy → 构造期 throw", async () => {
   const { createStore } = await import("../src/create-store.ts");
   const base = { persistence: "none", appId: "t", provider: createMockProvider(), ui: { busy: (_l: string, fn: () => unknown) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} }, validateAdopt: () => true, kv: dumpKv(), local: createMockLocal(), isOnline: () => false, signedIn: () => false, skipMigration: true } as never;
-  let e1 = null; try { createStore({ ...(base as object), reconcilePolicy: "app-driven" } as never); } catch (e) { e1 = e; }
+  let e1 = null; try { createStore({ docKinds: TEST_KINDS, ...(base as object), reconcilePolicy: "app-driven" } as never); } catch (e) { e1 = e; }
   assert(String(e1).includes("encryption"), "缺 encryption 必炸且说清楚");
-  let e2 = null; try { createStore({ ...(base as object), encryption: createMockEncryption() } as never); } catch (e) { e2 = e; }
+  let e2 = null; try { createStore({ docKinds: TEST_KINDS, ...(base as object), encryption: createMockEncryption() } as never); } catch (e) { e2 = e; }
   assert(String(e2).includes("reconcilePolicy"), "缺 reconcilePolicy 必炸且说清楚");
 });

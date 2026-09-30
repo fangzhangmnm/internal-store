@@ -1,5 +1,6 @@
 // A4 只读镜像（readOnlyFiles，ADR-0022 预排的 readOnlyMirror）—— files 写路径全拒、读/离线副本面照常、collections 不受影响。
 import { describe, it, assert, eq } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
@@ -17,7 +18,7 @@ function memStaging() {
 function mk() {
   const provider = createMockProvider();
   const local = createMockLocal();
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "test", provider, local, kv: memKv(), staging: memStaging(), ui: UI, readOnlyFiles: true,
     validateAdopt: () => true, isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
@@ -32,7 +33,7 @@ const rejectsRO = async (p, label) => {
 describe("readOnlyFiles · 只读镜像", () => {
   it("files 写路径全拒（save/tryMove/delete/reupload/encrypt/decrypt/建删夹/回收站类）", async () => {
     const { store } = mk();
-    const f = store.file("a.mp3", { isZip: false, mode: "existing" });
+    const f = store.file("a.mp3", { mode: "existing" });
     await rejectsRO(() => f.save(bytes("X")), "save");
     await rejectsRO(() => f.tryMove("b.mp3"), "tryMove");
     await rejectsRO(() => f.delete(), "delete");
@@ -50,8 +51,8 @@ describe("readOnlyFiles · 只读镜像", () => {
     const { store, provider, local } = mk();
     provider._seed("t.mp3", bytes("HELLO"));
     let snap = null; const un = store.files.watchFolder("", (s) => { snap = s; }); await tick(); await tick(); un();
-    assert(snap && snap.items.some((i) => i.path === "t.mp3"), "列举照常");
-    const f = store.file("t.mp3", { isZip: false, mode: "existing" });
+    assert(snap && snap.items.some((i) => i.identifier === "t.mp3"), "列举照常");
+    const f = store.file("t.mp3", { mode: "existing" });
     await f.keepOffline();
     assert(local._items.has("t.mp3"), "keepOffline 照常");
     const h = await f.openStream();

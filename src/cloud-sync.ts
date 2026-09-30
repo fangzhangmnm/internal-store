@@ -10,7 +10,8 @@
 //   分片末响应无 item→拉权威 etag 不崩不缓存 null（H7）· trash=move-aside 加 [ts] 后缀（A8/C2）·
 //   restore 撞名 (2)(3) 防覆盖。
 
-import { asideStamp, restoreStampDisplay } from "./move-aside.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
+import { asideStamp, restoreStampDisplay } from "./move-aside.ts";
+import { withStemTail, type Identifiers } from "./identifiers.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
 import { isHidden } from "./is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
@@ -76,8 +77,10 @@ interface CloudSyncCfg {
   now?: () => number;
   match?: (it: CloudItem) => boolean;
   toName?: (name: string) => string;
-  /** 0.14.0：宿主额外隐藏名（config.hiddenName）：列举时整个跳过（同 dot 项），不进文件/文件夹列表。 */
+  /** 0.14.0：宿主额外隐藏名（config.hidden）：列举时整个跳过（同 dot 项），不进文件/文件夹列表。 */
   hidden?: (name: string) => boolean;
+  /** 0.16.0：身份语法（恢复撞名时戳插在哪）。不给 = 没有文档种类（collections 实例）。 */
+  identifiers?: Identifiers;
 }
 
 /**
@@ -93,6 +96,8 @@ interface CloudSyncCfg {
 /** 默认的「云端文件名 → 身份」映射：只去尾部一个 .zip（ADR-0012 加密容器外扩展名）。
  *  X.dat→X.dat、X.dat.zip→X.dat、Y.zip→Y、Y.zip.zip→Y.zip；与默认 encFileName「追加 .zip」互逆、无损。
  *  ⚠ 对「身份本身以 .zip 结尾的明文文件」它是错的（Y.zip 会被还原成 Y 并被当加密件）——这类 app 配 config.toName。 */
+const NO_KINDS: Identifiers = createIdentifiersNoKinds();
+function createIdentifiersNoKinds(): Identifiers { return { kinds: [], parse: () => null, join: (p) => `${p.folder ? `${p.folder}/` : ""}${p.stem}${p.suffix}` }; }
 export const defaultCloudToName = (cloudName: string): string => (cloudName.endsWith(".zip") ? cloudName.slice(0, -4) : cloudName);
 
 export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
@@ -120,6 +125,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   //   「云端名经 toName 变了」= 它是加密容器名——这是全库唯一的加密名判定 seam（2026-09-09，trash-merge 兜底同吃）。
   //   身份本身以 .zip 结尾的 app（明文 zip 工程）必须经 createStore config.toName 配自己的规则，否则明文 zip 被当加密容器。
   const toName = cfg.toName || defaultCloudToName;
+  const ids: Identifiers = cfg.identifiers ?? NO_KINDS;
 
   const etagKey = (n: string) => `${appKey}.etag:${n}`;
   const dirtyKey = (n: string) => `${appKey}.dirty:${n}`;
@@ -305,8 +311,11 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const mkName = opts.encrypted && encFileName ? encFileName : fileName;   // 加密件恢复保留 .zip 容器扩展名
     const folderId = await provider.ensureFolder(folder);
     const disp = restoreStampDisplay(opts.snapshotStamp, now());
+    // 戳插在哪：和本地腿同一个函数（identifiers.withStemTail）——文档插在后缀之前，非文档插在最后一个点之前。
+    //   0.16.0 之前这一腿把戳接在名字末尾（`稿.txt [戳]`），宿主认不出。
+    const stamped = (suf: string) => withStemTail(base, ` [${suf}]`, ids);
     for (let attempt = 1; attempt < 100; attempt++) {
-      const candidate = attempt === 1 ? base : attempt === 2 ? `${base} [${disp}]` : `${base} [${disp}-${attempt - 1}]`;
+      const candidate = attempt === 1 ? base : attempt === 2 ? stamped(disp) : stamped(`${disp}-${attempt - 1}`);
       try {
         return await provider.move(cloudRef, folderId, { newName: mkName(candidate), conflictBehavior: "fail", eTag: opts.eTag ?? null });
       } catch (e) {
@@ -318,7 +327,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
         throw e;                               // 412（源变了）/ 其它 → 抛，别拿换名去掩盖
       }
     }
-    return await provider.move(cloudRef, folderId, { newName: mkName(`${base} [${asideStamp(now())}]`), conflictBehavior: "fail", eTag: opts.eTag ?? null });   // 100 连撞的病态兜底：guid 必不撞
+    return await provider.move(cloudRef, folderId, { newName: mkName(stamped(asideStamp(now()))), conflictBehavior: "fail", eTag: opts.eTag ?? null });   // 100 连撞的病态兜底：guid 必不撞
   }
 
   //   eTag：硬删是不可逆的，必须 If-Match（v435）。窄 TOCTOU 但后果最重：别设备在 list 与 delete 之间

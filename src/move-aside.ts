@@ -11,6 +11,8 @@
 // （LOCAL_BACKUP_PREFIX 已删 v415：本地备份改走 blob-partition 的 backup 分区、键是 `backup/<inner>`，
 //   这个字符串前缀零引用。它最后一个消费者是 session.listSessions 的图库过滤，那个也在 v415 删了。）
 
+import { withStemTail, type Identifiers } from "./identifiers.ts";
+
 function pad(n: number, w = 2) { return String(n).padStart(w, "0"); }
 
 function yyyymmddhhmmss(ms: number) {
@@ -53,17 +55,19 @@ export function restoreStampDisplay(stamp14: string | null | undefined, fallback
   return `${s.slice(0, 8)}-${s.slice(8)}`;
 }
 
-/** 恢复落点名：orig 空闲 → 原名；被占 → `base [yyyymmdd-hhmmss].ext`（仍占再补 `-2`/`-3`…）。 */
+/** 恢复落点身份：orig 空闲 → 原身份；被占 → 主干后面接 ` [yyyymmdd-hhmmss]`（仍占再补 `-2`/`-3`…）。
+ *  戳插在哪由 identifiers.withStemTail 定：文档插在后缀之前（`书 [戳].webxiaoheiwu.zip`），非文档插在最后一个点之前。
+ *  0.16.0 之前这里按「最后一个点」切，WXHW 的书取回来叫 `书.webxiaoheiwu [戳].zip`、宿主认不出（提案 20260929-proposal-doc-types §3 第 3 行）。 */
 export async function restoreTargetName(
   orig: string,
   occupied: (name: string) => Promise<boolean> | boolean,
   stamp14: string | null | undefined,
   fallbackMs: number,
+  ids: Identifiers,
 ): Promise<string> {
   if (!(await occupied(orig))) return orig;
   const disp = restoreStampDisplay(stamp14, fallbackMs);
-  const dot = orig.lastIndexOf(".");
-  const mk = (suf: string) => (dot > 0 ? `${orig.slice(0, dot)} [${suf}]${orig.slice(dot)}` : `${orig} [${suf}]`);
+  const mk = (suf: string) => withStemTail(orig, ` [${suf}]`, ids);
   let target = mk(disp);
   for (let i = 2; await occupied(target); i++) target = mk(`${disp}-${i}`);
   return target;

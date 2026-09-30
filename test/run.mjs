@@ -58,6 +58,7 @@ import "./store-narrow-waist.test.ts";
 import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOnline∧signedIn / hiddenName
 import "./edit-race.test.ts";
 import "./identifiers.test.ts";   // 0.16.0：身份的语法（docKinds 表）
+import "./restore-naming.test.ts";   // 0.16.0：取回撞名两条腿走表；zip()/encrypt 守卫
 
 console.log("\n  @internal/store —— 云同步引擎契约测试\n");
 await run();

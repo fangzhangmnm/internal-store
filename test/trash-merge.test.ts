@@ -12,7 +12,7 @@ test("mergeTrash · 纯本地行（cloud 无）→ side=local、localKey 透传�
   const out = mergeTrash([le(`trash/${STAMP}:folder/A.ora`, "folder/A.ora")], [], new Set());
   eq(out.length, 1, "一行");
   eq(out[0].side, "local", "本地行");
-  eq(out[0].name, "folder/A.ora", "全路径原名");
+  eq(out[0].identifier, "folder/A.ora", "全路径原名");
   eq(out[0].localKey, `trash/${STAMP}:folder/A.ora`, "trashKey 透传");
   eq(out[0].cloudRef, null, "无云端腿");
   eq(out[0].ts, "20260717120000", "从 trashKey 解出时间戳");
@@ -23,7 +23,7 @@ test("mergeTrash · 纯云端行 → side=cloud、还原 basename、非加密", 
   const out = mergeTrash([], [ci("c1", `A.ora [${STAMP}]`)], new Set());
   eq(out.length, 1, "一行");
   eq(out[0].side, "cloud", "云端行");
-  eq(out[0].name, "A.ora", "去 stamp 还原 basename");
+  eq(out[0].identifier, "A.ora", "去 stamp 还原 basename");
   eq(out[0].cloudRef, "c1", "cloudRef 透传");
   eq(out[0].localKey, null, "无本地腿");
   assert(!out[0].encrypted, "非加密");
@@ -33,7 +33,7 @@ test("mergeTrash · 纯云端行 → side=cloud、还原 basename、非加密", 
 test("mergeTrash · 加密云端行（.zip 尾）→ encrypted=true、base 去 .zip", () => {
   const out = mergeTrash([], [ci("c1", `A.ora [${STAMP}].zip`)], new Set());
   eq(out[0].side, "cloud", "云端");
-  eq(out[0].name, "A.ora", "base 不含 .zip");
+  eq(out[0].identifier, "A.ora", "base 不含 .zip");
   assert(out[0].encrypted, "加密标志");
 });
 
@@ -116,21 +116,21 @@ test("mergeTrash · 有戳：原名自带 .zip 的明文工程不被当加密件
   const out = mergeTrash([], [ci("c1", `夏音.webxiaoheiwu.zip [${STAMP}]`), ci("c2", `夏音.webxiaoheiwu.zip [${STAMP}].zip`)], new Set());
   eq(out.length, 2, "两行");
   const plain = out.find((r) => r.cloudRef === "c1")!, enc = out.find((r) => r.cloudRef === "c2")!;
-  eq(plain.name, "夏音.webxiaoheiwu.zip", "明文工程原名完整");
+  eq(plain.identifier, "夏音.webxiaoheiwu.zip", "明文工程原名完整");
   assert(!plain.encrypted, "明文工程 encrypted=false");
-  eq(enc.name, "夏音.webxiaoheiwu.zip", "加密工程原名 = 去掉追加的那一个 .zip");
+  eq(enc.identifier, "夏音.webxiaoheiwu.zip", "加密工程原名 = 去掉追加的那一个 .zip");
   assert(enc.encrypted, "加密工程 encrypted=true → restore 落 encFileName");
 });
 
 test("mergeTrash · 无戳兜底走 toName：配了 WXHW 规则 → 明文 .webxiaoheiwu.zip 不去尾、.txt.zip 去尾", () => {
   const out = mergeTrash([], [ci("c1", "夏音.webxiaoheiwu.zip"), ci("c2", "note.txt.zip"), ci("c3", "draft.txt")], new Set(), WXHW_TO_NAME);
   const by = (ref: string) => out.find((r) => r.cloudRef === ref)!;
-  eq(by("c1").name, "夏音.webxiaoheiwu.zip"); assert(!by("c1").encrypted, "明文工程");
-  eq(by("c2").name, "note.txt"); assert(by("c2").encrypted, "加密稿");
-  eq(by("c3").name, "draft.txt"); assert(!by("c3").encrypted, "明文稿");
+  eq(by("c1").identifier, "夏音.webxiaoheiwu.zip"); assert(!by("c1").encrypted, "明文工程");
+  eq(by("c2").identifier, "note.txt"); assert(by("c2").encrypted, "加密稿");
+  eq(by("c3").identifier, "draft.txt"); assert(!by("c3").encrypted, "明文稿");
 });
 
 test("mergeTrash · 无戳兜底不传 toName → 默认去尾一个 .zip（既有行为不变）", () => {
   const out = mergeTrash([], [ci("c1", "a.ora.zip")], new Set());
-  eq(out[0].name, "a.ora"); assert(out[0].encrypted, "默认：.zip 尾 = 加密件");
+  eq(out[0].identifier, "a.ora"); assert(out[0].encrypted, "默认：.zip 尾 = 加密件");
 });

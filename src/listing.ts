@@ -29,8 +29,9 @@ export type SyncState =
 
 /** 统一列举的一项（local ∪ cloud 归并后）。 */
 export interface Item {
-  /** 身份 = approot 相对路径。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）。 */
-  path: string;
+  /** 身份（identifier，语法见 identifiers.ts）= `文件夹/主干后缀`。格式无关 + provider 无关（唯一跨后端 key；itemId/内容哈希均否决）。
+   *  0.16.0 起不再叫 path：它**不是**云端真实路径（加密件在云端多一个 .zip），底下那一层才叫 path。 */
+  identifier: string;
   /** 按 ListContext 解析好的 badge —— Item 上就这一个状态字段（防下游 AI 重推导越狱）。 */
   syncState: SyncState;
   /** 字节大小（云端 authoritative，否则本地缓存记录）。 */
@@ -105,8 +106,8 @@ export interface ListingCfg {
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
 export interface FolderSnapshot {
-  /** 本夹路径（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。 */
-  path: string;
+  /** 本夹（订阅方 sanity-check 用：emit 错乱把别夹推来时可断言丢弃）。0.16.0 起叫 folder（原 path）。 */
+  folder: string;
   /** 直属文件项。 */
   items: Item[];
   /** immediate 子夹全路径。 */
@@ -165,7 +166,7 @@ export function createListing(cfg: ListingCfg) {
     //   判据与 badge 同源（dirty）：badge 说「未推」时间就是你本地最后一存；badge 说「已同步」时间就是云端那份；
     //   跨设备 B 机不 dirty → 云端时间正确。仅影响显示，不进任何同步/冲突判断（no-timestamps 红线不动）。
     const lastModified = dirty ? (localStat?.updatedAt ?? cf?.lastModified) : (cf?.lastModified ?? localStat?.updatedAt);
-    return { path, syncState, size: cf?.size ?? localStat?.size, lastModified };
+    return { identifier: path, syncState, size: cf?.size ?? localStat?.size, lastModified };
   }
 
   // 本地项的轻量元信息（size+updatedAt），批量取 → classifyPath 给本地项填尺寸/时间。stat 缺（老 mock）→ 跳过。
@@ -228,14 +229,14 @@ export function createListing(cfg: ListingCfg) {
         if (paths.has(f.name) || isHiddenAny(f.name)) continue;
         const rest = folder ? (f.name.startsWith(prefix) ? f.name.slice(prefix.length) : "") : f.name;
         if (!rest || rest.includes("/")) continue;   // 越界/非直属 → 丢
-        items.push({ path: f.name, syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
+        items.push({ identifier: f.name, syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
       }
       for (const sf of opts.staleCloud.folders) if (!isHiddenAny(sf)) subfolders.add(sf);
     }
     // **post-union 减去**离线排队待删的空夹（否则 remote frame / stale 快照每次把它从 folders 闪回）。
     for (const d of pendingFolderDeletions?.() ?? []) subfolders.delete(d);
 
-    const snap: FolderSnapshot = { path: folder, items, folders: [...subfolders], complete: absenceAuthoritative };
+    const snap: FolderSnapshot = { folder, items, folders: [...subfolders], complete: absenceAuthoritative };
     if (stale) snap.stale = true;
     return snap;
   }

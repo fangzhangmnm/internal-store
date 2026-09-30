@@ -4,6 +4,7 @@
 // ③ provider 抛（离线/未授权）→ "unknown"（绝不误判 absent）；④ 探针零副作用
 // （不建 scaffold、不写 etag/dirty 记账）；⑤ dispose 后响亮拒。
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createStore, StoreDisposedError } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
@@ -22,10 +23,10 @@ function dumpKv() {
 const STUB_UI = { busy: (_l, fn) => fn(), resolveConflict: async () => "cancel", reportError: () => {} };
 function mkStore(provider = createMockProvider()) {
   const kv = dumpKv();
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui: STUB_UI,
     validateAdopt: () => true, kv, local: createMockLocal(),
-    fileName: (n) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
+    isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
   return { provider, store, kv };
 }

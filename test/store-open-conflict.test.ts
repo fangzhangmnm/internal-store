@@ -4,6 +4,7 @@
 //   缺陷 B = freshness 把 !base（谱系丢失/从未 synced）误判 in-sync。两案侦察与修复方向见
 //   WeebPaint ai-docs/20260820-open-time-conflict-surface-handoff.md。此处走真 createStore（事故同款调用链）。
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
@@ -36,16 +37,16 @@ function rig(choice: () => "keepMine" | "takeCloud" | "cancel", opts: { validate
     resolveConflict: async ({ name, cloud, occasion }: { name: string; cloud: Blob | null; occasion: string }) => { conflicts.push({ name, cloud, occasion }); return choice(); },
     reportError: (e: unknown, level?: string) => { errors.push({ e, level }); },
   } as never;
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui, validateAdopt: opts.validateAdopt ?? (() => true), kv: kvRaw(), local,
-    fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
+    isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
   return { provider, local, store, conflicts, errors, downloadCount: () => downloads };
 }
 
 test("[open-conflict] 事故同款：synced → 外部更新云端 → 本地又编辑(dirty) → open 当场弹；takeCloud=拉云端+本地备份", async () => {
   const { provider, local, store, conflicts, downloadCount } = rig(() => "takeCloud");
-  const f = store.file("夏音线稿.ora", { isZip: false, mode: "existing" });
+  const f = store.file("夏音线稿.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });          // 建谱系：push 成功 → synced（base=云 etag）
   provider._seed("夏音线稿.ora", "CLOUD-NEW");          // 外部写入方（OneDrive 桌面客户端）更新云端 → etag 变
   await f.save(enc("MINE-DIRTY"), { tryPush: false }); // 本机又编辑，只落本地 → dirty ∧ cloudMoved
@@ -61,7 +62,7 @@ test("[open-conflict] 事故同款：synced → 外部更新云端 → 本地又
 
 test("[open-conflict] takeCloud 拉取失败（云端字节校验不过）→ warning surface + 本地保留（反煤气灯）", async () => {
   const { provider, store, conflicts, errors } = rig(() => "takeCloud", { validateAdopt: () => false });
-  const f = store.file("e.ora", { isZip: false, mode: "existing" });
+  const f = store.file("e.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   provider._seed("e.ora", "PORTAL-HTML");              // captive portal / 损坏云副本
   await f.save(enc("MINE-DIRTY"), { tryPush: false });
@@ -73,7 +74,7 @@ test("[open-conflict] takeCloud 拉取失败（云端字节校验不过）→ wa
 
 test("[open-conflict] clean 快进拉取失败 → info（状态栏级，不 banner spam）+ 本地保留", async () => {
   const { provider, store, conflicts, errors } = rig(() => "cancel", { validateAdopt: () => false });
-  const f = store.file("g.ora", { isZip: false, mode: "existing" });
+  const f = store.file("g.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });          // synced、clean
   provider._seed("g.ora", "PORTAL-HTML");
   const blob = await f.open();
@@ -85,7 +86,7 @@ test("[open-conflict] clean 快进拉取失败 → info（状态栏级，不 ban
 
 test("[open-conflict] cancel → 留本地 dirty（弹过再留，不是没弹；后续 push 412 仍会 surface）", async () => {
   const { provider, store, conflicts } = rig(() => "cancel");
-  const f = store.file("a.ora", { isZip: false, mode: "existing" });
+  const f = store.file("a.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   provider._seed("a.ora", "CLOUD-NEW");
   await f.save(enc("MINE-DIRTY"), { tryPush: false });
@@ -96,7 +97,7 @@ test("[open-conflict] cancel → 留本地 dirty（弹过再留，不是没弹�
 
 test("[open-conflict] clean ∧ 云端动过 → 静默快进（ADR-0016 前半不回归，不弹）", async () => {
   const { provider, store, conflicts } = rig(() => "cancel");
-  const f = store.file("b.ora", { isZip: false, mode: "existing" });
+  const f = store.file("b.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });          // synced、clean
   provider._seed("b.ora", "CLOUD-NEW");
   const blob = await f.open();
@@ -106,7 +107,7 @@ test("[open-conflict] clean ∧ 云端动过 → 静默快进（ADR-0016 前半�
 
 test("[open-conflict] 缺陷 B 端到端：从未 synced(!base) ∧ 云端同名 → open 也弹（不再误判 in-sync）", async () => {
   const { provider, store, conflicts } = rig(() => "cancel");
-  const f = store.file("c.ora", { isZip: false, mode: "existing" });
+  const f = store.file("c.ora", { mode: "existing" });
   await f.save(enc("MINE"), { tryPush: false });       // 只落本地：seenBase 恒 null
   provider._seed("c.ora", "CLOUD");                    // 云端被外部放了同名文件
   const blob = await f.open();
@@ -116,7 +117,7 @@ test("[open-conflict] 缺陷 B 端到端：从未 synced(!base) ∧ 云端同名
 
 test("[open-conflict] 保存路径 412 弹窗带 occasion='push'（keepMine=立即本地覆盖云端的那套按钮）", async () => {
   const { provider, store, conflicts } = rig(() => "cancel");
-  const f = store.file("h.ora", { isZip: false, mode: "existing" });
+  const f = store.file("h.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   provider._seed("h.ora", "CLOUD-NEW");                // 云端被外部动过 → 下次 push If-Match 412
   await f.save(enc("MINE-2"), { tryPush: true });      // 保存并上传 → 412 → 弹
@@ -126,7 +127,7 @@ test("[open-conflict] 保存路径 412 弹窗带 occasion='push'（keepMine=立�
 
 test("[open-conflict] in-sync 不弹不拉（无谓冲突不回归）", async () => {
   const { store, conflicts } = rig(() => "cancel");
-  const f = store.file("d.ora", { isZip: false, mode: "existing" });
+  const f = store.file("d.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   const blob = await f.open();
   eq(conflicts.length, 0, "云端没动 → 不弹");
@@ -139,7 +140,7 @@ test("[open-conflict] in-sync 不弹不拉（无谓冲突不回归）", async ()
 //   added by Claude Fable 5, 2026-08-25.
 test("[save-resolution] 保存 412 → takeCloud：save 返回 resolution='takeCloud' + 本地=云端版 + 备份必在", async () => {
   const { provider, local, store } = rig(() => "takeCloud");
-  const f = store.file("wl.ora", { isZip: false, mode: "existing" });
+  const f = store.file("wl.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   provider._seed("wl.ora", "CLOUD-NEW");               // 外部更新云端
   const r = await f.save(enc("MINE"), { tryPush: true });   // 保存 → 412 → sheet → takeCloud
@@ -152,7 +153,7 @@ test("[save-resolution] 保存 412 → takeCloud：save 返回 resolution='takeC
 
 test("[save-resolution] 保存 412 → keepMine：resolution='keepMine'（本地胜，无需重载）", async () => {
   const { provider, store } = rig(() => "keepMine");
-  const f = store.file("km.ora", { isZip: false, mode: "existing" });
+  const f = store.file("km.ora", { mode: "existing" });
   await f.save(enc("V1"), { tryPush: true });
   provider._seed("km.ora", "CLOUD-NEW");
   const r = await f.save(enc("MINE"), { tryPush: true });

@@ -14,8 +14,8 @@ import type { CloudItem, TrashEntry } from "./types.ts";
 
 /** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
 export interface TrashItem {
-  /** 展示/恢复原名（local 行 = 全路径身份；cloud-only 行 = basename，folder context 在云端 trash 已丢）。 */
-  name: string;
+  /** 恢复目标身份（local 行 = 全身份；cloud-only 行 = 只剩最后一段，文件夹在云端回收站里已丢）。0.16.0 起叫 identifier（原 name）。 */
+  identifier: string;
   /** yyyymmddhhmmss（展示/排序；解析不出 → null）。 */
   ts: string | null;
   /** 痕迹所在端。 */
@@ -105,15 +105,15 @@ export function mergeTrash(
       if (ci == null || usedCloud.has(ci)) { lonelyLocals.push(l); continue; }
       usedCloud.add(ci);
       const c = clouds[ci];
-      out.push({ name: l.entry.name, ts: l.ts ?? c.ts, side: "both", encrypted: c.encrypted, conflictLive: false, localKey: l.entry.trashKey, cloudRef: c.item.ref });
+      out.push({ identifier: l.entry.name, ts: l.ts ?? c.ts, side: "both", encrypted: c.encrypted, conflictLive: false, localKey: l.entry.trashKey, cloudRef: c.item.ref });
     }
     for (const l of lonelyLocals) {
       // 纯本地行才可能 conflictLive：本地 trash 有、原名却仍活在权威云端 = 离线删被 edit-wins 撤销 → 两存。
-      out.push({ name: l.entry.name, ts: l.ts, side: "local", encrypted: false, conflictLive: liveCloudNames.has(l.entry.name), localKey: l.entry.trashKey, cloudRef: null });
+      out.push({ identifier: l.entry.name, ts: l.ts, side: "local", encrypted: false, conflictLive: liveCloudNames.has(l.entry.name), localKey: l.entry.trashKey, cloudRef: null });
     }
     clouds.forEach((c, i) => {
       if (usedCloud.has(i)) return;
-      out.push({ name: base, ts: c.ts, side: "cloud", encrypted: c.encrypted, conflictLive: false, localKey: null, cloudRef: c.item.ref });
+      out.push({ identifier: base, ts: c.ts, side: "cloud", encrypted: c.encrypted, conflictLive: false, localKey: null, cloudRef: c.item.ref });
     });
   }
   return out;

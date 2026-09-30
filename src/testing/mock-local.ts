@@ -14,6 +14,8 @@
 import type { Bytes } from "../substrate.ts";
 import type { LocalCache, TrashEntry } from "../types.ts";
 import { restoreTargetName, snapshotStampOf } from "../move-aside.ts";
+import { createIdentifiers, type Identifiers } from "../identifiers.ts";
+const NO_KINDS = createIdentifiers([]);
 
 /** 本地 trash 条目内部形状。 */
 export interface TrashItem {
@@ -56,8 +58,9 @@ export function createMockLocalBacking(): MockLocalBacking {
 
 /** MockLocal 工厂：内存模拟本地持久层（IDB），实现 store.local 契约（测 Store 编排用）。
  *  opts.backing 注入共享底座 = 模拟同设备双 tab（各实例 per-tab seenRev，同 A4 真实现）。 */
-export function createMockLocal(opts: { backing?: MockLocalBacking } = {}): MockLocal {
+export function createMockLocal(opts: { backing?: MockLocalBacking; identifiers?: Identifiers } = {}): MockLocal {
   const backing = opts.backing ?? createMockLocalBacking();
+  const ids = opts.identifiers ?? NO_KINDS;
   const items = backing.items;                       // name → Uint8Array
   const trash = backing.trash;                       // trashKey → { name, bytes }
   const dirIndex = backing.dirIndex;                 // folder → 目录索引缓存 JSON 串
@@ -123,11 +126,20 @@ export function createMockLocal(opts: { backing?: MockLocalBacking } = {}): Mock
     },
     async hardDelete(name: string) { items.delete(name); },
     async restore(trashKey: string) {
+      // 备份腿（真实现：splitKey 认 `backup/` 前缀走 backupP）：mock 的备份住 items 的 `.backup-local/<n>:<name>` 键
+      if (trashKey.startsWith(".backup-local/")) {
+        const bytes = items.get(trashKey);
+        if (!bytes) return null as unknown as string;
+        const orig = trashKey.replace(/^\.backup-local\/\d+:/, "");
+        const target = await restoreTargetName(orig, (n) => items.has(n), null, Date.now(), ids);
+        items.set(target, bytes); items.delete(trashKey);
+        return target;
+      }
       const e = trash.get(trashKey);
       if (!e) return null as unknown as string;   // 同上：缺 key 回 null
       // 与真 local-cache 同策略（案卷 §8；沙箱必须与真机同严）：落点占用 → 改名恢复（快照时刻戳），绝不覆盖。
       const inner = trashKey.replace(/^[a-z]+\//, "");
-      const target = await restoreTargetName(e.name, (n) => items.has(n), snapshotStampOf(inner), Date.now());
+      const target = await restoreTargetName(e.name, (n) => items.has(n), snapshotStampOf(inner), Date.now(), ids);
       items.set(target, e.bytes);
       trash.delete(trashKey);
       return target;

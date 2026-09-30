@@ -10,6 +10,8 @@
 import { createPartitionedBlobStore } from "./blob-partition.ts";
 import { createIdbCache } from "./idb-store.ts";
 import { asideStamp, restoreTargetName, snapshotStampOf } from "./move-aside.ts";
+import { createIdentifiers, type Identifiers } from "./identifiers.ts";
+const NO_KINDS = createIdentifiers([]);
 import type { Bytes, LocalCache, TrashEntry } from "./types.ts";
 
 // trashKey/backupKey 内层 = "<yyyymmddhhmmss-guid>:<name>" → 还原 name（去一段盖戳前缀）。
@@ -24,7 +26,8 @@ function splitKey(k: string): { part: string; inner: string } {
 /** LocalCache 工厂（prod=IDB）：files/trash/backup 三分区的本地持久层，内容无关、只存不透明 blob。
  *  dbName 必须已带命名空间（createStore 传 `${appId}.${databaseId}`）——同 origin 兄弟 PWA /
  *  多 store 实例隔离，见 idb-store.ts 头注释。 */
-export function createLocalCache(dbName: string): LocalCache {
+export function createLocalCache(dbName: string, opts: { identifiers?: Identifiers } = {}): LocalCache {
+  const ids = opts.identifiers ?? NO_KINDS;   // 不给 = 没有文档种类：恢复撞名一律按最后一个点插戳（0.15.2 行为）
   const bs = createPartitionedBlobStore(dbName);
   const files = bs.partition("files");
   const trashP = bs.partition("trash");
@@ -96,7 +99,7 @@ export function createLocalCache(dbName: string): LocalCache {
       // 案卷 §8（2026-08-25）：旧版无条件 moveTo = idb.rename 落点覆盖——恢复正打开的同名会被下次保存
       //   静默盖掉（trash 份已 move 走 = 恢复字节真丢）、恢复撞未推 dirty 会吞编辑。落点占用 → 改名恢复
       //   （快照时刻戳，绝不覆盖 files 分区既有字节）。
-      const target = await restoreTargetName(orig, (n) => files.exists(n), snapshotStampOf(inner), Date.now());
+      const target = await restoreTargetName(orig, (n) => files.exists(n), snapshotStampOf(inner), Date.now(), ids);
       await (part === "backup" ? backupP : trashP).moveTo(inner, "files", target);
       return target;
     },

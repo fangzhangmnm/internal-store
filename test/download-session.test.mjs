@@ -9,6 +9,7 @@
 //   · promote 不覆盖已有本地副本（§A：连 clean 副本都不碰，dirty 更不必说）。
 //   · store 级：keepOffline 进度回调 + openStream 本地面/云端面/absent。
 import { describe, it, assert, eq } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createDownloadSessions, EtagChangedError } from "../src/download-session.ts";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
@@ -194,7 +195,7 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const provider = createMockProvider();
     const local = createMockLocal();
     const staging = memStaging();
-    const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
       appId: "test", provider, local, kv: memKv(), staging, stagingChunkBytes: 4, ui: UI,
       validateAdopt: () => true, isOnline: () => true, signedIn: () => true, skipMigration: true,
     });
@@ -206,18 +207,18 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const data = bytes(10);
     provider._seed("t.mp3", data);
     const prog = [];
-    await store.file("t.mp3", { isZip: false, mode: "existing" }).keepOffline({ onProgress: (d, t) => prog.push([d, t]) });
+    await store.file("t.mp3", { mode: "existing" }).keepOffline({ onProgress: (d, t) => prog.push([d, t]) });
     assert(local._items.has("t.mp3"), "本地已留离线");
     eq([...local._items.get("t.mp3")].join(","), [...data].join(","), "字节逐位对");
     assert(prog.length > 0 && prog.at(-1)[0] === 10, "进度收在 total");
-    assert(await store.file("t.mp3", { isZip: false, mode: "existing" }).isKeptOffline(), "isKeptOffline true");
+    assert(await store.file("t.mp3", { mode: "existing" }).isKeptOffline(), "isKeptOffline true");
   });
 
   it("openStream 云端面：read 中段逐位对；keep() 后本地落全量；absent → null", async () => {
     const { store, provider, local } = mkStore();
     const data = bytes(10);
     provider._seed("s.mp3", data);
-    const h = await store.file("s.mp3", { isZip: false, mode: "existing" }).openStream();
+    const h = await store.file("s.mp3", { mode: "existing" }).openStream();
     assert(h, "云端面句柄");
     eq(h.totalSize, 10);
     const mid = await h.read(3, 5);
@@ -225,14 +226,14 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     await h.keep();
     h.close();
     eq([...local._items.get("s.mp3")].join(","), [...data].join(","), "keep 落全量");
-    eq(await store.file("没有这个", { isZip: false, mode: "existing" }).openStream(), null, "absent → null（诚实）");
+    eq(await store.file("没有这个", { mode: "existing" }).openStream(), null, "absent → null（诚实）");
   });
 
   it("file.stagingCoverage：流播中段 → partial；keepOffline 升格后 → null 且 isKeptOffline", async () => {
     const { store, provider } = mkStore();
     const data = bytes(10);
     provider._seed("c.mp3", data);
-    const f = store.file("c.mp3", { isZip: false, mode: "existing" });
+    const f = store.file("c.mp3", { mode: "existing" });
     eq(await f.stagingCoverage(), null, "没流过 → null");
     const h = await f.openStream();
     await h.read(0, 5);                                   // 分片 0+1
@@ -250,7 +251,7 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const staging = memStaging();
     let online = true;
     const errors = [];
-    const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
       appId: "test", provider, local, kv: memKv(), staging, stagingChunkBytes: 4,
       ui: { ...UI, reportError: (e) => errors.push(String(e?.message ?? e)) },
       validateAdopt: () => true, isOnline: () => online, signedIn: () => true, skipMigration: true,
@@ -258,39 +259,39 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     const data = bytes(10);
     provider._seed("off.mp3", data);
     // 全量流播（staging 完整）→ 断网
-    const h = await store.file("off.mp3", { isZip: false, mode: "existing" }).openStream();
+    const h = await store.file("off.mp3", { mode: "existing" }).openStream();
     await h.read(0, 10); h.close();
     online = false;
     provider.list = () => { throw new Error("离线"); };
     const origRange = provider.downloadRange.bind(provider);
     let ranges = 0;
     provider.downloadRange = (...a) => { ranges++; return origRange(...a); };
-    await store.file("off.mp3", { isZip: false, mode: "existing" }).keepOffline();
+    await store.file("off.mp3", { mode: "existing" }).keepOffline();
     assert(local._items.has("off.mp3"), "★离线升格落地");
     eq([...local._items.get("off.mp3")].join(","), [...data].join(","), "字节逐位对");
     eq(ranges, 0, "★零网络");
-    eq(await store.file("off.mp3", { isZip: false, mode: "existing" }).stagingCoverage(), null, "升格后清账");
+    eq(await store.file("off.mp3", { mode: "existing" }).stagingCoverage(), null, "升格后清账");
     // 不完整案：只流了中段 → 离线 keepOffline 报人话、不落地、残片不清
     online = true;
     provider._seed("part.mp3", data);
-    const h2 = await store.file("part.mp3", { isZip: false, mode: "existing" }).openStream();
+    const h2 = await store.file("part.mp3", { mode: "existing" }).openStream();
     await h2.read(4, 4); h2.close();
     online = false;
-    await store.file("part.mp3", { isZip: false, mode: "existing" }).keepOffline();
+    await store.file("part.mp3", { mode: "existing" }).keepOffline();
     assert(!local._items.has("part.mp3"), "不完整不落地");
     assert(errors.some((m) => m.includes("不完整")), `报人话（实=${errors.join("|")}）`);
-    assert(await store.file("part.mp3", { isZip: false, mode: "existing" }).stagingCoverage(), "残片不清（仍可复用）");
+    assert(await store.file("part.mp3", { mode: "existing" }).stagingCoverage(), "残片不清（仍可复用）");
   });
 
   it("openStream 本地面：本地有副本 → 切片直读（不打云）", async () => {
     const { store, provider, local } = mkStore();
     const data = bytes(10);
     provider._seed("l.mp3", data);
-    await store.file("l.mp3", { isZip: false, mode: "existing" }).keepOffline();
+    await store.file("l.mp3", { mode: "existing" }).keepOffline();
     let ranges = 0;
     const orig = provider.downloadRange.bind(provider);
     provider.downloadRange = (...a) => { ranges++; return orig(...a); };
-    const h = await store.file("l.mp3", { isZip: false, mode: "existing" }).openStream();
+    const h = await store.file("l.mp3", { mode: "existing" }).openStream();
     const mid = await h.read(2, 6);
     eq([...mid].join(","), [...data.slice(2, 8)].join(","), "本地切片逐位对");
     eq(ranges, 0, "★零云端往返");

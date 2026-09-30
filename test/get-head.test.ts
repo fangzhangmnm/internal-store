@@ -2,13 +2,14 @@
 //   起因 = CatsUp `.glb` 封面（glTF 2.1 asset.thumbnail 在 BIN 首段；zip 尾片 getPeek 对「头在前」格式无用）。
 //   escalate 记录：ai-docs/20260920-request-head-peek.md。created 2026-09-20 by Claude Fable 5.1
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { memKv } from "../src/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 
-const mkStore = (provider: ReturnType<typeof createMockProvider>, online = true) => createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+const mkStore = (provider: ReturnType<typeof createMockProvider>, online = true) => createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
   appId: "test", provider,
   ui: { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} } as never,
   validateAdopt: () => true, kv: memKv(), local: createMockLocal(),
@@ -30,7 +31,7 @@ test("[getHead] 纯云端 → pullRange(0,n) 取头片；不整份下载、不�
   provider._seed("scene.glb", seq(5000));
   const spy = spyRange(provider);
   const store = mkStore(provider);
-  const f = store.file("scene.glb", { isZip: false, mode: "existing" });
+  const f = store.file("scene.glb", { mode: "existing" });
   const head = await f.getHead({ bytesLength: 64, source: "local" });
   assert(!!head, "纯云端应经 byte-range 取到头片");
   assert(bytesEq(await u8(head!), seq(64)), "头片 = 文件前 64 字节");
@@ -43,7 +44,7 @@ test("[getHead] 本地有副本 → Blob.slice（零网络）", async () => {
   const provider = createMockProvider();
   const spy = spyRange(provider);
   const store = mkStore(provider);
-  const f = store.file("local.glb", { isZip: false, mode: "new" });
+  const f = store.file("local.glb", { mode: "new" });
   await f.save(seq(3000, 7), { tryPush: false });
   const head = await f.getHead({ bytesLength: 100, source: "local" });
   assert(!!head && bytesEq(await u8(head), seq(100, 7)), "本地路径：前 100 字节");
@@ -54,7 +55,7 @@ test("[getHead] source:\"cloud\" 本地有也只看云端（绝不落回本地�
   const provider = createMockProvider();
   provider._seed("both.glb", seq(2000, 100));   // 云端版
   const store = mkStore(provider);
-  const f = store.file("both.glb", { isZip: false, mode: "existing" });
+  const f = store.file("both.glb", { mode: "existing" });
   await f.save(seq(2000, 200), { tryPush: false });   // 本地版（未推）
   const cloud = await f.getHead({ bytesLength: 16, source: "cloud" });
   const local = await f.getHead({ bytesLength: 16, source: "local" });
@@ -66,7 +67,7 @@ test("[getHead] bytesLength 超过文件 → 整份；0 → 空 Blob", async () 
   const provider = createMockProvider();
   provider._seed("tiny.glb", seq(40));
   const store = mkStore(provider);
-  const f = store.file("tiny.glb", { isZip: false, mode: "existing" });
+  const f = store.file("tiny.glb", { mode: "existing" });
   const all = await f.getHead({ bytesLength: 1 << 20, source: "local" });
   assert(!!all && bytesEq(await u8(all), seq(40)), "越界钳到文件末");
   const none = await f.getHead({ bytesLength: 0, source: "local" });
@@ -77,7 +78,7 @@ test("[getHead] 加密件 → null（云端加密名 / 本地密文容器都拒�
   const provider = createMockProvider();
   provider._seed("secret.glb.zip", seq(500));   // 薄默认 encFileName = 追加 .zip → _find 命中 enc:true
   const store = mkStore(provider);
-  const f = store.file("secret.glb", { isZip: false, mode: "existing" });
+  const f = store.file("secret.glb", { mode: "existing" });
   eq(await f.getHead({ bytesLength: 64, source: "local" }), null, "云端命中加密容器名 → null");
   eq(await f.getHead({ bytesLength: 64, source: "cloud" }), null, "cloud 视角同样 null");
 });
@@ -85,16 +86,16 @@ test("[getHead] 加密件 → null（云端加密名 / 本地密文容器都拒�
 test("[getHead] 云端没有且无本地 → null；离线且无本地 → null（不打云腿）", async () => {
   const provider = createMockProvider();
   const spy = spyRange(provider);
-  eq(await mkStore(provider).file("ghost.glb", { isZip: false, mode: "existing" }).getHead({ bytesLength: 64, source: "local" }), null, "两边都没有 → null");
+  eq(await mkStore(provider).file("ghost.glb", { mode: "existing" }).getHead({ bytesLength: 64, source: "local" }), null, "两边都没有 → null");
   provider._seed("offline.glb", seq(100));
-  eq(await mkStore(provider, false).file("offline.glb", { isZip: false, mode: "existing" }).getHead({ bytesLength: 64, source: "cloud" }), null, "离线 → null");
+  eq(await mkStore(provider, false).file("offline.glb", { mode: "existing" }).getHead({ bytesLength: 64, source: "cloud" }), null, "离线 → null");
   eq(spy.calls.length, 0, "离线不打 range");
 });
 
 test("[getHead] ZipFile 也有 getHead（RawFile 面继承）", async () => {
   const provider = createMockProvider();
   provider._seed("a.ora", seq(10));
-  const z = mkStore(provider).file("a.ora", { isZip: true, mode: "existing" });
+  const z = mkStore(provider).zip("a.ora", { mode: "existing" });
   eq(typeof z.getHead, "function");
   const h = await z.getHead({ bytesLength: 4, source: "local" });
   assert(!!h && bytesEq(await u8(h), seq(4)));

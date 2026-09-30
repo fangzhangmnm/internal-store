@@ -75,12 +75,12 @@ test("unsealForRead：明文 → 原样透传", async () => {
 
 // ── 2026-09-09 meta.bin 的 ext 按逻辑名推导（同 store 里 .txt 稿 + .xxx.zip 工程并存，store 级单值 crypt.ext 必错一种）──
 import { cryptExtFor } from "../src/seal.ts";
-test("cryptExtFor · 逻辑名有点 → 最后一个点之后；没点 / 隐藏名 / 尾点 → 回退 cfg.ext；夹名里的点不算", () => {
-  eq(cryptExtFor("a.txt", "dat"), "txt");
-  eq(cryptExtFor("夏音.webxiaoheiwu.zip", "txt"), "zip", "工程 ext=zip 而非 store 级的 txt");
-  eq(cryptExtFor("A/wall.ora", "dat"), "ora");
-  eq(cryptExtFor("dir.v2/name", "dat"), "dat", "夹名的点不算，回退");
-  eq(cryptExtFor(".hidden", "dat"), "dat");
-  eq(cryptExtFor("a.", "dat"), "dat");
+test("cryptExtFor · 逻辑名有点 → 最后一个点之后；没点 / 隐藏名 / 尾点 → undefined（0.16.0 删了 crypt.ext 回退）；夹名里的点不算；故意不按 docKinds 的后缀取（meta.bin 字节不变）", () => {
+  eq(cryptExtFor("a.txt"), "txt");
+  eq(cryptExtFor("夏音.webxiaoheiwu.zip"), "zip", "工程 ext=zip：meta.bin 里记的和 0.15.2 一样，旁边的 name 才是完整身份");
+  eq(cryptExtFor("A/wall.ora"), "ora");
+  eq(cryptExtFor("dir.v2/name"), undefined, "夹名的点不算");
+  eq(cryptExtFor(".hidden"), undefined);
+  eq(cryptExtFor("a."), undefined);
   eq(cryptExtFor("bare"), undefined, "无回退 → undefined（encryption 包再回退 bin）");
 });

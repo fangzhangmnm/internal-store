@@ -2,6 +2,7 @@
 //   dispose（拒后续 + drain）· dirty facet（count/pushAll）· CloudStaleRefError（ref 失效 404 错误族）。
 // created 2026-08-26 by Claude Fable 5 (claude-fable-5)
 import { test, eq, assert } from "./runner.mjs";
+import { TEST_KINDS } from "./kinds.mjs";
 import { createStore, StoreDisposedError } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
@@ -21,10 +22,10 @@ function dumpKv() {
 const STUB_UI = { busy: (_l: string, fn: () => Promise<unknown>) => fn(), resolveConflict: async () => "cancel", reportError: () => {} } as never;
 function mkStore(provider = createMockProvider()) {
   const kv = dumpKv();
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
     appId: "wp", provider, ui: STUB_UI,
     validateAdopt: () => true, kv, local: createMockLocal(),
-    fileName: (n: string) => n, isOnline: () => true, signedIn: () => true, skipMigration: true,
+    isOnline: () => true, signedIn: () => true, skipMigration: true,
   });
   return { provider, store, kv };
 }
@@ -47,14 +48,14 @@ test("[drain] substrate.drain 等 in-flight serialize 链（含 drain 开始后�
 // ── dispose：拒后续调用（含 dispose 前已握着的 file 对象）+ 幂等 ─────────────────────────────
 test("[dispose] dispose 后一切面抛 StoreDisposedError（新调用 + 旧句柄都拒）；幂等", async () => {
   const { store } = mkStore();
-  const held = store.file("旧句柄.ora", { isZip: false, mode: "existing" });   // dispose **前**拿到的对象
-  await store.file("a.ora", { isZip: false, mode: "existing" }).save(enc("x"), { tryPush: false });
+  const held = store.file("旧句柄.ora", { mode: "existing" });   // dispose **前**拿到的对象
+  await store.file("a.ora", { mode: "existing" }).save(enc("x"), { tryPush: false });
   await store.dispose();
   await store.dispose();                                       // 幂等：第二次静默通过
   for (const fn of [
-    () => store.file("b.ora", { isZip: false, mode: "existing" }),
+    () => store.file("b.ora", { mode: "existing" }),
     () => store.collection("prefs"),
-    () => store.files.nameOccupied("a.ora"),
+    () => store.files.occupied("a.ora"),
     () => store.files.watchFolder("", () => {}),
     () => store.files.dirty.count(),
     () => held.save(enc("y")),                                 // 旧句柄同样拒（检查在调用时刻）
@@ -68,7 +69,7 @@ test("[dispose] dispose 后一切面抛 StoreDisposedError（新调用 + 旧句�
 // ── dirty facet：count 只返标量；pushAll 推上并清账；失败留 dirty 报名字 ─────────────────────
 test("[dirty] save(tryPush:false) → count=1；pushAll 推上 → count=0、云端字节在", async () => {
   const { store, provider } = mkStore();
-  await store.file("画.ora", { isZip: false, mode: "existing" }).save(enc("bytes-v1"), { tryPush: false });
+  await store.file("画.ora", { mode: "existing" }).save(enc("bytes-v1"), { tryPush: false });
   eq(await store.files.dirty.count(), 1, "未推账 =1");
   const r = await store.files.dirty.pushAll();
   eq(`${r.pushed}/${r.failed.length}`, "1/0", "推上 1、失败 0");
@@ -78,7 +79,7 @@ test("[dirty] save(tryPush:false) → count=1；pushAll 推上 → count=0、云
 
 test("[dirty] pushAll 推不上（云端 5xx 耗尽重试）→ failed 报名字、dirty 账**不清**（绝不谎报）", async () => {
   const { store } = mkStore(createMockProvider().injectFault({ op: "upload", kind: "error", status: 500, times: 99 }));
-  await store.file("困.ora", { isZip: false, mode: "existing" }).save(enc("bytes"), { tryPush: false });
+  await store.file("困.ora", { mode: "existing" }).save(enc("bytes"), { tryPush: false });
   const r = await store.files.dirty.pushAll();
   eq(r.pushed, 0, "没推上");
   eq(r.failed.join(","), "困.ora", "failed 返名字（错误报告）");
@@ -99,13 +100,13 @@ test("[stale-ref] cloud.restore/purge 对失效 ref → CloudStaleRefError（预
 test("[dirty] 加密件、锁着（getPassword=null）：pushAll 照推 → pushed=1、云端字节 = 本地容器逐位相同、账清", async () => {
   let pw: string | null = "pw"; let online = false;
   const kv = dumpKv(); const local = createMockLocal(); const provider = createMockProvider();
-  const store = createStore({ reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
-    appId: "wp", provider, ui: STUB_UI, crypt: { ext: "txt", getPassword: () => pw },
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "wp", provider, ui: STUB_UI, crypt: { getPassword: () => pw },
     validateAdopt: () => true, kv, local,
-    fileName: (n: string) => n, isOnline: () => online, signedIn: () => online, skipMigration: true,
+    isOnline: () => online, signedIn: () => online, skipMigration: true,
   });
-  await store.file("密.txt", { isZip: false, mode: "new" }).save(enc("SECRET-v1"), { tryPush: false });   // 登出态落盘（tryPush:false 不进离线上传队列）
-  const r0 = await store.file("密.txt", { isZip: false, mode: "existing" }).encrypt({ isOnline: () => online });   // 有密码时封（离线：云腿 deferred）
+  await store.file("密.txt", { mode: "new" }).save(enc("SECRET-v1"), { tryPush: false });   // 登出态落盘（tryPush:false 不进离线上传队列）
+  const r0 = await store.file("密.txt", { mode: "existing" }).encrypt({ isOnline: () => online });   // 有密码时封（离线：云腿 deferred）
   assert(r0.status !== "locked" && r0.status !== "offline", `encrypt offline on a never-synced file: ${r0.status}`);
   const atRest = await local.get("密.txt"); assert(atRest, "本地有字节");
   const atRestU8 = atRest instanceof Blob ? new Uint8Array(await atRest.arrayBuffer()) : new Uint8Array(atRest as Uint8Array);
