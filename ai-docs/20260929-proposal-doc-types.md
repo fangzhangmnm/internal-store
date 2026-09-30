@@ -347,3 +347,5 @@ user 2026-09-29：「还有几个问题要问我？」
 api 差异全文 = `git diff v0.15.2..v0.16.0 -- api/store.d.ts`。宿主升级时的编译错误就是迁移清单：
 `docKinds` 必填；`file(n, {isZip})` → `file(n, {mode})` / `zip(n, {mode})`；`Item.path` → `identifier`；`FolderSnapshot.path` → `folder`；`TrashItem.name` → `identifier`；
 `files.nameOccupied` → `occupied`；`activeFileName` → `activeIdentifier`；`hiddenName` → `hidden`；`reconcileAll({activeIdentifier})`；删 `fileName` / `encFileName` / `toName` / `crypt.ext`。
+
+**0.16.1**（同日）：`createIdentifiers` 也从主门牌导出——宿主把 `docKinds` 表放在自己的 config 里，`createIdentifiers(表)` 既喂 createStore 也给自己的纯代码和测试用，两边永远是同一套切法。

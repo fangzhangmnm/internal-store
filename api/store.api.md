@@ -182,6 +182,11 @@ export interface CollectionInitItem {
 // @public
 export function createFolderProvider(root: FolderDirHandle): CloudProvider;
 
+// Warning: (ae-forgotten-export) The symbol "IdentifierCodec" needs to be exported by the entry point index.d.ts
+//
+// @public (undocumented)
+export function createIdentifiers(docKinds: readonly DocKind[]): IdentifierCodec;
+
 // @public
 export function createLocalCache(dbName: string, opts?: {
     identifiers?: Identifiers;

@@ -258,6 +258,8 @@ export declare interface CollectionInitItem {
  *  浏览器专用；auth/权限生命周期（句柄持久化、re-request 手势）归 app 层。 */
 export declare function createFolderProvider(root: FolderDirHandle): CloudProvider;
 
+export declare function createIdentifiers(docKinds: readonly DocKind[]): IdentifierCodec;
+
 /** LocalCache 工厂（prod=IDB）：files/trash/backup 三分区的本地持久层，内容无关、只存不透明 blob。
  *  dbName 必须已带命名空间（createStore 传 `${appId}.${databaseId}`）——同 origin 兄弟 PWA /
  *  多 store 实例隔离，见 idb-store.ts 头注释。 */
@@ -594,6 +596,19 @@ export declare interface GraphTransport {
     getApprootId(): Promise<string>;
     /** 确保子夹存在，返其 id。 */
     ensureSubfolder(name: string): Promise<string>;
+}
+
+/** 库内用的超集（不出门牌）：身份 ↔ 云端真实文件名。 */
+declare interface IdentifierCodec extends Identifiers {
+    /** 这份文档的加密容器在云端叫什么 = 身份 + ".zip"。 */
+    sealed(identifier: string): string;
+    /** 云端真实文件名 → 身份。
+     *  先去掉结尾的一个小写 ".zip"：剩下的认得是文档 → 那是它的加密容器（sealed）；否则整个名字就是身份、不是容器。
+     *  不认得的文件（图片、杂物）永远按明文原名对待——只有文档会被封。 */
+    fromCloud(cloudName: string): {
+        identifier: string;
+        sealed: boolean;
+    };
 }
 
 export declare interface Identifiers {

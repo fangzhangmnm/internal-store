@@ -72,7 +72,7 @@ export type { EncryptionPort } from "./create-store.ts";   // 加密端口（@in
 export type { CollectionConfig } from "./collection.ts";
 export type { TrashItem } from "./trash-merge.ts";
 export type { DocKind, DocIdentifier, Identifiers } from "./identifiers.ts";   // 0.16.0：身份的语法（docKinds 表）
-export { withStemTail, validateDocKinds } from "./identifiers.ts";
+export { createIdentifiers, withStemTail, validateDocKinds } from "./identifiers.ts";   // 0.16.1：createIdentifiers 也出门牌——宿主的纯代码 / gallery 的测试可以不经 store 实例用同一套切名逻辑
 /** OneDrive provider 面：工厂配置 + auth 契约 + Graph transport 形状。 */
 export type { OneDriveAuth, OneDriveConfig } from "./providers/index.ts";
 export type { GraphTransport, RawGraphItem } from "./onedrive-provider.ts";
