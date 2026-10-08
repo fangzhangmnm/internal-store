@@ -130,7 +130,17 @@ export function createFreshness(cfg: FreshnessCfg) {
       if (!meta) return { status: "cloud-absent" };
       const base = head.seenBase(name);
       // !base ∧ 云端有 → 同 open：按 moved 处理（对齐 listing；clean-only 路径 → 直接快进采纳云端）。
-      if (base != null && meta.etag === base) return { status: "in-sync" };
+      if (base != null && meta.etag === base) {
+        // 0.16.2（2026-10-08，MoonSinger「写着写着过一会就跳一次冲突面」案）：in-sync 也要 markSeen 重捕 _base——和 open 的同一分支对称。
+        //   reload 后内存 _base 空；宿主要是在登录**之前**就开了文档（MoonSinger / WXHW 的 boot 顺序：建 store → 本地恢复 → initAuth），
+        //   open 的 gate 因云端不可达跳过、没重捕；登录后走的是这里（pullIfClean）——以前直接 return，_base 永远空 →
+        //   本 tab 第一次编辑 recordEdit 捕到 parent=null → 推不带 If-Match → conflictBehavior:"fail" → 409 → 误报
+        //   CloudNameCollisionError 冲突面（每次 reload 一次；人选「本地覆盖云端」markSynced 之后才好）。
+        //   安全性同 open 那一行：云端 === 本 tab 已见 base（没动）才调；且进到这里之前 isDirtyAnywhere 已经挡过——只给干净 tab 重捕，
+        //   绝不在云端动过时前推 parent（B1 silent-overwrite 守住）。
+        head.markSeen(name, meta.etag);
+        return { status: "in-sync" };
+      }
       if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡  // fetchMeta 期间用户动了笔 → 放弃
       if (onReplaceStart) onReplaceStart();
       // 逃生 race（2026-08-25）：probe 先到 → "escaped"（分叉 consent）。safePull 继续在后台跑完 = 原名

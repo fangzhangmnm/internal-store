@@ -89,6 +89,24 @@ test("refresh dirty → dirty-skip（事件里绝不弹 sheet）", async () => {
   eq(r.status, "dirty-skip", "dirty → 跳过");
 });
 
+test("refresh in-sync 重捕 _base（0.16.2）：登录前开的文档、登录后 pullIfClean 走 refresh → 之后第一次编辑的推必须带 If-Match（MoonSinger 2026-10-08「每次 reload 后第一推弹冲突面」案）", async () => {
+  const provider = createMockProvider();
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });
+  await cloud.push("f", enc("V1"));
+  const etag = cloud.getETag("f");
+  // 模拟 reload + 登录前就开了文档：新建 head（内存 _base 空），durable 轨只有 cloud-sync 的 etag；文档干净（没 dirty）。
+  const head = createLocalHead({ kv: memKv(), getCloudEtag: (n: string) => cloud.getETag(n) });
+  const local = createMockLocal();
+  await local.save("f", enc("V1"));
+  const safeResolve = createSafeResolve({ cloud, local, head, validateAdopt: () => true });
+  const { refresh } = createFreshness({ cloud, head, safeResolve });
+  const r = await refresh("f");
+  eq(r.status, "in-sync", "云端没动 → in-sync");
+  // 修前：refresh in-sync 直接 return，_base 仍空 → 这一笔 recordEdit 捕到 parent=null → ifMatchFor=null → 推走 conflictBehavior:"fail" → 409 误报 collision。
+  head.recordEdit("f");
+  eq(head.ifMatchFor("f"), etag, "refresh in-sync 之后的第一次编辑：parent = 当前云版 etag，推带 If-Match（不再误报 collision）");
+});
+
 test("refresh clean 动过 → fast-forwarded", async () => {
   const { cloud, local, head, refresh } = rig();
   await cloud.push("f", enc("CLOUD")); head.markSeen("f", "OLD");
