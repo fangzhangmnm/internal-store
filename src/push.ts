@@ -15,9 +15,9 @@ import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
 type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 const passBusy: Busy = (_l, fn) => fn();
 const isConflict = (e: unknown) => !!e && ((e as { name?: string }).name === "CloudConflictError" || (e as { status?: number }).status === 412);
-// 0.17.1：4 次 × 200·n ms（共 2 s）→ 5 次、1 / 2 / 4 / 8 s（共 15 s），熬得过 iOS 切网络那几秒（KudsRocket 10-14 iPad：网还没回来就放弃）。
-//   模块级可改 = 测试把退避拨小（耗尽重试的用例不能真等 15 s）；不是公开 API。
-export const pushRetryDefaults = { maxAttempts: 5, backoffMs: 1000 };
+// 默认 = 0.17.0：4 次 × 200·n ms（共 2 s）。0.17.1 曾改成 5 次 1/2/4/8 s（熬 iOS 切网络），0.17.2 退回默认、改成消费方显式开
+//   （createStore({ pushRetry: { maxAttempts: 5, backoffMs: 1000, exponential: true } })；user 2026-10-15「行为变更默认关」）。模块级可改只给测试。
+export const pushRetryDefaults = { maxAttempts: 4, backoffMs: 200, exponential: false };
 
 function retriable(e: unknown): boolean {
   const x = e as { status?: number; name?: string } | null;
@@ -38,6 +38,8 @@ export interface PushCfg {
   busy?: Busy;
   maxAttempts?: number;
   backoffMs?: number;
+  /** 退避 backoffMs × 2^(n-1)（封顶 15 s）；默认线性 backoffMs × n。 */
+  exponential?: boolean;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -63,7 +65,7 @@ export interface PushResult { status: PushStatus; dirtyAfter?: boolean; resoluti
 
 export function createPush(cfg: PushCfg) {
   const { cloud, head, seal, safeResolve, serialize, editVersion,
-    busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
+    busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, exponential = pushRetryDefaults.exponential, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
   async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress }: PushOpts): Promise<PushResult> {
     const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
@@ -112,7 +114,7 @@ export function createPush(cfg: PushCfg) {
             const choice = onConflict ? await onConflict({ name }) : "cancel";
             return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
-          if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(Math.min(backoffMs * 2 ** (attempt - 1), 15_000)); continue; }
+          if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(exponential ? Math.min(backoffMs * 2 ** (attempt - 1), 15_000) : backoffMs * attempt); continue; }
           throw e;
         }
       }

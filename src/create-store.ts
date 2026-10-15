@@ -112,6 +112,8 @@ export interface StoreConfig {
    *  驱动（图库长驻轮询归 app，store 保持被动——器官学）；"none" = 只有显式调用，无周期性对齐。
    *  store 行为零分支——这是表态不是开关：逼消费者想过这个问题，而不是无视（persistence 三件套同款）。 */
   reconcilePolicy: "app-driven" | "none";
+  /** 0.17.2：push 重试政策（默认 4 次 × 200·n ms = 0.17.0 行为）。大文件 / 移动网络的消费方（KudsRocket）显式拉长：{ maxAttempts: 5, backoffMs: 1000, exponential: true }。 */
+  pushRetry?: { maxAttempts?: number; backoffMs?: number; exponential?: boolean };
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
     /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
@@ -628,7 +630,7 @@ export function createStore(config: StoreConfig) {
   const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn, label as StoreTextKey);
   /** 带插值参数的直调版（key 同样透传给宿主）。 */
   const busyK = <T>(key: StoreTextKey, params: Record<string, string> | undefined, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, key, params), fn, key);
-  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT });
+  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, ...config.pushRetry });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
   const uploadReplayPolicy: UploadReplayPolicy = config.offlineUploadReplay ?? "manual";
@@ -637,7 +639,7 @@ export function createStore(config: StoreConfig) {
     if (uploadReplayPolicy === "ask" && !ui.confirmReplay) throw new Error("createStore: offlineUploadReplay='ask' 需 ui.confirmReplay（回线询问用户）");
   }
   // 后台 push 实例：与 pushMod 同深模块编排，唯 busy 换透传——drain 不锁屏（ADR-0018 §4：非 busy 后台）。
-  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn() });
+  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), ...config.pushRetry });
   // 0.15.1（2026-09-26，WXHW user「为什么推加密件需要密码。不就是二进制吗」→「修」）：**本地 at-rest 字节直推，不解壳不重封**。
   //   以前先 unsealForRead 得明文再交 doPush 重新 sealForWrite —— 等于要密码才能把已经封好的容器搬上云；锁着（无密码）= status "locked" 留 dirty，
   //   pushAll / 离线补推在锁屏 / reload 后全推不动。sealForWrite 本就对「已是容器」原样透传（搬运路径），明文文件也原样（prev 非容器），

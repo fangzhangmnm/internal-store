@@ -403,6 +403,9 @@ export declare function createStore(config: StoreConfig): {
     }): Promise<void>;
 };
 
+/** 推荐值（KudsRocket 在用）：消费方显式传给 createOneDriveProvider({ transport: { timeouts } }) 才生效。 */
+export declare const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts;
+
 /** 删除操作的终态。 */
 export declare interface DelResult {
     /** 终态串。 */
@@ -585,6 +588,13 @@ export declare interface FreshResult {
     error?: unknown;
 }
 
+export declare interface GraphTimeouts {
+    meta: number;
+    chunk: number;
+    range: number;
+    blob: number;
+}
+
 /** 把 Graph transport（graph.ts）翻成库的 CloudProvider（原始 Graph item → CloudItem）。
  *  纯：graph **必传**（测试传 graphFromProvider(MockCloudProvider)，与 graphToCloudProvider 复合 ≈ 恒等）。 */
 export declare function graphToCloudProvider(graph: GraphTransport): CloudProvider;
@@ -628,6 +638,18 @@ export declare interface GraphTransport {
     getApprootId(): Promise<string>;
     /** 确保子夹存在，返其 id。 */
     ensureSubfolder(name: string): Promise<string>;
+}
+
+/** 0.17.2（user 2026-10-15「行为变更默认关、消费方显式开」）：传输层的行为开关。不传 = 0.17.0 的行为（无超时、单块失败整份重试、提交前不核）。 */
+export declare interface GraphTransportOptions {
+    /** 每种请求的超时（ms）；不传 = 不设超时。 */
+    timeouts?: Partial<GraphTimeouts>;
+    /** 分块上传单块失败：问会话传到哪了、退避、接着传（不传 = 整份失败交上层重试）。 */
+    chunkResume?: boolean;
+    /** 分块上传提交最后一块前再核一次 eTag（多一个 GET；不传 = 只在开会话时核）。 */
+    verifyChunkedCommit?: boolean;
+    /** 测试用：退避的 sleep。 */
+    sleep?: (ms: number) => Promise<void>;
 }
 
 /** 库内用的超集（不出门牌）：身份 ↔ 云端真实文件名。 */
@@ -798,6 +820,8 @@ export declare interface OneDriveAuth {
 
 /** createOneDriveProvider 的配置（clientId 必传；msalUrl = vendored MSAL 脚本路径；scopes/authority 有家族默认）。 */
 export declare interface OneDriveConfig {
+    /** 0.17.2：传输层行为开关（超时 / 单块续传 / 提交前核 eTag）。不传 = 0.17.0 行为。见 graph.ts GraphTransportOptions。 */
+    transport?: GraphTransportOptions;
     /** app 注册的 clientId（必传）。 */
     clientId?: string;
     /** MSAL authority（有家族默认）。 */
@@ -1115,6 +1139,12 @@ export declare interface StoreConfig {
      *  驱动（图库长驻轮询归 app，store 保持被动——器官学）；"none" = 只有显式调用，无周期性对齐。
      *  store 行为零分支——这是表态不是开关：逼消费者想过这个问题，而不是无视（persistence 三件套同款）。 */
     reconcilePolicy: "app-driven" | "none";
+    /** 0.17.2：push 重试政策（默认 4 次 × 200·n ms = 0.17.0 行为）。大文件 / 移动网络的消费方（KudsRocket）显式拉长：{ maxAttempts: 5, backoffMs: 1000, exponential: true }。 */
+    pushRetry?: {
+        maxAttempts?: number;
+        backoffMs?: number;
+        exponential?: boolean;
+    };
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
         /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */

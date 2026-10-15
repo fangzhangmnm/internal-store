@@ -9,3 +9,7 @@
 - `vendor/` 是**测试专用夹具**（zip-js + 7z-wasm 喂加密契约测试），不进 tgz；引擎运行时 codec 由宿主注入，库内零内容格式知识。
 - 测试 `npm test`（node runner，实时耗时 + 10s 超时墙）；构建 `npm run build`（tsc → dist）。
 - `journal/` 人类区，AI 永不写（家规硬规则 #2）。
+- **行为变更默认关、消费方显式开（2026-10-15 user「123同意」，起因 = KudsRocket 的体量 / 频率和画画完全不同，user「非常怕家族文件的那些app开始丢画」）**：
+  ① 传输层 / 重试这类**行为**变更一律做成 `createOneDriveProvider({ transport })` / `createStore({ pushRetry })` 这样的显式开关，默认 = 变更前的行为；
+  ② KudsRocket 这种大文件高频消费方专属的东西（流式上传、暂存区、将来的 delta 列举 / 索引文件）做独立模块或独立包，艺术类 app 永不 import；
+  ③ 每个版本的发版说明（ai-docs/<日期>-<版本>-*.md）单列「行为差异」，艺术类 app 升级时逐条过、不默认接受。钉版本是现有的隔离墙（WeebPaint 钉 0.13.0）。edited by Claude Fable 5.1 2026-10-15

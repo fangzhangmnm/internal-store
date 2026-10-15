@@ -37,6 +37,8 @@ export interface OneDriveAuth {
 
 /** createOneDriveProvider 的配置（clientId 必传；msalUrl = vendored MSAL 脚本路径；scopes/authority 有家族默认）。 */
 export interface OneDriveConfig {
+  /** 0.17.2：传输层行为开关（超时 / 单块续传 / 提交前核 eTag）。不传 = 0.17.0 行为。见 graph.ts GraphTransportOptions。 */
+  transport?: import("./graph.ts").GraphTransportOptions;
   /** app 注册的 clientId（必传）。 */
   clientId?: string;
   /** MSAL authority（有家族默认）。 */
@@ -70,7 +72,7 @@ export function createOneDriveProvider(config: OneDriveConfig = {}): { provider:
   //   2026-08-28 实例化：graph 的 token 源与 approot/subfolder/downloadUrl 缓存全部 per-provider——
   //   同页多 provider（多账号库并联）互不覆盖、互不投毒（旧模块级单例的已知局限就此清除）。
   const hid = config.homeAccountId;
-  const g = createGraph(hid ? () => getTokenFor(hid) : getToken);
+  const g = createGraph(hid ? () => getTokenFor(hid) : getToken, config.transport ?? {});
   // 0.11.6：provider 带 onAuthChanged（reason 透传）——store 据 "signOut" 清 dir-index-cache；expired 不清（凭证过期仍显示云端名单）
   const provider: CloudProvider = Object.assign(graphToCloudProvider(g), {
     onAuthChanged: (cb: (ev: { signedIn: boolean; reason?: AuthState["reason"] }) => void) => onAuthChanged((st) => cb({ signedIn: st.signedIn, reason: st.reason })),

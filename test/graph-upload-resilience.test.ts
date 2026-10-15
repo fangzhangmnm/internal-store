@@ -37,7 +37,7 @@ test("分块上传：一块网络错 → 问会话传到哪了 → 从那里接�
   const orig = globalThis.fetch;
   (globalThis as { fetch: unknown }).fetch = fetchFake;
   try {
-    const g = createGraph(() => Promise.resolve("T"), { sleep: async (ms) => { slept.push(ms); } });
+    const g = createGraph(() => Promise.resolve("T"), { sleep: async (ms) => { slept.push(ms); }, chunkResume: true, verifyChunkedCommit: true });
     const progress: number[] = [];
     const item = await g.uploadFileToApproot("x.crumb", bytes(12 * MiB), "application/octet-stream", { conflictBehavior: "replace", eTag: "base", onProgress: (d) => progress.push(d) });
     eq(item?.eTag, "new", "最后一块的回执");
@@ -54,7 +54,7 @@ test("分块上传：提交前发现云端 eTag 变了 → 撤会话、抛 412�
   const orig = globalThis.fetch;
   (globalThis as { fetch: unknown }).fetch = fetchFake;
   try {
-    const g = createGraph(() => Promise.resolve("T"), { sleep: async () => {} });
+    const g = createGraph(() => Promise.resolve("T"), { sleep: async () => {}, verifyChunkedCommit: true });
     let err: { status?: number } | null = null;
     try { await g.uploadFileToApproot("x.crumb", bytes(12 * MiB), "application/octet-stream", { conflictBehavior: "replace", eTag: "base" }); } catch (e) { err = e as { status?: number }; }
     eq(err?.status, 412, "412 → cloud-sync 翻成 CloudConflictError → 冲突面");
@@ -73,7 +73,7 @@ test("分块上传：连续失败超过上限 → CloudNetworkError（上层整�
     throw new Error("unexpected");
   };
   try {
-    const g = createGraph(() => Promise.resolve("T"), { sleep: async () => {} });
+    const g = createGraph(() => Promise.resolve("T"), { sleep: async () => {}, chunkResume: true });
     let err: unknown = null;
     try { await g.uploadFileToApproot("x.crumb", bytes(6 * MiB), "application/octet-stream", { conflictBehavior: "fail" }); } catch (e) { err = e; }
     assert(err instanceof CloudNetworkError, "放弃后是网络错（可重试语义）：" + String(err));
@@ -94,6 +94,20 @@ test("请求超时：挂死的 fetch 到点被中止 → CloudNetworkError", asy
     assert(Date.now() - t0 < 2000, "没有真等");
   } finally {
     (globalThis as { fetch: unknown }).fetch = orig;
-    createGraph(() => Promise.resolve("T"), { timeouts: {} });   // 还原模块级超时默认值
+    createGraph(() => Promise.resolve("T"));   // 还原：不传 = 没有超时（0.17.0）
   }
+});
+
+test("0.17.2 默认 = 0.17.0 行为：一块网络错直接整份失败（不问会话、不退避），提交前不核 eTag，请求无超时", async () => {
+  const { calls, fetchFake } = harness({ failPutOnce: 5 * MiB, statusEtag: "someone-else" });
+  const orig = globalThis.fetch;
+  (globalThis as { fetch: unknown }).fetch = fetchFake;
+  try {
+    const g = createGraph(() => Promise.resolve("T"));
+    let err: unknown = null;
+    try { await g.uploadFileToApproot("x.crumb", bytes(12 * MiB), "application/octet-stream", { conflictBehavior: "replace", eTag: "base" }); } catch (e) { err = e; }
+    assert(err instanceof CloudNetworkError, "单块网络错 → 整份网络错：" + String(err));
+    eq(calls.filter((c) => c === `GET ${SESS}`).length, 0, "没问会话");
+    assert(!calls.some((c) => c.startsWith(`GET ${ITEM}`)), "没做提交前核 eTag");
+  } finally { (globalThis as { fetch: unknown }).fetch = orig; }
 });

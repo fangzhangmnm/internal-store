@@ -271,6 +271,9 @@ export function createStore(config: StoreConfig): {
 };
 
 // @public
+export const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts;
+
+// @public
 export interface DelResult {
     baseEtag?: string | null;
     deferred?: number;
@@ -429,6 +432,18 @@ export interface FreshResult {
     status?: string;
 }
 
+// @public (undocumented)
+export interface GraphTimeouts {
+    // (undocumented)
+    blob: number;
+    // (undocumented)
+    chunk: number;
+    // (undocumented)
+    meta: number;
+    // (undocumented)
+    range: number;
+}
+
 // @public
 export function graphToCloudProvider(graph: GraphTransport): CloudProvider;
 
@@ -458,6 +473,14 @@ export interface GraphTransport {
         eTag?: string | null;
         onProgress?: (done: number, total: number) => void;
     }): Promise<RawGraphItem | null>;
+}
+
+// @public
+export interface GraphTransportOptions {
+    chunkResume?: boolean;
+    sleep?: (ms: number) => Promise<void>;
+    timeouts?: Partial<GraphTimeouts>;
+    verifyChunkedCommit?: boolean;
 }
 
 // @public (undocumented)
@@ -575,6 +598,7 @@ export interface OneDriveConfig {
     homeAccountId?: string;
     msalUrl?: string | null;
     scopes?: string[];
+    transport?: GraphTransportOptions;
 }
 
 // @public
@@ -779,6 +803,11 @@ export interface StoreConfig {
     offlineUploadReplay?: UploadReplayPolicy;
     persistence: "app-managed" | "none";
     provider: CloudProvider;
+    pushRetry?: {
+        maxAttempts?: number;
+        backoffMs?: number;
+        exponential?: boolean;
+    };
     readOnlyFiles?: boolean;
     reconcilePolicy: "app-driven" | "none";
     signedIn?: () => boolean;
