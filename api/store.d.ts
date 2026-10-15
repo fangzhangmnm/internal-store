@@ -29,6 +29,12 @@ export declare type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T
 /** 落盘/上传的字节正规形态。toU8 把任意来源收敛到它。 */
 export declare type Bytes = Uint8Array;
 
+/** 0.17.0：按需读字节的来源（流式上传用）：宿主边读边给（本地 File、边加密的管线……），库永不整份持有。 */
+export declare interface ByteSource {
+    readonly size: number;
+    read(offset: number, length: number): Promise<Uint8Array>;
+}
+
 /** 整库 onChange 回调（收本批变更的 id 列表）。 */
 export declare type ChangeCb = (changedIds: string[]) => void;
 
@@ -75,6 +81,9 @@ export declare interface CloudProvider {
     downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
     /** 上传文件字节。 */
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+    /** 0.17.0 可选：流式上传——按 source.read 逐块取、逐块传，整份永不进内存。只准 conflictBehavior:"fail"（新建）或带 eTag 的 replace。
+     *  没实现的 provider → cloud-sync.pushStream 抛错（不退回整份拼 Blob：那正是这个接口要避免的）。 */
+    uploadStream?(path: string, source: ByteSource, opts?: UploadOpts): Promise<CloudItem>;
     /** 确保文件夹存在。 */
     ensureFolder(path: string): Promise<string>;
     /** 文件硬删（trash purge）。eTag=If-Match（硬删不可逆，必带）。**文件夹删除不走它**——走 deleteEmptyFolder（护栏在 provider）。 */
@@ -106,6 +115,12 @@ export declare interface CloudSync {
     push(name: string, bytes: Bytes | Blob, opts?: {
         baseEtag?: string | null;
         encrypted?: boolean;
+        onProgress?: (done: number, total: number) => void;
+    }): Promise<PushResult>;
+    /** 0.17.0：流式新建（只新建：云端已有同名 → CloudNameCollisionError，一个字节不传）。不经 seal、不碰本地缓存 / 谱系：
+     *  成功后它是一个纯云端文件（下次 open 走 acquire）。provider 没有 uploadStream → 抛。 */
+    pushStream(name: string, source: ByteSource, opts?: {
+        onProgress?: (done: number, total: number) => void;
     }): Promise<PushResult>;
     /** 拉整份内容（字节 + 权威 item + 建议落地名）；无此件 → null。 */
     pull(name: string): Promise<PullResult | null>;
@@ -339,6 +354,16 @@ export declare function createStore(config: StoreConfig): {
         usage: () => Promise<{
             bytes: number;
             count: number;
+        }>;
+        /** 0.17.0：流式新建一个纯云端文件（KudsRocket「边加密边上传、不留本地副本」）。宿主按 source.read 逐块给字节（本地 File、边加密的管线……），
+         *  库逐块上传（Graph 上传会话；最后一块落地才成文件，中途断了云端没有半成品），**整份永不进内存、不落本地、不写谱系**。
+         *  只准新建：身份已占（本地或云端）→ CloudNameCollisionError，一个字节不传。要网：离线 / 没登录 → 抛（没有本地字节可排队）。
+         *  成功后文件是 cloud-only（本夹 watcher 重画）；之后 open() 走 acquire 照常。进度经 onProgress。busy 键 "file.uploading"（宿主可按键路由到后台提示）。 */
+        uploadStream: (identifier: string, source: ByteSource, opts?: {
+            onProgress?: (done: number, total: number) => void;
+        }) => Promise<{
+            status: "uploaded";
+            size: number;
         }>;
         /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
         ensureFolder: (path: string) => Promise<void>;
@@ -579,6 +604,13 @@ export declare interface GraphTransport {
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
+        onProgress?: (done: number, total: number) => void;
+    }): Promise<RawGraphItem | null>;
+    /** 0.17.0 可选：流式上传（上传会话逐块传；整份不进内存）。 */
+    uploadStreamToApproot?(path: string, source: ByteSource, contentType?: string, opts?: {
+        conflictBehavior?: "replace" | "fail" | "rename";
+        eTag?: string | null;
+        onProgress?: (done: number, total: number) => void;
     }): Promise<RawGraphItem | null>;
     /** 硬删 item。 */
     deleteItem(itemId: string, eTag?: string | null): Promise<void>;
@@ -837,7 +869,8 @@ export declare interface RawFile {
      *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
     save(bytes: Bytes | Blob, opts?: {
         tryPush?: boolean;
-        hint?: unknown;
+        hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */
+        onProgress?: (done: number, total: number) => void;
     }): Promise<SaveResult>;
     /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
     open(): Promise<Blob | null>;
@@ -1149,7 +1182,7 @@ export declare type StoreErrorLevel = "error" | "warning" | "info" | "log";
 /** 宿主翻译注入面（StoreUI.text）。返回 undefined = 该 key 落回英文缺省。 */
 export declare type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
 
-export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
+export declare type StoreTextKey = "sync.pushing" | "file.renaming" | "file.uploading" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
 
 export declare type StoreTextParams = Record<string, string>;
 
@@ -1261,6 +1294,8 @@ export declare interface UploadOpts {
     eTag?: string | null;
     /** 撞名行为。 */
     conflictBehavior?: "fail" | "replace" | "rename";
+    /** 0.17.0：上传进度（done / total 字节）。简单上传只报 0 和 total；分块上传每块报一次。宿主拿它画进度条，不作任何决策。 */
+    onProgress?: (done: number, total: number) => void;
 }
 
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */

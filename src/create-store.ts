@@ -12,6 +12,7 @@ import { createIdentifiers, type DocKind, type Identifiers, type IdentifierCodec
 import { createSafeResolve, type ResolveChoice } from "./safe-resolve.ts";
 import { createPush } from "./push.ts";
 import { createFreshness, type RefreshOpts, type FreshResult } from "./freshness.ts";
+import { createFreshHints } from "./fresh-hints.ts";
 import { createDelete, type DelResult } from "./delete.ts";
 import { createIdentity } from "./identity.ts";
 import { createTrash } from "./trash.ts";
@@ -22,7 +23,7 @@ import { assertValidFileName, assertValidCollectionName, isHidden } from "./is-h
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./collection.ts";
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
-import type { CloudProvider, CloudSync, Kv, LocalCache } from "./types.ts";
+import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
@@ -227,7 +228,7 @@ export interface RawFile {
    *  （autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）。
    *  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推。hint 透传缩略图（store content-blind）。
    *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
-  save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown }): Promise<SaveResult>;
+  save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */ onProgress?: (done: number, total: number) => void }): Promise<SaveResult>;
   /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
   open(): Promise<Blob | null>;
   /** 头片 peek（0.15.0，首个消费者 = CatsUp `.glb` 封面：glTF 把 thumbnail 放 BIN 首段）：文件**开头** bytesLength 字节的
@@ -569,7 +570,10 @@ export function createStore(config: StoreConfig) {
       const stale = live ? null : await readDirIndexCache(folder);
       emitFolder(folder, await listing.listFolder(folder, ctx, stale ? { cloudPrefetched: live, staleCloud: stale } : { cloudPrefetched: live }));
     } catch (e) { ui.reportError(e); emitFolderError(folder, e, "remote"); }
-    if (live?.complete) writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
+    if (live?.complete) {
+      writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
+      for (const f of live.files) if (f.eTag) freshHints.note(f.name, { etag: f.eTag, lastModified: f.lastModifiedDateTime, size: f.size, item: f });   // 0.17.0：open 的新鲜度证据（只喂完整现场帧）
+    }
   }
   // 写路径变动 → 通知受影响夹（name 的父夹）的 watcher 即时重画本地帧。
   function notifyFolderOf(name: string): void {
@@ -648,7 +652,9 @@ export function createStore(config: StoreConfig) {
     kv, local, head, isOnline, serialize: sub.serialize, pushLocal: pushLocalBytes,
     policy: uploadReplayPolicy, confirm: ui.confirmReplay, onStatus: ui.onReplayStatus,
   });
-  const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT });
+  // 0.17.0：watchFolder 的完整云端帧当新鲜度证据（fresh-hints.ts 头注释讲安全边界）：几十个小文件连着 open 不再逐个 fetchMeta。
+  const freshHints = createFreshHints();
+  const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT, hints: freshHints });
   const del = createDelete({ cloud, local, head, kv, busy: busyT });
   const identity = createIdentity({
     cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: busyT,
@@ -887,7 +893,7 @@ export function createStore(config: StoreConfig) {
         //   mode:"new" 的首存不给 —— 那里撞名是「别的设备建了同名不同物」，抛错两份都留是 §A 身份行的保证。
         let pushed = false, reason: string | undefined, resolution: SaveResult["resolution"];
         try {
-          const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new" });
+          const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress });
           // 只有拿到新 etag 的落地才算推上去了。deferred(落地未确认)/unresolved/cancelled 一律不算——
           //   把它们当成功正是 F0 红线要拦的那类「落地未确认当落地成功」。
           pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
@@ -897,6 +903,7 @@ export function createStore(config: StoreConfig) {
           //   事实 = 恢复「画布陈旧 + UI 报 synced → 下次保存静默覆写云端」的原始事故。
           if (r.status === "resolved" && (r.resolution === "takeCloud" || r.resolution === "keepMine")) resolution = r.resolution;
         } catch (e) { ui.reportError(e); reason = "error"; }
+        notifyFolderOf(name);                                    // 0.17.0：推完（成没成）本夹 watcher 再画一帧——badge 从「没传上去」变「已同步」要让订阅者看见（KudsRocket 10-14 计数停在旧帧）
         // ADR-0018：离线「新上传」补推——push 没成(仍 dirty) ∧ 从没 synced(seenBase null) → 入队，回线 drainUploadQueue 补推。
         if (head.isDirtyThisTab(name) && head.seenBase(name) == null) uploadReplay.enqueue(name);   // per-tab：问的是「**我这次** push 没落地吗」（episode 账）
         return { pushed, reason, resolution };
@@ -1207,6 +1214,21 @@ export function createStore(config: StoreConfig) {
        *  **不含** trash/backup/collections 分区、app 自己别的 IDB 库、纯云端未缓存的作品。
        *  ⚠ **只返两个标量、永不返名字** —— 它不是、也不能变成全库列举（列举唯一面 = watchFolder）。 */
       usage: () => local.usage(),
+      /** 0.17.0：流式新建一个纯云端文件（KudsRocket「边加密边上传、不留本地副本」）。宿主按 source.read 逐块给字节（本地 File、边加密的管线……），
+       *  库逐块上传（Graph 上传会话；最后一块落地才成文件，中途断了云端没有半成品），**整份永不进内存、不落本地、不写谱系**。
+       *  只准新建：身份已占（本地或云端）→ CloudNameCollisionError，一个字节不传。要网：离线 / 没登录 → 抛（没有本地字节可排队）。
+       *  成功后文件是 cloud-only（本夹 watcher 重画）；之后 open() 走 acquire 照常。进度经 onProgress。busy 键 "file.uploading"（宿主可按键路由到后台提示）。 */
+      uploadStream: async (identifier: string, source: ByteSource, opts: { onProgress?: (done: number, total: number) => void } = {}): Promise<{ status: "uploaded"; size: number }> => {
+        roGuard("uploadStream");
+        await migrationReady;
+        assertValidFileName(identifier, appId);
+        if (!isOnline()) throw new Error(`uploadStream "${identifier}": cloud unreachable (offline or signed out)`);
+        const where = await nameOccupied(identifier);
+        if (where) throw new CloudNameCollisionError(identifier, where);
+        await busyK("file.uploading", undefined, () => cloud.pushStream(identifier, source, { onProgress: opts.onProgress }));
+        notifyFolderOf(identifier);
+        return { status: "uploaded", size: source.size };
+      },
       /** 确保文件夹存在。**离线也能建**（本地登记 + 回线 drainOfflineQueue 补建）。 */
       ensureFolder: (path: string) => { roGuard("ensureFolder"); return ensureFolderLocalFirst(path); },
       /** 新建空文件夹（gallery folder-tree；离线也能建，回线补建）。 */

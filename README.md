@@ -93,6 +93,7 @@ const store = createStore({
 | `store.files.occupied(identifier)` → **boolean** | 身份占用（在线云端+本地都看，离线只看本地）。新建/另存/改名前预检（原 nameOccupied） | §2 |
 | `store.files.ensureFolder · newFolder · deleteFolder` | 文件夹增删（删除「必须证实为空」库内强制；list 抛错/未权威→拒删） | §2 |
 | `store.files.drainOfflineQueue()` | 离线队列统一重放（按序：新文件夹→新上传→删文件→删文件夹深→浅）；app 在 online/boot/reconnect 调 | §6 |
+| `store.files.uploadStream(identifier, source, {onProgress?})` → `{status:"uploaded", size}` | **流式新建纯云端文件**（0.17.0，已实现）：宿主按 `source.read(offset, length)` 逐块给字节（本地 File、边加密的管线……），库逐块上传（上传会话，最后一块落地才成文件），**整份永不进内存、不落本地、不写谱系**。只准新建：身份已占 → 抛 `CloudNameCollisionError`，一个字节不传；离线 / 未登录 → 抛。成功后 cloud-only，之后 `open()` 照常。`save(bytes, {onProgress})` 同样透传上传进度（0.17.0） | §2 |
 | `store.files.listTrash · listBackup · restoreTrash · purgeTrash · emptyTrash · emptyBackup` | 回收站/备份箱：**本地↔云聚合**列举（TrashItem：side/encrypted/conflictLive，只元数据无 blob）·恢复·彻底删·清空 | §2 |
 | `store.files.reconcileAll({activeIdentifier?})` | **全库** cloud-gone 收敛（仅用户显式指令）：clean 孤儿**去抖后 send trash**（首次见 gone 标 candidate、跨 ~24h GRACE 第二次+ 才动手；重现/被编辑自愈）。日常开夹惰性收敛走 watchFolder 内的 per-folder reconcile（同 converge SSOT） | §6 |
 | `store.encryption.*` | **裸字节**级加密面（文件还没进 store、无 name 可查时）：`isEncryptedBlob`（便宜嗅探）· `tryDecryptEncryptedBlob`（验+解**合一**，null=错密码）· `isEncryptedPeekBlob` | §5 |
@@ -112,7 +113,7 @@ await f.delete();             // 销毁：本地副本→本地 .trash / 云端�
 ```
 - **新建文件 = 对一个新 name `file(name,{mode:"new"}).save`**（没有单独的 create）。云端已有同名但内容不同 → 抛 collision，绝不覆盖。
 - **delete vs offload**：offload 只丢「可重取的 shadow」、云端不动；delete 是**销毁**。delete 内部按原子态分流——本地若是 offloadable shadow → 硬删本地（云端 .trash 已救着，不留双份）；本地若是唯一副本（dirty/local-only）→ 先变 local-only 再进**本地** .trash（未推字节可恢复，绝不硬删）。云端副本进**云端** .trash。两套 trash 各管各、不跨网（ADR-0015）。
-- **`open` 自动把字节缓存本地**（离线可读，你不碰 IndexedDB）。
+- **`open` 自动把字节缓存本地**（离线可读，你不碰 IndexedDB）。本地有副本的 `open` 先做一次新鲜度检查（一趟 `fetchMeta`）；**0.17.0 起**，`watchFolder` 刚拿到的**完整**云端帧算作证据（30 s 内、且帧里的 etag 等于本 tab 已见的 base 时）——连着 open 几十个刚列过的小文件不再逐个问云端；帧说云端动了的一律不采信、照常问（证据可能比自己刚推的还旧）。
 - **`autoCacheOpenedFile:false`（流式消费 app：3D 模型/电台类）已实现**：`open` 本地有就读本地、没有就**整份拉云、不落本地**，只显式 `keepOffline` 才整份落地。
 - **`file.openStream()` 流式面（A1/A2，2026-08-15）**：大媒体按需取片——本地有副本走本地切片；无则开**分片下载会话**（2MiB 分片，按 eTag 钉版，拉到即落 `staging/` 暂存区 = tee）。句柄 `{ totalSize, read(off,len), prefetch(off,len), keep(), close() }`：`read`=播放优先级；`prefetch`=低优先（下一曲头部预拉）；`keep()`=升格正式本地副本（≡ keepOffline：**复用已流分片只补缺口，先播后 pin 不重下**）。调度全局一域：播放分片在飞时 **pin 严格串行且让路**（不 spike）。at-rest 字节面（加密件给密文；流式消费请只用于明文文件）。staging 是加速器不是正确性依赖（受全局 cap FIFO 兜底、坏了照样直连流）。
 - **列举唯一面 = `store.files.watchFolder(folder, cb)`**（订阅一夹→本地帧+云端帧同一 cb；无 `list`/`listAll`/`localKeys` 公开面）。snapshot `{ path, items, folders, complete, stale? }`，`complete:false` **别据此删缓存**。

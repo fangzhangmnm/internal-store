@@ -217,3 +217,57 @@ test("refresh 无 probe：行为不变（fast-forwarded）", async () => {
   eq(r.status, "fast-forwarded");
   eq(await asStr(await local.get("f")), "V2");
 });
+
+// ── 0.17.0 fresh-hints：刚列过的云端帧当新鲜度证据 ──
+import { createFreshHints } from "../src/fresh-hints.ts";
+
+function rigWithHints(ttlMs = 30_000, sharedEtag = true) {
+  const provider = createMockProvider();
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });
+  let fetchMetaCalls = 0;
+  const spied = { ...cloud, fetchMeta: (n: string) => { fetchMetaCalls++; return cloud.fetchMeta(n); } };
+  const local = createMockLocal();
+  // sharedEtag=false：这个 head 看不到 cloud-sync 记的 etag（= 从没 synced 的血统，seenBase 为 null）
+  const head = createLocalHead({ kv: memKv(), getCloudEtag: (n: string) => (sharedEtag ? cloud.getETag(n) : null) });
+  const safeResolve = createSafeResolve({ cloud: spied, local, head, validateAdopt: () => true });
+  let t = 1_000_000;
+  const hints = createFreshHints({ ttlMs, now: () => t });
+  const { open, refresh } = createFreshness({ cloud: spied, head, safeResolve, hints });
+  return { cloud, head, hints, open, refresh, calls: () => fetchMetaCalls, tick: (ms: number) => { t += ms; } };
+}
+
+test("[hints] 提示 etag === base → in-sync 且不打 fetchMeta（open / refresh 都是）", async () => {
+  const r = rigWithHints();
+  await r.cloud.push("f", enc("V1"));
+  const etag = r.cloud.getETag("f")!;
+  r.head.markSeen("f", etag);
+  r.hints.note("f", { etag, lastModified: 0, size: 2, item: null as never });
+  eq((await r.open("f")).reason, "in-sync", "open in-sync");
+  eq((await r.refresh("f")).status, "in-sync", "refresh in-sync");
+  eq(r.calls(), 0, "一次 fetchMeta 都没打");
+});
+
+test("[hints] 提示 etag ≠ base（可能比自己刚推的还旧）→ 不采信，照常 fetchMeta", async () => {
+  const r = rigWithHints();
+  await r.cloud.push("f", enc("V1"));
+  r.head.markSeen("f", r.cloud.getETag("f")!);
+  r.hints.note("f", { etag: "stale-etag", lastModified: 0, size: 2, item: null as never });
+  eq((await r.open("f")).reason, "in-sync", "真相（fetchMeta）说没动 → in-sync");
+  eq(r.calls(), 1, "打了 fetchMeta");
+});
+
+test("[hints] 过了时效 → 当没有；没有 base（从没 synced）→ 永不采信", async () => {
+  const r = rigWithHints(1000);
+  await r.cloud.push("f", enc("V1"));
+  const etag = r.cloud.getETag("f")!;
+  r.head.markSeen("f", etag);
+  r.hints.note("f", { etag, lastModified: 0, size: 2, item: null as never });
+  r.tick(1001);
+  await r.open("f");
+  eq(r.calls(), 1, "过期提示不算数");
+  const r2 = rigWithHints(30_000, false);
+  await r2.cloud.push("g", enc("V1"));
+  r2.hints.note("g", { etag: r2.cloud.getETag("g")!, lastModified: 0, size: 2, item: null as never });
+  await r2.open("g");   // 这个 head 从没见过 g 的 etag → base null → 提示不算数（谱系未知必问云端）
+  eq(r2.calls(), 1, "无 base 不采信");
+});

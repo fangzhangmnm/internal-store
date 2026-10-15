@@ -24,6 +24,7 @@ export type { LocalSaveReceipt } from "./types.ts";   // A4 守护写回执（gu
 export { isCached, isDirty } from "./listing.ts";
 /** 字节别名（host adapter 的类型用；不暴露内部文件路径）。 */
 export type { Bytes } from "./types.ts";
+export type { ByteSource } from "./types.ts";   // 0.17.0 files.uploadStream 的字节来源（宿主实现）
 
 export type { AuthChangeReason, ProviderAuthEvent } from "./types.ts";   // 0.12.0 户口收口：0.11.6 漏出的 forgotten-export
 export type { StoreTextKey, StoreTextFn, StoreTextParams } from "./ui-text.ts";   // busy 文案接缝（宿主写 StoreUI.text 需要可命名）

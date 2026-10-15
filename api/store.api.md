@@ -30,6 +30,14 @@ export type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 export type Bytes = Uint8Array;
 
 // @public
+export interface ByteSource {
+    // (undocumented)
+    read(offset: number, length: number): Promise<Uint8Array>;
+    // (undocumented)
+    readonly size: number;
+}
+
+// @public
 export type ChangeCb = (changedIds: string[]) => void;
 
 // @public
@@ -68,6 +76,7 @@ export interface CloudProvider {
     onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
     rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+    uploadStream?(path: string, source: ByteSource, opts?: UploadOpts): Promise<CloudItem>;
 }
 
 // @public (undocumented)
@@ -115,6 +124,10 @@ export interface CloudSync {
     push(name: string, bytes: Bytes | Blob, opts?: {
         baseEtag?: string | null;
         encrypted?: boolean;
+        onProgress?: (done: number, total: number) => void;
+    }): Promise<PushResult>;
+    pushStream(name: string, source: ByteSource, opts?: {
+        onProgress?: (done: number, total: number) => void;
     }): Promise<PushResult>;
     rename(oldName: string, newName: string, opts?: {
         baseEtag?: string | null;
@@ -229,6 +242,12 @@ export function createStore(config: StoreConfig): {
         usage: () => Promise<{
             bytes: number;
             count: number;
+        }>;
+        uploadStream: (identifier: string, source: ByteSource, opts?: {
+            onProgress?: (done: number, total: number) => void;
+        }) => Promise<{
+            status: "uploaded";
+            size: number;
         }>;
         ensureFolder: (path: string) => Promise<void>;
         newFolder: (path: string) => Promise<void>;
@@ -432,6 +451,12 @@ export interface GraphTransport {
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
+        onProgress?: (done: number, total: number) => void;
+    }): Promise<RawGraphItem | null>;
+    uploadStreamToApproot?(path: string, source: ByteSource, contentType?: string, opts?: {
+        conflictBehavior?: "replace" | "fail" | "rename";
+        eTag?: string | null;
+        onProgress?: (done: number, total: number) => void;
     }): Promise<RawGraphItem | null>;
 }
 
@@ -631,7 +656,8 @@ export interface RawFile {
     }>;
     save(bytes: Bytes | Blob, opts?: {
         tryPush?: boolean;
-        hint?: unknown;
+        hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */
+        onProgress?: (done: number, total: number) => void;
     }): Promise<SaveResult>;
     stagingCoverage(): Promise<StagingCoverage | null>;
     tryMove(to: string): Promise<TryMoveResult>;
@@ -776,7 +802,7 @@ export type StoreErrorLevel = "error" | "warning" | "info" | "log";
 export type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => string | undefined;
 
 // @public (undocumented)
-export type StoreTextKey = "sync.pushing" | "file.renaming" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
+export type StoreTextKey = "sync.pushing" | "file.renaming" | "file.uploading" | "file.pulling" | "cloud.checking" | "file.deleting" | "trash.restoring" | "trash.purging" | "trash.emptyTrash" | "trash.emptyBackups" | "file.encrypting" | "file.decrypting" | "file.rekeying" | "file.reuploading" | "folder.creating" | "folder.deleting";
 
 // @public (undocumented)
 export type StoreTextParams = Record<string, string>;
@@ -855,6 +881,7 @@ export interface UploadOpts {
     conflictBehavior?: "fail" | "replace" | "rename";
     contentType?: string;
     eTag?: string | null;
+    onProgress?: (done: number, total: number) => void;
 }
 
 // @public

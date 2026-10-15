@@ -10,6 +10,7 @@
 export type StoreTextKey =
   | "sync.pushing"        // push：保存并推云
   | "file.renaming"       // identity：重命名
+  | "file.uploading"      // 0.17.0 files.uploadStream：流式上传（长，宿主多半路由到后台提示）
   | "file.pulling"        // identity：拉取云端字节
   | "cloud.checking"      // freshness：开档/事件快进前查云
   | "file.deleting"       // delete：删除（移入回收站）
@@ -31,6 +32,7 @@ export type StoreTextFn = (key: StoreTextKey, params?: StoreTextParams) => strin
 const STORE_TEXT_EN: Record<StoreTextKey, string> = {
   "sync.pushing": "Syncing…",
   "file.renaming": "Renaming…",
+  "file.uploading": "Uploading…",
   "file.pulling": "Pulling…",
   "cloud.checking": "Checking cloud…",
   "file.deleting": "Deleting…",

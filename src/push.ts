@@ -46,6 +46,8 @@ export interface PushOpts {
   //   false（默认）= 抛 CloudNameCollisionError（**真·新建**该走这条：两设备各建同名不同物，护栏正确）
   //   true          = 走 onConflict 冲突面（**编辑既有文件**该走这条：本地云端都有、只是谱系断了）
   surfaceCollision?: boolean;
+  /** 0.17.0：上传进度透传 provider.upload（宿主画进度条）。 */
+  onProgress?: (done: number, total: number) => void;
 }
 
 // push 的终态全集（收成联合类型，别再用裸 string —— "deferred" 拼错要在编译期就炸）：
@@ -59,7 +61,7 @@ export function createPush(cfg: PushCfg) {
   const { cloud, head, seal, safeResolve, serialize, editVersion,
     busy = passBusy, maxAttempts = 4, backoffMs = 200, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
-  async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false }: PushOpts): Promise<PushResult> {
+  async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress }: PushOpts): Promise<PushResult> {
     const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
     const v0 = getEditVersion();
     // 0.15.2：这个文件的保存计数。全局游标（getEditVersion）要宿主自己推进，拆库后没人推进过 → dirtyAfter 恒 false：
@@ -74,7 +76,7 @@ export function createPush(cfg: PushCfg) {
       while (attempt < maxAttempts) {
         attempt++;
         try {
-          const { item } = await cloud.push(name, bytes, { baseEtag: ifMatch, encrypted: isEnc });
+          const { item } = await cloud.push(name, bytes, { baseEtag: ifMatch, encrypted: isEnc, onProgress });
           // F0 红线：provider 没回 item/eTag = **落地未确认**（分块响应 / 代理吞 body / provider 违约）。
           //   绝不能当成功——onPushed(null,false) 会清 dirty 且 base 停在旧值，未推字节随后被 offload
           //   合法驱逐（MASTER §A「dirty 永不驱逐」直接失守），UI 还显示「已同步」。

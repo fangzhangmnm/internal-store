@@ -13,7 +13,7 @@
 //   - downloadRange(offset=null, n) 取末尾 n 字节（peek byte-range 依赖）
 
 import type { Bytes } from "../substrate.ts";
-import type { CloudProvider, CloudItem, UploadOpts, MoveOpts } from "../types.ts";
+import type { CloudProvider, CloudItem, UploadOpts, MoveOpts, ByteSource } from "../types.ts";
 import { deleteEmptyFolderVia } from "../folder-delete.ts";
 
 // 带 .status 的 HTTP 风格错误（与 graph.js err.status 一致）。
@@ -247,8 +247,25 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
     },
 
     // ---- 写 ----
-    async upload(path: string, blob: Bytes | Blob, { contentType = "application/octet-stream", eTag = null, conflictBehavior = "replace" }: UploadOpts = {}) {
+    // 0.17.0 流式：逐块取齐再走 upload（撞名 / If-Match 语义完全同 upload）；进度按块报。测试用它验 pushStream 的编排。
+    async uploadStream(path: string, source: ByteSource, opts: UploadOpts = {}) {
+      await hook("uploadStream", { path, eTag: opts.eTag ?? null, conflictBehavior: opts.conflictBehavior ?? "fail" });
+      const CHUNK = 64 * 1024;
+      const parts: Uint8Array[] = [];
+      opts.onProgress?.(0, source.size);
+      for (let off = 0; off < source.size; off += CHUNK) {
+        parts.push(await source.read(off, Math.min(CHUNK, source.size - off)));
+        opts.onProgress?.(Math.min(off + CHUNK, source.size), source.size);
+      }
+      const all = new Uint8Array(source.size);
+      let o = 0;
+      for (const p of parts) { all.set(p, o); o += p.length; }
+      return this.upload(path, all, { ...opts, onProgress: undefined, conflictBehavior: opts.conflictBehavior ?? "fail" });
+    },
+    async upload(path: string, blob: Bytes | Blob, { contentType = "application/octet-stream", eTag = null, conflictBehavior = "replace", onProgress }: UploadOpts = {}) {
       await hook("upload", { path, eTag, conflictBehavior });
+      const total = blob instanceof Blob ? blob.size : (blob as { byteLength?: number }).byteLength ?? 0;
+      onProgress?.(0, total);
       const fault = consumeFault("upload");
       if (fault && fault.kind !== "lostResponse") throw faultError(fault); // 写前抛：云端不变
       const p = normPath(path);
@@ -278,6 +295,7 @@ export function createMockProvider(opts: MockProviderOpts = {}): MockProvider {
       }
       // lostResponse：写已落盘（etag 已变），但回执丢了 → 调用方以为失败（B5 假 412 的源头）
       if (fault && fault.kind === "lostResponse") throw faultError(fault);
+      onProgress?.(total, total);
       return toItem(node);
     },
 

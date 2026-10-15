@@ -56,6 +56,13 @@ export interface UploadOpts {
   eTag?: string | null;
   /** 撞名行为。 */
   conflictBehavior?: "fail" | "replace" | "rename";
+  /** 0.17.0：上传进度（done / total 字节）。简单上传只报 0 和 total；分块上传每块报一次。宿主拿它画进度条，不作任何决策。 */
+  onProgress?: (done: number, total: number) => void;
+}
+/** 0.17.0：按需读字节的来源（流式上传用）：宿主边读边给（本地 File、边加密的管线……），库永不整份持有。 */
+export interface ByteSource {
+  readonly size: number;
+  read(offset: number, length: number): Promise<Uint8Array>;
 }
 /** provider.move 的选项。 */
 export interface MoveOpts {
@@ -90,6 +97,9 @@ export interface CloudProvider {
   downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
   /** 上传文件字节。 */
   upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+  /** 0.17.0 可选：流式上传——按 source.read 逐块取、逐块传，整份永不进内存。只准 conflictBehavior:"fail"（新建）或带 eTag 的 replace。
+   *  没实现的 provider → cloud-sync.pushStream 抛错（不退回整份拼 Blob：那正是这个接口要避免的）。 */
+  uploadStream?(path: string, source: ByteSource, opts?: UploadOpts): Promise<CloudItem>;
   /** 确保文件夹存在。 */
   ensureFolder(path: string): Promise<string>;
   /** 文件硬删（trash purge）。eTag=If-Match（硬删不可逆，必带）。**文件夹删除不走它**——走 deleteEmptyFolder（护栏在 provider）。 */
@@ -212,7 +222,10 @@ export interface WeakOverrideResult {
 /** cloud-sync 暴露给 store/app 的面（dirty/etag 状态 + push/pull/list/trash 等）。 */
 export interface CloudSync {
   /** 推字节上云。opts.encrypted：字节是加密容器（ADR-0012）→ 落 encFileName（.zip）路径；未配 encFileName 时忽略。 */
-  push(name: string, bytes: Bytes | Blob, opts?: { baseEtag?: string | null; encrypted?: boolean }): Promise<PushResult>;
+  push(name: string, bytes: Bytes | Blob, opts?: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void }): Promise<PushResult>;
+  /** 0.17.0：流式新建（只新建：云端已有同名 → CloudNameCollisionError，一个字节不传）。不经 seal、不碰本地缓存 / 谱系：
+   *  成功后它是一个纯云端文件（下次 open 走 acquire）。provider 没有 uploadStream → 抛。 */
+  pushStream(name: string, source: ByteSource, opts?: { onProgress?: (done: number, total: number) => void }): Promise<PushResult>;
   /** 拉整份内容（字节 + 权威 item + 建议落地名）；无此件 → null。 */
   pull(name: string): Promise<PullResult | null>;
   /** 只取轻量元信息（比对 etag 用），不下载内容。 */

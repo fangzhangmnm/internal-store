@@ -21,6 +21,7 @@ import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";
 import "./zip-peek.test.mjs";
 import "./get-head.test.ts";   // 2026-09-20 0.15.0：RawFile.getHead 头片 peek（CatsUp .glb 封面）
+import "./upload-stream.test.ts";   // 2026-10-14 0.17.0：files.uploadStream 流式新建 + save onProgress（KudsRocket）
 // 红线对抗 battery（If-Match/parentBase/conflict→backup/move-aside/…）
 import "./push.test.ts";
 import "./safe-resolve.test.ts";

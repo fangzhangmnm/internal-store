@@ -8,6 +8,7 @@ import { reportStoreError } from "./error-handling.ts";   // 全接但分级：�
 import type { CloudSync, FetchMetaResult } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
+import type { FreshHints } from "./fresh-hints.ts";
 
 import type { Busy } from "./types.ts";
 const passBusy: Busy = (_l, fn) => fn();
@@ -18,6 +19,8 @@ export interface FreshnessCfg {
   head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere" | "markSeen">;
   safeResolve: Pick<SafeResolve, "safePull">;
   busy?: Busy;
+  /** 0.17.0：刚列过的云端帧（fresh-hints.ts）。只在「提示 etag === 本 tab 已见 base」时省掉 fetchMeta；别的情况一律照常问云端。 */
+  hints?: Pick<FreshHints, "peek">;
 }
 
 export interface OpenOpts {
@@ -60,7 +63,14 @@ export interface FreshResult {
   error?: unknown }
 
 export function createFreshness(cfg: FreshnessCfg) {
-  const { cloud, head, safeResolve, busy: _busy = passBusy } = cfg;
+  const { cloud, head, safeResolve, busy: _busy = passBusy, hints } = cfg;
+  // 0.17.0：刚列过的云端帧里这个文件的 etag === 本 tab 已见 base → 云端没动，和 fetchMeta 得到同样结论，省一趟。
+  //   提示说别的（动了 / 没有）一律不采信（可能比我们自己刚推的还旧）。
+  const hintedInSync = (name: string): boolean => {
+    const h = hints?.peek(name);
+    const base = head.seenBase(name);
+    return !!h && base != null && h.etag === base;
+  };
 
   // safePull 失败原因 → 用户能懂的短语（喂 reportStoreError；技术 reason 原样兜底）。
   const pullFailText = (reason: string): string =>
@@ -72,6 +82,7 @@ export function createFreshness(cfg: FreshnessCfg) {
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
     const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy } = opts;
     if (!isOnline()) return { source: "local", reason: "offline" };
+    if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { source: "local", reason: "in-sync" }; }   // 同下面 meta.etag===base 分支，只是证据来自刚列的帧
     return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
       if (probe) {
@@ -124,6 +135,7 @@ export function createFreshness(cfg: FreshnessCfg) {
     const { isOnline = () => true, adopt, localDirty, onReplaceStart, probe, busy = passBusy } = opts;
     if (!isOnline()) return { status: "offline" };
     if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡
+    if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { status: "in-sync" }; }
     return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
       try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { status: "cloud-error" }; }

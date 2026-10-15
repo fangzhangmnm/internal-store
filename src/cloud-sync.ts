@@ -15,7 +15,7 @@ import { withStemTail, type Identifiers } from "./identifiers.ts";   // 深模�
 import { isHidden } from "./is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
-import type { Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
+import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
 
 export class CloudConflictError extends Error {
   sessionName: string;
@@ -182,7 +182,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     } catch (e) { reportStoreError(e, "log"); return "unknown"; }        // 拉尾失败 → 未知，保持 dirty 下次重试（不静默认领、也不误报 collision）
   }
 
-  async function push(name: string, bytes: Bytes | Blob, opts: { baseEtag?: string | null; encrypted?: boolean } = {}): Promise<PushResult> {
+  async function push(name: string, bytes: Bytes | Blob, opts: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void } = {}): Promise<PushResult> {
     // 目标扩展名按**字节内容**走（caller——store——按尾部探测传 encrypted；加密=容器=.zip 名实相符）。
     const enc = !!(encFileName && opts.encrypted);
     const path = enc ? encFileName!(name) : fileName(name);
@@ -209,7 +209,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     //   → 绝不无条件覆盖云端已存在的同名文件（否则静默吃掉别人/旧版的同名作品 = 数据丢失，path-身份红线）。
     let item: CloudItem | null = null;
     try {
-      item = await provider.upload(path, bytes, { contentType, eTag: baseEtag, conflictBehavior: baseEtag ? "replace" : "fail" });
+      item = await provider.upload(path, bytes, { contentType, eTag: baseEtag, conflictBehavior: baseEtag ? "replace" : "fail", onProgress: opts.onProgress });
     } catch (e) {
       const status = (e as { status?: number })?.status;
       if (status === 412) throw new CloudConflictError(`云端已有更新版本 "${name}"`, name);
@@ -230,6 +230,27 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
       } else { item = null; }   // 0 字节占位 / 有 base 未确认 / unknown 拉尾失败 → 保持 dirty，下次重试
     }
     if (item && item.eTag) { setETag(name, item.eTag); setDirty(name, false); }
+    return { item };
+  }
+
+  // 0.17.0 流式新建（KudsRocket「边加密边上传、不留本地副本」）：只新建（conflictBehavior:"fail"），**不经 seal、不碰本地缓存、不写 etag/dirty**
+  //   ——成功后它是纯云端文件（下次 open 走 acquire 建谱系）。409 = 云端已有同名 → CloudNameCollisionError，一个字节不传（会话还没开就撞）。
+  //   provider 没有 uploadStream → 抛错，绝不退回整份拼 Blob（那正是这个接口要避免的；folder / mock / Graph 都实现了）。
+  async function pushStream(name: string, source: ByteSource, opts: { onProgress?: (done: number, total: number) => void } = {}): Promise<PushResult> {
+    if (!provider.uploadStream) throw new Error("cloud-sync.pushStream: provider has no uploadStream");
+    const path = fileName(name);
+    let item: CloudItem | null = null;
+    try {
+      item = await provider.uploadStream(path, source, { contentType, conflictBehavior: "fail", onProgress: opts.onProgress });
+    } catch (e) {
+      if ((e as { status?: number })?.status === 409) throw new CloudNameCollisionError(name);
+      throw e;
+    }
+    if (!item || !item.eTag) {   // 回执丢了：按 push 的 H7 口径拉权威 meta，大小符才认；不符当失败（没有本地字节可留 dirty，直接抛）
+      const fresh = await provider.getItemByPath(path).catch((e) => { reportStoreError(e, "log"); return null; });
+      if (fresh && fresh.eTag && fresh.size === source.size) item = fresh;
+      else throw new Error(`cloud-sync.pushStream: upload of "${name}" was not confirmed by the cloud`);
+    }
     return { item };
   }
 
@@ -481,7 +502,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   // 注：CloudConflictError 仅作为顶层 export class 暴露（无实例消费 cloud.CloudConflictError），
   //   故不挂在返回对象上——保持返回面与 CloudSync 契约一致（annotate :CloudSync 不报 excess）。
   return {
-    push, pull, fetchMeta, pullTail, pullRange, weakOverride,
+    push, pushStream, pull, fetchMeta, pullTail, pullRange, weakOverride,
     trash, restore, purge,
     list, listAll, listFolder, listFolders, listTrash, listBackup, rename,
     ensureFolder, deleteEmptyFolder,

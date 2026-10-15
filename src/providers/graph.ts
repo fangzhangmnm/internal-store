@@ -92,7 +92,11 @@ export async function downloadRangeFromUrl(downloadUrl: string, offset: number |
 interface UploadFileOpts {
   conflictBehavior?: string;
   eTag?: string | null;
+  /** 0.17.0：上传进度（done / total 字节）。 */
+  onProgress?: (done: number, total: number) => void;
 }
+/** 0.17.0：流式上传的字节来源（types.ts ByteSource 同形；graph 不 import 上层类型）。 */
+interface ChunkSource { readonly size: number; read(offset: number, length: number): Promise<Uint8Array> }
 //   trash / restore 用 "fail" 保护数据，caller 自己 fallback 改名
 interface MoveItemOpts {
   eTag?: string | null;
@@ -222,7 +226,7 @@ async function getDownloadUrl(itemId: string): Promise<string | null> {
 
 // ----- 上传 -----
 // path 相对 approot。eTag 给 If-Match（拿冲突检测）。conflictBehavior:
-async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
+async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null, onProgress }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
   // 【运行时护栏，user 2026-08-25 拍板「全库以后只能用 If-Match」】盲覆盖在最深处不可表示：
   //   replace 必须带 If-Match eTag（CAS 覆盖）；新建走 conflictBehavior:"fail"（不存在才准建，CAS 等价物）。
   //   配套语法检测 = test/ifmatch-guard.test.ts（扫源码裸 replace）。深模块强制，UI/调用方守不守都拦得住。
@@ -230,14 +234,27 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
   const headers: Record<string, string> = { "Content-Type": contentType };
   if (eTag) headers["If-Match"] = eTag;
   if (blob.size <= SIMPLE_UPLOAD_LIMIT) {
+    onProgress?.(0, blob.size);
     const r = await graphFetch(
       "PUT",
       `/me/drive/special/approot:/${encodeApprootPath(path)}:/content?@microsoft.graph.conflictBehavior=${conflictBehavior}`,
       { headers, body: blob },
     );
+    onProgress?.(blob.size, blob.size);
     return r.json() as Promise<GraphDriveItem>;
   }
-  // 大文件分块
+  // 大文件分块：Blob 当「按 slice 取块」的来源（分块路径和流式上传共用一条）
+  return uploadChunked(path, { size: blob.size, read: async (o, n) => new Uint8Array(await blob.slice(o, o + n).arrayBuffer()) }, conflictBehavior, eTag, onProgress);
+}
+
+/** 0.17.0：流式上传——永远走上传会话（哪怕很小），按 source.read 逐块取、逐块传；整份永不进内存。护栏同 uploadFileToApproot。 */
+async function uploadStreamToApproot(path: string, source: ChunkSource, _contentType = "application/octet-stream", { conflictBehavior = "fail", eTag = null, onProgress }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
+  if (conflictBehavior === "replace" && !eTag) throw new Error(`[graph] blind overwrite forbidden: conflictBehavior:"replace" requires If-Match eTag (${path})`);
+  return uploadChunked(path, source, conflictBehavior, eTag, onProgress);
+}
+
+// 上传会话 + 分块 PUT（Graph：每块是 320 KiB 的倍数、≤ 60 MiB；最后一块落地才成文件，中途断了云端没有半成品）。
+async function uploadChunked(path: string, source: ChunkSource, conflictBehavior: string, eTag: string | null, onProgress?: (done: number, total: number) => void): Promise<GraphDriveItem | null> {
   const sessR = await graphFetch(
     "POST",
     `/me/drive/special/approot:/${encodeApprootPath(path)}:/createUploadSession`,
@@ -253,23 +270,26 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
   );
   const { uploadUrl } = await sessR.json() as GraphUploadSession;
   const CHUNK = 5 * 1024 * 1024;
+  const total = source.size;
   let offset = 0;
   let last: GraphDriveItem | null = null;
-  while (offset < blob.size) {
-    const end = Math.min(offset + CHUNK, blob.size) - 1;
-    const chunk = blob.slice(offset, end + 1);
+  onProgress?.(0, total);
+  while (offset < total) {
+    const end = Math.min(offset + CHUNK, total) - 1;
+    const chunk = await source.read(offset, end - offset + 1);
+    if (chunk.length !== end - offset + 1) throw new Error(`[graph] chunk source short read at ${offset}: wanted ${end - offset + 1}, got ${chunk.length}`);
     let r: Response;
     try {
       r = await fetch(uploadUrl, {
         method: "PUT",
         headers: {
-          "Content-Length": String(chunk.size),
-          "Content-Range": `bytes ${offset}-${end}/${blob.size}`,
+          "Content-Length": String(chunk.length),
+          "Content-Range": `bytes ${offset}-${end}/${total}`,
         },
-        body: chunk,
+        body: chunk as BodyInit,
       });
     } catch (e) {   // 分块 PUT 打的是 uploadUrl（不走 graphFetch）→ 同款网络层翻译（保存路径最常断在这）
-      throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${blob.size}): network fetch failed (${String(e)})`, e);
+      throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${total}): network fetch failed (${String(e)})`, e);
     }
     if (!r.ok && r.status !== 202) {
       const err: GraphError = new Error(`chunked upload failed ${r.status}`);
@@ -278,6 +298,7 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
     }
     last = await r.json().then((j) => j as GraphDriveItem).catch(() => null);
     offset = end + 1;
+    onProgress?.(offset, total);
   }
   return last;
 }
@@ -419,7 +440,7 @@ async function renameItem(itemId: string, newName: string, eTag: string | null =
 
   return {
     listChildren, getItemByPath, downloadItemBlob, downloadItemRange, getDownloadUrl,
-    uploadFileToApproot, deleteItem, clearFolderCaches, getApprootId, ensureSubfolder,
+    uploadFileToApproot, uploadStreamToApproot, deleteItem, clearFolderCaches, getApprootId, ensureSubfolder,
     moveItemToFolder, copyItemToFolder, renameItem,
   };
 }

@@ -27,7 +27,7 @@
 // ⚠ 浏览器专用（FSA）；node 测试注入结构化 fake（test/folder-provider.contract.test.ts）。
 //   真机矩阵待验项：native move 支持面 / move 后 mtime 是否保留（本实现 move 后重读目标回采，不假设）。
 
-import type { Bytes, CloudItem, CloudProvider, MoveOpts, UploadOpts } from "../types.ts";
+import type { Bytes, CloudItem, CloudProvider, MoveOpts, UploadOpts, ByteSource } from "../types.ts";
 
 // ── 结构化最小句柄面（浏览器 FileSystemDirectoryHandle/FileSystemFileHandle 天然满足；node fake 照此实现）──
 //   刻意不用 lib.dom 的 FSA 类型：异步迭代器/move 在 TS dom lib 覆盖不全，且测试要注入 fake。
@@ -219,8 +219,30 @@ export function createFolderProvider(root: FolderDirHandle): CloudProvider {
       const start = Math.max(0, offset);
       return f.slice(start, Math.min(f.size, start + Math.max(0, length)));   // 白送（§3）；越界自动钳
     },
+    // 0.17.0 流式：逐块写进 createWritable（FSA 写临时文件、close 原子替换 → 中途断了没有半成品）。只准新建（fail）。
+    async uploadStream(path: string, source: ByteSource, opts: UploadOpts = {}): Promise<CloudItem> {
+      const { conflictBehavior = "fail", onProgress } = opts;
+      if (conflictBehavior !== "fail") throw new Error("folder-provider: uploadStream 只支持 conflictBehavior:\"fail\"（新建）");
+      const { folder, base } = splitPath(path);
+      const dir = await resolveDir(folder) ?? await (async () => { throw statusError(404, `folder-provider: folder 不存在: ${folder}`); })();
+      const existing = await childByName(dir, base);
+      if (existing) throw statusError(409, `folder-provider: 已存在: ${path}`);
+      const fh = await dir.getFileHandle(base, { create: true });
+      const w = await fh.createWritable();
+      const CHUNK = 8 * 1024 * 1024;
+      onProgress?.(0, source.size);
+      for (let off = 0; off < source.size; off += CHUNK) {
+        const bytes = await source.read(off, Math.min(CHUNK, source.size - off));
+        await w.write(new Blob([bytes as BlobPart]));
+        onProgress?.(Math.min(off + CHUNK, source.size), source.size);
+      }
+      await w.close();
+      return fileItem(fh, joinPath(folder, base));
+    },
     async upload(path: string, blob: Bytes | Blob, opts: UploadOpts = {}): Promise<CloudItem> {
-      const { eTag = null, conflictBehavior = "replace" } = opts;
+      const { eTag = null, conflictBehavior = "replace", onProgress } = opts;
+      const total = blob instanceof Blob ? blob.size : (blob as Uint8Array).byteLength;
+      onProgress?.(0, total);
       // 与 graph.uploadFileToApproot 同款运行时护栏（If-Match 家规 2026-08-25）：blind overwrite forbidden。
       if (conflictBehavior === "replace" && !eTag) throw new Error(`folder-provider: blind overwrite forbidden: conflictBehavior:"replace" requires If-Match eTag (${path})`);
       if (conflictBehavior === "rename") throw new Error("folder-provider: conflictBehavior=rename 未支持（engine 不发）");
@@ -231,12 +253,14 @@ export function createFolderProvider(root: FolderDirHandle): CloudProvider {
       if (conflictBehavior === "fail") {
         if (existing) throw statusError(409, `folder-provider: 已存在: ${path}`);   // 探测-创建 TOCTOU=已知失败（§3）
         const fh = await writeFile(dir, base, blob);
+        onProgress?.(total, total);
         return fileItem(fh, joinPath(folder, base));
       }
       // replace + eTag：读-比-写。目标不存在 + 带 eTag = 谱系断裂（云端那份没了）→ 412 族（让上层走冲突/重推路径）。
       if (!existing) throw statusError(412, `folder-provider: eTag 指的那份不在了: ${path}`);
       await assertMatch(existing as FolderFileHandle, eTag, path);
       const written = await writeFile(dir, existing.name, blob);     // 用磁盘真实名（大小写保持）
+      onProgress?.(total, total);
       return fileItem(written, joinPath(folder, existing.name));     // 回采：close 之后 getFile 重读 mtime（纪律核心）
     },
     async ensureFolder(path: string): Promise<string> {

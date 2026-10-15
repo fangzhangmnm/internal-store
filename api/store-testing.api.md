@@ -37,6 +37,8 @@ export interface CloudProvider {
     onAuthChanged?(cb: (ev: ProviderAuthEvent) => void): () => void;
     rename(ref: string, newName: string, eTag?: string | null): Promise<CloudItem>;
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
+    // Warning: (ae-forgotten-export) The symbol "ByteSource" needs to be exported by the entry point index.d.ts
+    uploadStream?(path: string, source: ByteSource, opts?: UploadOpts): Promise<CloudItem>;
 }
 
 // @public (undocumented)
@@ -196,6 +198,7 @@ export interface UploadOpts {
     conflictBehavior?: "fail" | "replace" | "rename";
     contentType?: string;
     eTag?: string | null;
+    onProgress?: (done: number, total: number) => void;
 }
 
 // Warnings were encountered during analysis:
