@@ -42,10 +42,25 @@ interface GraphListResponse {
   value?: GraphDriveItem[];
   "@odata.nextLink"?: string;
 }
-// createUploadSession 响应。
+// createUploadSession 响应；GET uploadUrl 查会话进度时也带 nextExpectedRanges（"<from>-<to>" / "<from>-"）。
 interface GraphUploadSession {
   uploadUrl: string;
+  nextExpectedRanges?: string[];
 }
+
+// ── 请求超时（0.17.1，2026-10-15 Claude Fable 5.1）──
+//   iOS 锁屏 / 切后台后在途的 fetch 常常既不成功也不报错、永远挂着（KudsRocket 10-15「多锁几次，全卡死了」）：
+//   每个请求都带 AbortSignal.timeout，挂死的变成 CloudNetworkError → 上层按网络错误重试 / 留 dirty 续推。
+//   meta = 元数据 / 列举 / 会话创建；chunk = 一块 5 MiB 的 PUT（100 KB/s 的上行也够）；range = 一片 byte-range；blob = 整文件下载。
+//   AbortSignal.timeout 老浏览器没有（iOS < 16）→ 不带 signal，行为同 0.17.0。
+export interface GraphTimeouts { meta: number; chunk: number; range: number; blob: number }
+export const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts = { meta: 30_000, chunk: 120_000, range: 60_000, blob: 15 * 60_000 };
+let graphTimeouts: GraphTimeouts = { ...DEFAULT_GRAPH_TIMEOUTS };
+let graphSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const timed = (ms: number): AbortSignal | undefined => (typeof AbortSignal !== "undefined" && typeof (AbortSignal as { timeout?: unknown }).timeout === "function" ? AbortSignal.timeout(ms) : undefined);
+// 分块上传：单块失败不从零重传——问会话传到哪了、退避、接着传（0.17.1）。
+const CHUNK_RETRY_MAX = 5;
+const chunkBackoffMs = (attempt: number): number => Math.min(1000 * 2 ** (attempt - 1), 16_000);   // 1 / 2 / 4 / 8 / 16 s
 // graphFetch 抛的错带 HTTP status/body（caller 用 status 判 404 等）。
 interface GraphError extends Error {
   status?: number;
@@ -79,7 +94,9 @@ function _rangeHeader(offset: number | null, length: number): string {
 // 直接打已知 CDN URL 的 byte-range（省掉每个 peek 的 metadata RTT）
 // caller 处理 401/403 = downloadUrl 过期，重申请 getDownloadUrl 重试一次
 export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number): Promise<ArrayBuffer> {
-  const r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) } });
+  let r: Response;
+  try { r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) }, signal: timed(graphTimeouts.range) }); }
+  catch (e) { throw new CloudNetworkError(`range download: network fetch failed (${String(e)})`, e); }
   if (!r.ok && r.status !== 206) {
     const err: GraphError = new Error(`range download failed ${r.status}`);
     err.status = r.status;
@@ -105,7 +122,9 @@ interface MoveItemOpts {
 }
 
 /** Graph 实例（per-provider：token 源 + 全部缓存实例私有）。返回面 = GraphTransport 超集。 */
-export function createGraph(tokenSource: () => Promise<string>) {
+export function createGraph(tokenSource: () => Promise<string>, opts: { timeouts?: Partial<GraphTimeouts>; sleep?: (ms: number) => Promise<void> } = {}) {
+  if (opts.timeouts) graphTimeouts = { ...DEFAULT_GRAPH_TIMEOUTS, ...opts.timeouts };   // 测试 / 特殊宿主用；模块级，最后一个 createGraph 说了算
+  if (opts.sleep) graphSleep = opts.sleep;
   const getToken = (): Promise<string> => {
     if (!tokenSource) throw new Error("graph token source missing (page: createOneDriveProvider; SW: createGraph(createBridgeTokenSource(dbName)))");
     return tokenSource();
@@ -114,7 +133,7 @@ export function createGraph(tokenSource: () => Promise<string>) {
 async function graphFetch(method: string, pathOrUrl: string, { headers = {}, body = null }: GraphFetchOpts = {}): Promise<Response> {
   const token = await getToken();
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
-  const init: RequestInit & { headers: Record<string, string> } = { method, headers: { Authorization: `Bearer ${token}`, ...headers } };
+  const init: RequestInit & { headers: Record<string, string> } = { method, headers: { Authorization: `Bearer ${token}`, ...headers }, signal: timed(graphTimeouts.meta) };
   if (body != null) {
     if (
       typeof body === "string" ||
@@ -183,7 +202,9 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
   // 优先 @microsoft.graph.downloadUrl（短期签名 CDN）；没有就走 /content
   const dl = await getDownloadUrl(itemId);
   if (dl) {
-    const r = await fetch(dl);
+    let r: Response;
+    try { r = await fetch(dl, { signal: timed(graphTimeouts.blob) }); }
+    catch (e) { throw new CloudNetworkError(`downloadUrl: network fetch failed (${String(e)})`, e); }
     if (!r.ok) throw new Error(`downloadUrl failed ${r.status}`);
     return await r.blob();
   }
@@ -254,6 +275,11 @@ async function uploadStreamToApproot(path: string, source: ChunkSource, _content
 }
 
 // 上传会话 + 分块 PUT（Graph：每块是 320 KiB 的倍数、≤ 60 MiB；最后一块落地才成文件，中途断了云端没有半成品）。
+// 0.17.1（2026-10-15 Claude Fable 5.1）：
+//   · 每块 PUT 带超时；网络错 / 429 / 5xx / 416 → GET uploadUrl 问「传到哪了」（nextExpectedRanges），退避 1/2/4/8/16 s，从那里接着传——
+//     一次网络抖动不再整份重传（KudsRocket iPad 10-14：6.8 MB 快照第二块 Load failed 就从头来）。会话没了（404）→ 抛网络错，上层整份重试。
+//   · If-Match 只在 createUploadSession 时核；最后一块落地是无条件的 → 两台设备同时覆盖同一格时有一个「上传那几十秒」的窗口。
+//     现在提交最后一块前再 GET 一次 item 比 eTag：动了就撤会话、抛 412（上层翻成冲突面）。窗口缩到最后一块那几秒。
 async function uploadChunked(path: string, source: ChunkSource, conflictBehavior: string, eTag: string | null, onProgress?: (done: number, total: number) => void): Promise<GraphDriveItem | null> {
   const sessR = await graphFetch(
     "POST",
@@ -273,9 +299,35 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
   const total = source.size;
   let offset = 0;
   let last: GraphDriveItem | null = null;
+  let failures = 0;   // 连续失败次数（成功一块就归零）
+  // 问会话传到哪了；退避后返回下一块该从哪开始。会话没了 / 问不到 → 抛（上层按网络错整份重试）。
+  const resumeFrom = async (why: string): Promise<number> => {
+    failures++;
+    if (failures > CHUNK_RETRY_MAX) throw new CloudNetworkError(`Graph chunked upload ${path}: gave up after ${CHUNK_RETRY_MAX} retries at ${offset}/${total} (${why})`);
+    await graphSleep(chunkBackoffMs(failures));
+    let st: Response;
+    try { st = await fetch(uploadUrl, { signal: timed(graphTimeouts.meta) }); }
+    catch (e) { throw new CloudNetworkError(`Graph upload session status: network fetch failed (${String(e)})`, e); }
+    if (!st.ok) throw new CloudNetworkError(`Graph upload session ${path}: gone (${st.status}) after ${why}`);
+    const j = await st.json().catch(() => null) as GraphUploadSession | null;
+    const next = j?.nextExpectedRanges?.[0]?.split("-")[0];
+    const at = next != null ? Number(next) : NaN;
+    if (!Number.isFinite(at) || at < 0 || at > total) throw new CloudNetworkError(`Graph upload session ${path}: no usable nextExpectedRanges after ${why}`);
+    return at;
+  };
+  const cancelSession = async (): Promise<void> => { try { await fetch(uploadUrl, { method: "DELETE", signal: timed(graphTimeouts.meta) }); } catch (_) { /* best effort */ } };
   onProgress?.(0, total);
   while (offset < total) {
     const end = Math.min(offset + CHUNK, total) - 1;
+    if (end === total - 1 && eTag) {   // 提交前核 eTag（见头注释）；查不到（网络）→ 抛，上层整份重试
+      const cur = await getItemByPath(path);
+      if (cur && cur.eTag && cur.eTag !== eTag) {
+        await cancelSession();
+        const err: GraphError = new Error(`chunked upload ${path}: item changed during upload (If-Match ${eTag} ≠ ${cur.eTag})`);
+        err.status = 412;
+        throw err;
+      }
+    }
     const chunk = await source.read(offset, end - offset + 1);
     if (chunk.length !== end - offset + 1) throw new Error(`[graph] chunk source short read at ${offset}: wanted ${end - offset + 1}, got ${chunk.length}`);
     let r: Response;
@@ -287,15 +339,19 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
           "Content-Range": `bytes ${offset}-${end}/${total}`,
         },
         body: chunk as BodyInit,
+        signal: timed(graphTimeouts.chunk),
       });
-    } catch (e) {   // 分块 PUT 打的是 uploadUrl（不走 graphFetch）→ 同款网络层翻译（保存路径最常断在这）
-      throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${total}): network fetch failed (${String(e)})`, e);
+    } catch (e) {   // 分块 PUT 打的是 uploadUrl（不走 graphFetch）→ 网络层：问会话接着传
+      offset = await resumeFrom(`network: ${String(e)}`);
+      continue;
     }
     if (!r.ok && r.status !== 202) {
+      if (r.status === 429 || r.status === 416 || (r.status >= 500 && r.status <= 599)) { offset = await resumeFrom(`http ${r.status}`); continue; }
       const err: GraphError = new Error(`chunked upload failed ${r.status}`);
       err.status = r.status;
       throw err;
     }
+    failures = 0;
     last = await r.json().then((j) => j as GraphDriveItem).catch(() => null);
     offset = end + 1;
     onProgress?.(offset, total);
@@ -414,7 +470,7 @@ async function copyItemToFolder(itemId: string, targetFolderId: string, newName:
   //   超时仍安全：抛在 replace 之前，原位原版完好、dirty 保住可重试（弃单 copy 迟到完成 = .backup 无害赘份）。
   for (let attempt = 1; attempt <= 170; attempt++) {
     let mr: Response;
-    try { mr = await fetch(monitor); }
+    try { mr = await fetch(monitor, { signal: timed(graphTimeouts.meta) }); }
     catch (e) { throw new CloudNetworkError(`Graph copy monitor: network fetch failed (${String(e)})`, e); }
     const j = await mr.json().catch(() => null) as { status?: string; resourceId?: string; id?: string } | null;
     if (j?.status === "failed") throw new Error(`Graph copy ${itemId}: server reported failed`);

@@ -15,6 +15,10 @@ import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
 type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 const passBusy: Busy = (_l, fn) => fn();
 const isConflict = (e: unknown) => !!e && ((e as { name?: string }).name === "CloudConflictError" || (e as { status?: number }).status === 412);
+// 0.17.1：4 次 × 200·n ms（共 2 s）→ 5 次、1 / 2 / 4 / 8 s（共 15 s），熬得过 iOS 切网络那几秒（KudsRocket 10-14 iPad：网还没回来就放弃）。
+//   模块级可改 = 测试把退避拨小（耗尽重试的用例不能真等 15 s）；不是公开 API。
+export const pushRetryDefaults = { maxAttempts: 5, backoffMs: 1000 };
+
 function retriable(e: unknown): boolean {
   const x = e as { status?: number; name?: string } | null;
   const s = x?.status;
@@ -59,7 +63,7 @@ export interface PushResult { status: PushStatus; dirtyAfter?: boolean; resoluti
 
 export function createPush(cfg: PushCfg) {
   const { cloud, head, seal, safeResolve, serialize, editVersion,
-    busy = passBusy, maxAttempts = 4, backoffMs = 200, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
+    busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
   async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress }: PushOpts): Promise<PushResult> {
     const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
@@ -108,7 +112,7 @@ export function createPush(cfg: PushCfg) {
             const choice = onConflict ? await onConflict({ name }) : "cancel";
             return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
-          if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(backoffMs * attempt); continue; }
+          if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(Math.min(backoffMs * 2 ** (attempt - 1), 15_000)); continue; }
           throw e;
         }
       }

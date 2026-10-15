@@ -26,6 +26,7 @@ import "./upload-stream.test.ts";   // 2026-10-14 0.17.0：files.uploadStream �
 import "./push.test.ts";
 import "./safe-resolve.test.ts";
 import "./graph-network-error.test.ts";   // 2026-08-25 网络层翻译（CloudNetworkError）
+import "./graph-upload-resilience.test.ts";   // 2026-10-15 0.17.1：分块上传接着传 / 提交前核 eTag / 请求超时（KudsRocket iOS 锁屏挂死）
 import "./ifmatch-guard.test.ts";   // 2026-08-25 全库 If-Match 语法护栏
 import "./idb-tx-guard.test.ts";   // 2026-08-26 IDB 事务形状语法护栏（0.3.6 收敛；行为面=tools/idb-tx-commit-check.mjs）
 import "./idb-deadline.test.mjs";   // 2026-09-06 0.11.5 挂死自愈：deadline / 重开重试 / onversionchange（假 IDB）

@@ -7,6 +7,8 @@ import { createSafeResolve } from "../src/safe-resolve.ts";
 import { createSubstrate } from "../src/substrate.ts";
 import { createPush } from "../src/push.ts";
 import { createIdentity } from "../src/identity.ts";
+import { pushRetryDefaults } from "../src/push.ts";
+pushRetryDefaults.backoffMs = 1;   // 0.17.1：真退避 15 s 会撞 10 s 测试墙；这里只验重试耗尽后的账，不验等多久
 
 const enc = (s: string) => new TextEncoder().encode(s);
 async function asStr(x: unknown): Promise<string | null> {

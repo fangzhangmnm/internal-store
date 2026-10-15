@@ -9,6 +9,8 @@ import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createSubstrate } from "../src/substrate.ts";
 import { createCloudSync, memKv } from "../src/cloud-sync.ts";
+import { pushRetryDefaults } from "../src/push.ts";
+pushRetryDefaults.backoffMs = 1;   // 0.17.1：真退避 15 s 会撞 10 s 测试墙；这里只验重试耗尽后的账，不验等多久
 
 function dumpKv() {
   const m = new Map<string, string>();
