@@ -51,7 +51,7 @@ export interface StoreUI {
    *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
    *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
    *    "push" = 保存上传 412 / 谱系断裂撞名时（keepMine=**立即**本地覆盖云端，loser 进 .backup）。 */
-  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push" }) => Promise<ResolveChoice>;
+  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push"; cloudState?: CloudState }) => Promise<ResolveChoice>;
   /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
   reportError: (err: unknown, level?: StoreErrorLevel) => void;
   // 加密密码**不走 ui**——非交互 crypt.getPassword（app 持内存密码 + 解锁循环在 busy 外，见 §5/§7）。故无 askPassword。
@@ -205,6 +205,10 @@ export type TryMoveResult =
  *  打开中的文档此刻是陈旧世界线，调用方必须整体重载（复用自己的 open→adopt 管线），否则下次保存会把
  *  用户选择保留的云端版本静默覆写回去（2026-08-25 案卷 §1 的事故根因）。"keepMine" = 本地已强推为云端新版，无需动作。 */
 export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepMine" | "takeCloud" };
+/** 冲突面上云端那一侧的状态（0.18.2，给宿主措辞用；三个按钮不变）：
+ *  changed = 云端有别的版本（412 / 谱系断裂撞名 / resolve 时 etag ≠ base）· absent = 云端那份没了（resolve 时 fetchMeta 为空：别的设备删了 / 移走了）
+ *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）。absent 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站。 */
+export type CloudState = "changed" | "absent" | "unchanged";
 /** file.resolve() 的终态（0.18.0）：
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
@@ -212,7 +216,8 @@ export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepM
 export type ResolveOutcome =
   | { status: "no-local" } | { status: "clean" } | { status: "offline" } | { status: "cancelled" }
   | { status: "pushed" } | { status: "not-pushed"; reason: string }
-  | { status: "took-cloud"; backupName?: string } | { status: "unresolved"; reason?: string };
+  | { status: "took-cloud"; backupName?: string } | { status: "unresolved"; reason?: string }
+  | { status: "trashed" };   // 0.18.2：云端那份没了，人选「云端覆盖本地」= 跟着云端，本地这份移到回收站（可恢复）
 
 /** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
 export interface FileStream {
@@ -746,7 +751,7 @@ export function createStore(config: StoreConfig) {
   //   预拉整份云端 = sheet 前双倍下载（takeCloud 时 safePull 反正会拉**最新**），且弹 sheet 前的长拉窗口
   //   会吞掉用户点「跳过到离线」。将来宿主要预览云端版 → escalate 改 StoreUI 契约（懒取），别回填这里。──
   const onConflictFor = (occasion: "open" | "push") => async ({ name }: { name: string }): Promise<ResolveChoice> => {
-    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion });
+    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: "changed" });   // 412 / 撞名 / open 时云端更新：云端一定有别的版本
   };
   const onConflict = onConflictFor("push");   // save 的 push 412 / surfaceCollision 走这份；open 路径用 onConflictFor("open")
 
@@ -994,9 +999,18 @@ export function createStore(config: StoreConfig) {
         if (!(await local.exists(name))) return { status: "no-local" };
         if (!head.isDirtyAnywhere(name)) return { status: "clean" };
         if (!isOnline()) return { status: "offline" };
-        const choice = await onConflictFor("push")({ name });
+        // 0.18.2：先看云端那一侧是什么状态，面才能说对话、「云端覆盖本地」才知道该拉还是该删（云端没了 = 跟着云端把本地这份移到回收站）。
+        let cloudState: CloudState = "changed";
+        try { const meta = await cloud.fetchMeta(name); cloudState = !meta ? "absent" : meta.etag === head.seenBase(name) ? "unchanged" : "changed"; }
+        catch (e) { ui.reportError(e, "log"); }   // 拿不到就按「可能变了」问
+        const choice = await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
+          if (cloudState === "absent") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
+            const d = await delSF(name);
+            notifyFolderOf(name);
+            return d.status === "trashed" ? { status: "trashed" } : { status: "unresolved", reason: d.status };
+          }
           const r = await safeResolve.resolveConflict(name, "takeCloud", { adopt: opts?.adopt });
           notifyFolderOf(name);
           return r.status === "resolved" ? { status: "took-cloud", backupName: r.backupName } : { status: "unresolved", reason: r.reason };

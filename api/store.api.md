@@ -88,6 +88,9 @@ export class CloudStaleRefError extends Error {
 }
 
 // @public
+export type CloudState = "changed" | "absent" | "unchanged";
+
+// @public
 export interface CloudSync {
     clearState(name: string): void;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
@@ -753,6 +756,8 @@ export type ResolveOutcome = {
 } | {
     status: "unresolved";
     reason?: string;
+} | {
+    status: "trashed";
 };
 
 // @public
@@ -883,6 +888,7 @@ export interface StoreUI {
         local: Blob | null;
         cloud: Blob | null;
         occasion: "open" | "push";
+        cloudState?: CloudState;
     }) => Promise<ResolveChoice>;
     text?: StoreTextFn;
 }

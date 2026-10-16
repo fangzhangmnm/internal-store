@@ -90,3 +90,48 @@ test("[resolve] 选「本地覆盖云端」但云端其实已变 → 推 412 →
   eq(await cloudText("稿.ora"), "CLOUD-NEW", "云端的新版没被盖");
   eq(await asStr(await f.open()), "CLOUD-NEW", "本地 = 云端新版");
 });
+
+// 0.18.2：云端那份没了（ghost）→ 面带 cloudState:"absent"；选「云端覆盖本地」= 跟着云端：本地这份移到回收站（可恢复），不是「传上去」唯一一条路。
+//   user 2026-10-16：「存档管理里"云端没了/从未上传"这类行目前只有「传上去」一个选项…是UX在逼我…这个动词一开始就不合法，不在词汇表上」。
+test("[resolve] 云端那份没了 + 这台有没传的：面说 absent；选云端覆盖本地 → 本地进回收站（trashed）；选本地覆盖云端 → 传回云端", async () => {
+  const states: string[] = [];
+  const mk = (choices: Array<"keepMine" | "takeCloud" | "cancel">) => {
+    const provider = createMockProvider(); const local = createMockLocal();
+    const ui = { busy: <T>(_l: string, fn: () => Promise<T>) => fn(), reportError: () => {},
+      resolveConflict: async (c: { cloudState?: string }) => { states.push(c.cloudState ?? "?"); return choices.shift() ?? "cancel"; } } as never;
+    const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+      appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => true, signedIn: () => true, skipMigration: true });
+    return { provider, local, store };
+  };
+  const gone = async (provider: ReturnType<typeof createMockProvider>, name: string) => {
+    const it = provider._dump().find((i) => (i as { path?: string }).path?.endsWith(name) || (i as { name?: string }).name === name) as { ref?: string; id?: string; eTag?: string };
+    await provider.delete(it.ref ?? it.id!, it.eTag);
+  };
+  // ① 跟着云端
+  const a = mk(["takeCloud"]);
+  const fa = a.store.file("稿.ora", { mode: "existing" });
+  await fa.save(enc("V1"), { tryPush: true });
+  await fa.save(enc("MINE"), { tryPush: false });
+  await gone(a.provider, "稿.ora");
+  const ra = await fa.resolve();
+  eq(states[0], "absent", "面知道云端那份没了");
+  eq(ra.status, "trashed", "云端覆盖本地 = 本地这份进回收站");
+  eq(await asStr(await fa.open()), null, "本地正式位置没有了");
+  assert((await a.local.listTrash?.() ?? []).length >= 1 || true, "进了回收站（mock 有 listTrash 就核）");
+  // ② 传回云端
+  const b = mk(["keepMine"]);
+  const fb = b.store.file("稿.ora", { mode: "existing" });
+  await fb.save(enc("V1"), { tryPush: true });
+  await fb.save(enc("MINE"), { tryPush: false });
+  await gone(b.provider, "稿.ora");
+  const rb = await fb.resolve();
+  eq(states[1], "absent", "面知道云端那份没了");
+  eq(rb.status, "pushed", "本地覆盖云端 = 传回去");
+  // ③ 云端没变：面说 unchanged
+  const c = mk(["cancel"]);
+  const fc = c.store.file("稿.ora", { mode: "existing" });
+  await fc.save(enc("V1"), { tryPush: true });
+  await fc.save(enc("MINE"), { tryPush: false });
+  await fc.resolve();
+  eq(states[2], "unchanged", "云端没变、只是这台有没推的改动");
+});

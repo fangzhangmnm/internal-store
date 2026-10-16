@@ -56,7 +56,7 @@ export type { Account } from "./providers/auth.ts";
 /** collection 批量变更回调签名（onChange 全量档）。 */
 export type { ChangeCb } from "./collection.ts";
 /** 文件/回收站/删除/刷新各面的收发形状（Result/Opts 类型群）。 */
-export type { TryMoveResult, SaveResult, ResolveOutcome } from "./create-store.ts";
+export type { TryMoveResult, SaveResult, ResolveOutcome, CloudState } from "./create-store.ts";
 export type { TrashResult, RestoreOpts, PurgeOpts, EmptyTrashOpts } from "./trash.ts";
 export type { RefreshOpts, FreshResult } from "./freshness.ts";
 export type { DelResult } from "./delete.ts";
