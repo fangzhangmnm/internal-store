@@ -21,6 +21,12 @@ export interface FreshnessCfg {
   busy?: Busy;
   /** 0.17.0：刚列过的云端帧（fresh-hints.ts）。只在「提示 etag === 本 tab 已见 base」时省掉 fetchMeta；别的情况一律照常问云端。 */
   hints?: Pick<FreshHints, "peek">;
+  /** 0.18.0（默认 true）：open 的云端核对**没跑成**（离线 / 未登录 / 云端出错 / 用户跳过）时，本地副本**干净**且磁盘上有上次同步的
+   *  etag → 把那个 etag 记为本 tab 的 base。证据从「云端刚确认没动」换成「本地干净 + 上次同步到的版本」。
+   *  安全边界：base 只会被记成**本地字节当时同步到的那一版**，永远不会比字节更新 → 之后第一次推 If-Match 它：云端没动 → 成功；
+   *  云端动过 → 412 → tryHeal / 冲突面，和今天一样。关掉（false）= 0.17.2 的行为：登录前开稿、再打字 → 无 base → 409 → 冤枉的冲突面
+   *  （WXHW 2026-10-16 单设备根因，`20260516 WebXiaoHeiWu/ai-docs/20261008-store-0162-signin-push-order-handoff.md` §6.1）。 */
+  lineageFromDurable?: boolean;
 }
 
 export interface OpenOpts {
@@ -63,7 +69,15 @@ export interface FreshResult {
   error?: unknown }
 
 export function createFreshness(cfg: FreshnessCfg) {
-  const { cloud, head, safeResolve, busy: _busy = passBusy, hints } = cfg;
+  const { cloud, head, safeResolve, busy: _busy = passBusy, hints, lineageFromDurable = true } = cfg;
+  // 0.18.0：云端核对没跑成时，干净 ∧ 有 durable etag → 以它为 base（JSDoc 见 FreshnessCfg.lineageFromDurable）。
+  //   脏的一律不碰（脏副本的 parent 只能由 recordEdit / 云端确认过的 markSeen 给；从 durable 补 parent 在多标签页下会变成静默覆盖）。
+  const adoptDurableBase = (name: string, localDirty?: () => boolean): void => {
+    if (!lineageFromDurable) return;
+    if (head.isDirtyAnywhere(name) || (localDirty ? localDirty() : false)) return;
+    const d = head.seenBase(name);
+    if (d != null) head.markSeen(name, d);
+  };
   // 0.17.0：刚列过的云端帧里这个文件的 etag === 本 tab 已见 base → 云端没动，和 fetchMeta 得到同样结论，省一趟。
   //   提示说别的（动了 / 没有）一律不采信（可能比我们自己刚推的还旧）。
   const hintedInSync = (name: string): boolean => {
@@ -81,7 +95,7 @@ export function createFreshness(cfg: FreshnessCfg) {
 
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
     const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy } = opts;
-    if (!isOnline()) return { source: "local", reason: "offline" };
+    if (!isOnline()) { adoptDurableBase(name, localDirty); return { source: "local", reason: "offline" }; }
     if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { source: "local", reason: "in-sync" }; }   // 同下面 meta.etag===base 分支，只是证据来自刚列的帧
     return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
@@ -90,11 +104,11 @@ export function createFreshness(cfg: FreshnessCfg) {
           cloud.fetchMeta(name).then((m) => ({ k: "meta" as const, m }), (e) => ({ k: "err" as const, e })),
           Promise.resolve(probe).then(() => ({ k: "skip" as const })),
         ]);
-        if (raced.k === "skip") return { source: "local", reason: "skipped" };
-        if (raced.k === "err") return { source: "local", reason: "cloud-error" };
+        if (raced.k === "skip") { adoptDurableBase(name, localDirty); return { source: "local", reason: "skipped" }; }
+        if (raced.k === "err") { adoptDurableBase(name, localDirty); return { source: "local", reason: "cloud-error" }; }
         meta = raced.m;
       } else {
-        try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { source: "local", reason: "cloud-error" }; }
+        try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); adoptDurableBase(name, localDirty); return { source: "local", reason: "cloud-error" }; }
       }
       if (!meta) return { source: "local", reason: "cloud-absent" };
       const base = head.seenBase(name);

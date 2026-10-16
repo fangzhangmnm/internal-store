@@ -45,6 +45,8 @@ import "./upload-queue.test.ts";
 import "./seal.test.ts";
 import "./freshness.test.ts";
 import "./store-open-conflict.test.ts";
+import "./open-lineage.test.ts";   // 0.18.0：open 核对没跑成时干净副本接血统
+import "./resolve.test.ts";        // 0.18.0：file.resolve() 主动叫面
 import "./local-head.test.ts";
 import "./local-conflict-guard.test.ts";
 import "./offload.test.ts";

@@ -913,6 +913,14 @@ export declare interface RawFile {
     /** 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op
      *  （绝不在事件里弹 sheet，后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。 */
     pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
+    /** 把冲突面**主动叫出来**（0.18.0）：这台有未推的改动时，库自己弹 `ui.resolveConflict({ occasion: "push" })`，按人选的那个走既有派发——
+     *  「本地覆盖云端」= 正常 If-Match 推（云端此刻若已变 → 412 → 库照常再弹面，不预设答案）；「云端覆盖本地」= safePull（这台的那份先进备份箱 →
+     *  拉云端 → 校验 → 覆盖 → 谱系对齐）；「取消」= 什么都不动。用途 = 存档管理 / 图库里「这份没传上去，我要处理」的那一个按钮：
+     *  以前云端没变时库不会弹面、save 只会把本机传上去，人没有「换成云端那份」的路（KudsRocket W-30；user 2026-10-16「我要的就是本地覆盖云端和云端覆盖本地二选一啊！这个才是安全的模型！」「禁止越狱」）。
+     *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。 */
+    resolve(opts?: {
+        adopt?: AdoptFn;
+    }): Promise<ResolveOutcome>;
     /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
     tryMove(to: string): Promise<TryMoveResult>;
     /** 返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
@@ -1048,6 +1056,31 @@ export declare function requestStoragePersistence(sm?: StorageManagerLike | null
 /** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
 export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
+/** file.resolve() 的终态（0.18.0）：
+ *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
+ *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
+ *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。 */
+export declare type ResolveOutcome = {
+    status: "no-local";
+} | {
+    status: "clean";
+} | {
+    status: "offline";
+} | {
+    status: "cancelled";
+} | {
+    status: "pushed";
+} | {
+    status: "not-pushed";
+    reason: string;
+} | {
+    status: "took-cloud";
+    backupName?: string;
+} | {
+    status: "unresolved";
+    reason?: string;
+};
+
 /** restore（从回收站恢复）的选项。 */
 export declare interface RestoreOpts {
     /** 走云端腿恢复。 */
@@ -1145,6 +1178,10 @@ export declare interface StoreConfig {
         backoffMs?: number;
         exponential?: boolean;
     };
+    /** 0.18.0（默认 true）：open 时云端核对没跑成（离线 / 未登录 / 云端出错 / 用户跳过），本地副本干净且磁盘上有上次同步的 etag → 记为本 tab 的 base。
+     *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
+     *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
+    openLineageFromDurable?: boolean;
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
         /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */

@@ -675,6 +675,9 @@ export interface RawFile {
     }): Promise<{
         status: string;
     }>;
+    resolve(opts?: {
+        adopt?: AdoptFn;
+    }): Promise<ResolveOutcome>;
     reupload(): Promise<{
         status: string;
     }>;
@@ -728,6 +731,28 @@ export function requestStoragePersistence(sm?: StorageManagerLike | null): Promi
 
 // @public
 export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
+
+// @public
+export type ResolveOutcome = {
+    status: "no-local";
+} | {
+    status: "clean";
+} | {
+    status: "offline";
+} | {
+    status: "cancelled";
+} | {
+    status: "pushed";
+} | {
+    status: "not-pushed";
+    reason: string;
+} | {
+    status: "took-cloud";
+    backupName?: string;
+} | {
+    status: "unresolved";
+    reason?: string;
+};
 
 // @public
 export interface RestoreOpts {
@@ -801,6 +826,7 @@ export interface StoreConfig {
     kv?: Kv;
     local?: LocalCache;
     offlineUploadReplay?: UploadReplayPolicy;
+    openLineageFromDurable?: boolean;
     persistence: "app-managed" | "none";
     provider: CloudProvider;
     pushRetry?: {

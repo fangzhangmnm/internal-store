@@ -23,7 +23,7 @@ import { assertValidFileName, assertValidCollectionName, isHidden } from "./is-h
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./collection.ts";
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
-import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource } from "./types.ts";
+import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn } from "./types.ts";
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
@@ -114,6 +114,10 @@ export interface StoreConfig {
   reconcilePolicy: "app-driven" | "none";
   /** 0.17.2：push 重试政策（默认 4 次 × 200·n ms = 0.17.0 行为）。大文件 / 移动网络的消费方（KudsRocket）显式拉长：{ maxAttempts: 5, backoffMs: 1000, exponential: true }。 */
   pushRetry?: { maxAttempts?: number; backoffMs?: number; exponential?: boolean };
+  /** 0.18.0（默认 true）：open 时云端核对没跑成（离线 / 未登录 / 云端出错 / 用户跳过），本地副本干净且磁盘上有上次同步的 etag → 记为本 tab 的 base。
+   *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
+   *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
+  openLineageFromDurable?: boolean;
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
     /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
@@ -201,6 +205,14 @@ export type TryMoveResult =
  *  打开中的文档此刻是陈旧世界线，调用方必须整体重载（复用自己的 open→adopt 管线），否则下次保存会把
  *  用户选择保留的云端版本静默覆写回去（2026-08-25 案卷 §1 的事故根因）。"keepMine" = 本地已强推为云端新版，无需动作。 */
 export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepMine" | "takeCloud" };
+/** file.resolve() 的终态（0.18.0）：
+ *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
+ *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
+ *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。 */
+export type ResolveOutcome =
+  | { status: "no-local" } | { status: "clean" } | { status: "offline" } | { status: "cancelled" }
+  | { status: "pushed" } | { status: "not-pushed"; reason: string }
+  | { status: "took-cloud"; backupName?: string } | { status: "unresolved"; reason?: string };
 
 /** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
 export interface FileStream {
@@ -246,6 +258,12 @@ export interface RawFile {
   /** 事件驱动「干净快进」：本地 clean ∧ 云端有更新 → 拉新版覆盖本地缓存；本地 dirty → no-op
    *  （绝不在事件里弹 sheet，后续 push 的 412 会 surface 真分叉）。app 在 focus/visibility/online 调。 */
   pullIfClean(opts?: RefreshOpts): Promise<FreshResult>;
+  /** 把冲突面**主动叫出来**（0.18.0）：这台有未推的改动时，库自己弹 `ui.resolveConflict({ occasion: "push" })`，按人选的那个走既有派发——
+   *  「本地覆盖云端」= 正常 If-Match 推（云端此刻若已变 → 412 → 库照常再弹面，不预设答案）；「云端覆盖本地」= safePull（这台的那份先进备份箱 →
+   *  拉云端 → 校验 → 覆盖 → 谱系对齐）；「取消」= 什么都不动。用途 = 存档管理 / 图库里「这份没传上去，我要处理」的那一个按钮：
+   *  以前云端没变时库不会弹面、save 只会把本机传上去，人没有「换成云端那份」的路（KudsRocket W-30；user 2026-10-16「我要的就是本地覆盖云端和云端覆盖本地二选一啊！这个才是安全的模型！」「禁止越狱」）。
+   *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。 */
+  resolve(opts?: { adopt?: AdoptFn }): Promise<ResolveOutcome>;
   /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
   tryMove(to: string): Promise<TryMoveResult>;
   /** 返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
@@ -656,7 +674,7 @@ export function createStore(config: StoreConfig) {
   });
   // 0.17.0：watchFolder 的完整云端帧当新鲜度证据（fresh-hints.ts 头注释讲安全边界）：几十个小文件连着 open 不再逐个 fetchMeta。
   const freshHints = createFreshHints();
-  const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT, hints: freshHints });
+  const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT, hints: freshHints, lineageFromDurable: config.openLineageFromDurable ?? true });
   const del = createDelete({ cloud, local, head, kv, busy: busyT });
   const identity = createIdentity({
     cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: busyT,
@@ -969,6 +987,32 @@ export function createStore(config: StoreConfig) {
         return new Blob([(r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes as ArrayBufferLike)) as BlobPart]);
       },
       pullIfClean(opts) { return fresh.refresh(name, { isOnline, ...opts }); },   // 事件驱动干净快进（clean→FF、dirty→no-op）；默认注入 store 的 isOnline（离线早退，不空跑 fetchMeta）
+      // 0.18.0 主动叫面（JSDoc 见 RawFile.resolve）。面 = 同一个 ui.resolveConflict；派发 = 同一个 safeResolve / pushMod，没有第二套逻辑。
+      async resolve(opts) {
+        await migrationReady;
+        roGuard("resolve");
+        if (!(await local.exists(name))) return { status: "no-local" };
+        if (!head.isDirtyAnywhere(name)) return { status: "clean" };
+        if (!isOnline()) return { status: "offline" };
+        const choice = await onConflictFor("push")({ name });
+        if (choice === "cancel") return { status: "cancelled" };
+        if (choice === "takeCloud") {
+          const r = await safeResolve.resolveConflict(name, "takeCloud", { adopt: opts?.adopt });
+          notifyFolderOf(name);
+          return r.status === "resolved" ? { status: "took-cloud", backupName: r.backupName } : { status: "unresolved", reason: r.reason };
+        }
+        // keepMine：at-rest 字节原样推（同 pushLocalBytes / dirty.pushAll），走 vetted push：If-Match 由谱系给、412 / 谱系断裂 → 库再弹面
+        const blob = await local.get(name);
+        if (!blob) return { status: "no-local" };
+        const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
+        let r;
+        try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true }); }
+        catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
+        notifyFolderOf(name);
+        if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };   // 推时撞上真分叉、人在第二张面选了云端
+        const pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
+        return pushed ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
+      },
       tryMove(to) { roGuard("tryMove"); return tryMoveSF(name, to); },
       async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
