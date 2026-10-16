@@ -54,6 +54,11 @@ export interface RefreshOpts {
   probe?: Promise<unknown>;
   /** busy 遮罩注入。 */
   busy?: Busy;
+  /** 0.18.1（默认 true）：要不要采信「刚列过的云端帧」（fresh-hints，30 s 时效）当作「云端没动」的证据。
+   *  false = 这次一定问云端（fetchMeta）。用在 app **怀疑自己过期**的时刻：挂机 / 锁屏醒来、回前台、刚登录——别的设备可能就在这 30 s 里推过
+   *  （WXHW e2e「挂机：别的设备改过、这台干净 → 醒来静默快进」在 0.17.0 fresh-hints 下翻红：醒来那次核对被 30 s 内的旧清单顶掉、没快进）。
+   *  连着 open 几十个小文件那种场景保持默认 true。 */
+  trustHints?: boolean;
 }
 /** open / refresh 的终态。 */
 export interface FreshResult {
@@ -146,10 +151,10 @@ export function createFreshness(cfg: FreshnessCfg) {
 
   // 事件驱动干净快进：dirty → no-op（绝不在事件里弹 sheet；后续 push 的 412 会 surface 真分叉）。
   async function refresh(name: string, opts: RefreshOpts = {}): Promise<FreshResult> {
-    const { isOnline = () => true, adopt, localDirty, onReplaceStart, probe, busy = passBusy } = opts;
+    const { isOnline = () => true, adopt, localDirty, onReplaceStart, probe, busy = passBusy, trustHints = true } = opts;
     if (!isOnline()) return { status: "offline" };
     if (head.isDirtyAnywhere(name) || (localDirty && localDirty())) return { status: "dirty-skip" };   // anywhere：快进覆盖的是**共享**本地字节，别 tab 的未推编辑也要挡
-    if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { status: "in-sync" }; }
+    if (trustHints && hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { status: "in-sync" }; }   // 0.18.1：trustHints:false = 醒来 / 回前台这种时刻一定问云端
     return busy("cloud.checking", async () => {
       let meta: FetchMetaResult | null;
       try { meta = await cloud.fetchMeta(name); } catch (e) { reportStoreError(e, "log"); return { status: "cloud-error" }; }

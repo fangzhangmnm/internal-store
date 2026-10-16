@@ -724,6 +724,7 @@ export interface RefreshOpts {
     localDirty?: () => boolean;
     onReplaceStart?: () => void;
     probe?: Promise<unknown>;
+    trustHints?: boolean;
 }
 
 // @public

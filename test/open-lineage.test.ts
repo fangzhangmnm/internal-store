@@ -82,3 +82,27 @@ test("[open-lineage] 从没同步过（无 durable etag）→ 不标；开关关
   off.head.recordEdit("f");
   eq(off.head.ifMatchFor("f"), null, "关掉时第一次推仍无 If-Match（旧行为，供对照）");
 });
+
+// 0.18.1：refresh 的 trustHints:false —— 醒来 / 回前台这种时刻别信 30 s 内的旧清单，一定问云端。
+import { createFreshHints } from "../src/fresh-hints.ts";
+test("[refresh] 30 s 内的旧清单说没动，但云端其实动了：默认采信 → in-sync 不快进；trustHints:false → 问云端 → 快进", async () => {
+  const provider = createMockProvider();
+  const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });
+  const local = createMockLocal();
+  const head = createLocalHead({ kv: memKv(), getCloudEtag: (n: string) => cloud.getETag(n) });
+  const safeResolve = createSafeResolve({ cloud, local, head, validateAdopt: () => true });
+  const hints = createFreshHints();
+  const { refresh } = createFreshness({ cloud, head, safeResolve, hints });
+  await cloud.push("f", enc("V1")); await local.save("f", enc("V1"));
+  const e1 = cloud.getETag("f")!;
+  head.markSeen("f", e1);
+  hints.note("f", { etag: e1, lastModified: 0 } as never);     // 这台刚列过：清单里 f 还是 E1
+  provider._seed("f", "V2");                                    // 别的设备在这 30 s 里推了 V2
+  const r1 = await refresh("f", {});
+  eq(r1.status, "in-sync", "默认采信清单 → 以为没动（0.17.0 行为，TOCTOU 窗口 = 清单时效）");
+  const r2 = await refresh("f", { trustHints: false });
+  eq(r2.status, "fast-forwarded", "不信清单 → fetchMeta 看到 E2 → 干净快进");
+  const got = await local.get("f");
+  const txt = got instanceof Blob ? await got.text() : new TextDecoder().decode(got instanceof Uint8Array ? got : new Uint8Array(got as ArrayBuffer));
+  eq(txt, "V2", "本地 = 云端新版");
+});

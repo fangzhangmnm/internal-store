@@ -1046,6 +1046,11 @@ export declare interface RefreshOpts {
     probe?: Promise<unknown>;
     /** busy 遮罩注入。 */
     busy?: Busy;
+    /** 0.18.1（默认 true）：要不要采信「刚列过的云端帧」（fresh-hints，30 s 时效）当作「云端没动」的证据。
+     *  false = 这次一定问云端（fetchMeta）。用在 app **怀疑自己过期**的时刻：挂机 / 锁屏醒来、回前台、刚登录——别的设备可能就在这 30 s 里推过
+     *  （WXHW e2e「挂机：别的设备改过、这台干净 → 醒来静默快进」在 0.17.0 fresh-hints 下翻红：醒来那次核对被 30 s 内的旧清单顶掉、没快进）。
+     *  连着 open 几十个小文件那种场景保持默认 true。 */
+    trustHints?: boolean;
 }
 
 /** 执行体：**只准在用户手势时刻调**（挂图库/首存/安装后——Firefox 会真弹窗，别在 boot/后台调）。
