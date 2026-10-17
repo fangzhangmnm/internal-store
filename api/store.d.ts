@@ -111,8 +111,9 @@ export declare class CloudStaleRefError extends Error {
 
 /** 冲突面上云端那一侧的状态（0.18.2，给宿主措辞用；三个按钮不变）：
  *  changed = 云端有别的版本（412 / 谱系断裂撞名 / resolve 时 etag ≠ base）· absent = 云端那份没了（resolve 时 fetchMeta 为空：别的设备删了 / 移走了）
- *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）。absent 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站。 */
-export declare type CloudState = "changed" | "absent" | "unchanged";
+ *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）· never = 云端从来没有过（本地从没同步过，0.18.4）。
+ *  absent / never 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站；选「本地覆盖云端」= 传上去（never 就是第一次上传）。 */
+export declare type CloudState = "changed" | "absent" | "unchanged" | "never";
 
 /** cloud-sync 暴露给 store/app 的面（dirty/etag 状态 + push/pull/list/trash 等）。 */
 export declare interface CloudSync {

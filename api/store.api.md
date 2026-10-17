@@ -88,7 +88,7 @@ export class CloudStaleRefError extends Error {
 }
 
 // @public
-export type CloudState = "changed" | "absent" | "unchanged";
+export type CloudState = "changed" | "absent" | "unchanged" | "never";
 
 // @public
 export interface CloudSync {

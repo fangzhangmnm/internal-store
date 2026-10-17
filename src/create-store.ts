@@ -211,8 +211,9 @@ export type TryMoveResult =
 export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepMine" | "takeCloud" };
 /** 冲突面上云端那一侧的状态（0.18.2，给宿主措辞用；三个按钮不变）：
  *  changed = 云端有别的版本（412 / 谱系断裂撞名 / resolve 时 etag ≠ base）· absent = 云端那份没了（resolve 时 fetchMeta 为空：别的设备删了 / 移走了）
- *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）。absent 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站。 */
-export type CloudState = "changed" | "absent" | "unchanged";
+ *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）· never = 云端从来没有过（本地从没同步过，0.18.4）。
+ *  absent / never 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站；选「本地覆盖云端」= 传上去（never 就是第一次上传）。 */
+export type CloudState = "changed" | "absent" | "unchanged" | "never";   // never（0.18.4）= 云端从来没有过这份（本地从没同步过）：本地覆盖云端 = 第一次上传、云端覆盖本地 = 这份进回收站
 /** file.resolve() 的终态（0.18.0）：
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
@@ -1015,12 +1016,12 @@ export function createStore(config: StoreConfig) {
         if (!isOnline()) return { status: "offline" };
         // 0.18.2：先看云端那一侧是什么状态，面才能说对话、「云端覆盖本地」才知道该拉还是该删（云端没了 = 跟着云端把本地这份移到回收站）。
         let cloudState: CloudState = "changed";
-        try { const meta = await cloud.fetchMeta(name); cloudState = !meta ? "absent" : meta.etag === head.seenBase(name) ? "unchanged" : "changed"; }
+        try { const meta = await cloud.fetchMeta(name); cloudState = !meta ? (head.seenBase(name) == null ? "never" : "absent") : meta.etag === head.seenBase(name) ? "unchanged" : "changed"; }
         catch (e) { ui.reportError(e, "log"); }   // 拿不到就按「可能变了」问
         const choice = await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
-          if (cloudState === "absent") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
+          if (cloudState === "absent" || cloudState === "never") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
             const d = await delSF(name);
             notifyFolderOf(name);
             return d.status === "trashed" ? { status: "trashed" } : { status: "unresolved", reason: d.status };

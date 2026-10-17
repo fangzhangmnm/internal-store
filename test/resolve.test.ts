@@ -135,3 +135,27 @@ test("[resolve] 云端那份没了 + 这台有没传的：面说 absent；选云
   await fc.resolve();
   eq(states[2], "unchanged", "云端没变、只是这台有没推的改动");
 });
+
+test("[resolve] 从没同步过的本地文件（float）：面说 never；本地覆盖云端 = 第一次上传；云端覆盖本地 = 进回收站", async () => {
+  const states: string[] = [];
+  const mk = (choices: Array<"keepMine" | "takeCloud" | "cancel">) => {
+    const provider = createMockProvider(); const local = createMockLocal();
+    const ui = { busy: <T>(_l: string, fn: () => Promise<T>) => fn(), reportError: () => {},
+      resolveConflict: async (c: { cloudState?: string }) => { states.push(c.cloudState ?? "?"); return choices.shift() ?? "cancel"; } } as never;
+    const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+      appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => true, signedIn: () => true, skipMigration: true });
+    return { provider, store };
+  };
+  const a = mk(["keepMine"]);
+  const fa = a.store.file("新.ora", { mode: "new" });
+  await fa.save(enc("NEW"), { tryPush: false });            // 本地新建、没推过
+  const ra = await fa.resolve();
+  eq(states[0], "never", "云端从来没有过");
+  eq(ra.status, "pushed", "本地覆盖云端 = 第一次上传");
+  const b = mk(["takeCloud"]);
+  const fb = b.store.file("新.ora", { mode: "new" });
+  await fb.save(enc("NEW"), { tryPush: false });
+  const rb = await fb.resolve();
+  eq(states[1], "never", "云端从来没有过");
+  eq(rb.status, "trashed", "云端覆盖本地 = 这份进回收站");
+});
