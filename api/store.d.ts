@@ -928,7 +928,7 @@ export declare interface RawFile {
      *  「本地覆盖云端」= 正常 If-Match 推（云端此刻若已变 → 412 → 库照常再弹面，不预设答案）；「云端覆盖本地」= safePull（这台的那份先进备份箱 →
      *  拉云端 → 校验 → 覆盖 → 谱系对齐）；「取消」= 什么都不动。用途 = 存档管理 / 图库里「这份没传上去，我要处理」的那一个按钮：
      *  以前云端没变时库不会弹面、save 只会把本机传上去，人没有「换成云端那份」的路（KudsRocket W-30；user 2026-10-16「我要的就是本地覆盖云端和云端覆盖本地二选一啊！这个才是安全的模型！」「禁止越狱」）。
-     *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。
+     *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）；例外（0.18.5）：同步过 ∧ 云端确认没了（列举里的 pendingGone）→ 面照弹，cloudState absent。
      *  ⚠ 这是「这份没同步好，我要处理」按钮**唯一**合法的后端。app 不许自造方向动词（传上去 / 推一把 / 重新上传 / 用这台的 / 用云端的）
      *  绕过它——那些词不在词汇表上（词汇表 = `ResolveChoice` 三个值）。按钮文字请用字面量类型钉死（KudsRocket `panels.ts` `AttentionLabel` 是样板）。 */
     resolve(opts?: {
@@ -1079,7 +1079,8 @@ export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 /** file.resolve() 的终态（0.18.0）：
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
- *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。 */
+ *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。
+ *  0.18.5：干净的副本若「同步过 ∧ 云端确认没了」（列举里的 pendingGone）也弹面（cloudState absent）——不再回 clean；其余干净情形照旧 clean。 */
 export declare type ResolveOutcome = {
     status: "no-local";
 } | {

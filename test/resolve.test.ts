@@ -159,3 +159,75 @@ test("[resolve] 从没同步过的本地文件（float）：面说 never；本�
   eq(states[1], "never", "云端从来没有过");
   eq(rb.status, "trashed", "云端覆盖本地 = 这份进回收站");
 });
+
+// 0.18.5：干净 ∧ 同步过 ∧ 云端没了（列举里的 pendingGone，宽限期内）——以前 resolve() 回 clean、不弹面，存档管理「处理…」按了没反应一直挂着
+//   （KudsRocket user 2026-10-17「云端没有的情况点处理没有给选项，然后一直卡着待处理」）。—— added 20261017 by Claude Opus 5.5
+test("[resolve] 干净的副本、云端那份被别处删了：面说 absent；云端覆盖本地 → 进回收站；本地覆盖云端 → 传回去；取消 → 不动", async () => {
+  const states: string[] = [];
+  const mk = (choices: Array<"keepMine" | "takeCloud" | "cancel">, online = true) => {
+    const provider = createMockProvider(); const local = createMockLocal();
+    const ui = { busy: <T>(_l: string, fn: () => Promise<T>) => fn(), reportError: () => {},
+      resolveConflict: async (c: { cloudState?: string }) => { states.push(c.cloudState ?? "?"); return choices.shift() ?? "cancel"; } } as never;
+    let on = true;
+    const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+      appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => on, signedIn: () => true, skipMigration: true });
+    const goOffline = () => { on = online; };
+    const cloudText = async (name: string) => {
+      const it = provider._dump().find((i) => (i as { path?: string }).path?.endsWith(name) || (i as { name?: string }).name === name) as { ref?: string; id?: string } | undefined;
+      return it ? asStr(await provider.download(it.ref ?? it.id!)) : null;
+    };
+    const gone = async (name: string) => {
+      const it = provider._dump().find((i) => (i as { path?: string }).path?.endsWith(name) || (i as { name?: string }).name === name) as { ref?: string; id?: string; eTag?: string };
+      await provider.delete(it.ref ?? it.id!, it.eTag);
+    };
+    return { provider, local, store, cloudText, gone, goOffline };
+  };
+  // ① 云端覆盖本地 = 跟着云端：本地这份进回收站
+  const a = mk(["takeCloud"]);
+  const fa = a.store.file("稿.ora", { mode: "existing" });
+  await fa.save(enc("V1"), { tryPush: true });                 // 同步过、干净
+  await a.gone("稿.ora");                                       // 别的设备删了
+  const ra = await fa.resolve();
+  eq(states.length, 1, "干净的也弹面了（以前回 clean）");
+  eq(states[0], "absent", "面知道云端那份没了");
+  eq(ra.status, "trashed", "云端覆盖本地 = 本地这份进回收站");
+  eq((await fa.resolve()).status, "no-local", "这台的正式位置没有了");
+  // ② 本地覆盖云端 = 传回去
+  const b = mk(["keepMine"]);
+  const fb = b.store.file("稿.ora", { mode: "existing" });
+  await fb.save(enc("V1"), { tryPush: true });
+  await b.gone("稿.ora");
+  const rb = await fb.resolve();
+  eq(states[1], "absent", "面知道云端那份没了");
+  eq(rb.status, "pushed", "本地覆盖云端 = 传回去");
+  eq(await b.cloudText("稿.ora"), "V1", "云端又有了这台那份");
+  eq((await fb.resolve()).status, "clean", "传回去之后就是已同步：再按 = 没有要处理的、不弹面");
+  eq(states.length, 2, "第二次没弹面");
+  // ③ 取消 = 不动
+  const c = mk(["cancel"]);
+  const fc = c.store.file("稿.ora", { mode: "existing" });
+  await fc.save(enc("V1"), { tryPush: true });
+  await c.gone("稿.ora");
+  eq((await fc.resolve()).status, "cancelled", "取消");
+  eq(await asStr(await fc.open().catch(() => null)), "V1", "本地那份还在");
+  eq(await c.cloudText("稿.ora"), null, "云端也没被动");
+});
+
+test("[resolve] 干净的副本、云端还在（同版 / 有新版）、或离线 → 照旧 clean，不弹面（0.18.5 只多管「云端确认没了」这一种）", async () => {
+  let faces = 0;
+  let on = true;
+  const provider = createMockProvider(); const local = createMockLocal();
+  const ui = { busy: <T>(_l: string, fn: () => Promise<T>) => fn(), reportError: () => {}, resolveConflict: async () => { faces++; return "cancel"; } } as never;
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => on, signedIn: () => true, skipMigration: true });
+  const f = store.file("稿.ora", { mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  eq((await f.resolve()).status, "clean", "同版 → clean");
+  provider._seed("稿.ora", "CLOUD-NEW");                       // 别的设备存了新版（这台干净）
+  eq((await f.resolve()).status, "clean", "云端有新版 → clean（快进走 pullIfClean，不是 resolve）");
+  const g = store.file("本地新.ora", { mode: "new" });
+  await g.save(enc("L"), { tryPush: true });
+  on = false;
+  eq((await g.resolve()).status, "clean", "离线 + 不是 candidate → clean");
+  eq(faces, 0, "一张面都没弹");
+});
