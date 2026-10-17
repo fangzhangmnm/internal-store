@@ -23,3 +23,9 @@ The canonical failure list (from `journals/20260604-potential-bugs.md`, `ai-docs
 
 > _§A identity row + invariant corrected as-of 2026-06-19 (JRP review): the GUID-in-thumb identity (ADR-0011) was rolled back 2026-06-07; store is format-agnostic, identity = path/name, **no thumbnail required**. Trust code over stale doc._
 > _IDB tx-commit row added 2026-08-26, edited by Claude Fable 5 (claude-fable-5)._
+## B. 同步动词词汇表（2026-10-16 user 拍板；边界条款）
+
+- 词汇表只有三个：**云端覆盖本地（takeCloud）/ 本地覆盖云端（keepMine）/ 取消（cancel）**，且只出现在宿主为 `ui.resolveConflict` 画的那一张面里。
+- 宿主的同步状态 UI（存档管理 / 图库单项动词 / 状态条）**不许自造方向动词**：「传上去」「推一把」「重新上传」「用这台的」「用云端的」一律违规；唯一动作 = 「处理…」→ `file.resolve()`。例外只有一种：本机干净 ∧ 云端有新版 → 「云端覆盖本地」直接换（没有人需要决定的事）。
+- 回调的答案必须来自人的点击：预设答案、按场合自动返回 = 越狱。`open()` 再 `save()` 刷新基准 = 后写的赢，同为越狱。
+- 用类型钉死（按钮文字 = 字面量联合类型）+ 结构守卫测试（grep 按钮行），不要只写在 doc 里。

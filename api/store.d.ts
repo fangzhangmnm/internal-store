@@ -340,7 +340,9 @@ export declare function createStore(config: StoreConfig): {
             /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
              *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/落地未确认都算失败留 dirty（0.15.1 起**加密锁定不再是失败原因**：at-rest 字节直推，不要密码），
              *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
-             *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
+             *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。
+             *  ⚠ 滥用警示：这是**自动续推**（登录后 / 回线 / 回前台把已 consent 的保存补上去），If-Match 守着、撞上就留 dirty。
+             *  **不要**把它接到用户按的「传上去 / 全部推送」按钮上——那是替人选了「本地覆盖云端」的方向。失败名单里的文件只能经 `resolve()` 处理。 */
             pushAll: () => Promise<{
                 pushed: number;
                 failed: string[];
@@ -895,7 +897,10 @@ export declare interface RawFile {
     /** 本地落盘 + best-effort 推云（默认 tryPush:true）；tryPush:false = 只落本地不推
      *  （autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）。
      *  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推。hint 透传缩略图（store content-blind）。
-     *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
+     *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。
+     *  ⚠ 滥用警示（2026-10-16 user「禁止越狱」）：**不要**用 `open()` 再 `save()` 来「刷新基准、把本机传上去」——那是后写的赢（LWW），
+     *  绕开了冲突面；也不要把 save 接到一个叫「传上去 / 推一把」的按钮上当成「处理没同步的文件」的动作：那个动作只有一个合法入口 = `resolve()`，
+     *  由人在面里三选一（云端覆盖本地 / 本地覆盖云端 / 取消）。save 只用于「用户刚编辑、要落盘」。 */
     save(bytes: Bytes | Blob, opts?: {
         tryPush?: boolean;
         hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */
@@ -922,7 +927,9 @@ export declare interface RawFile {
      *  「本地覆盖云端」= 正常 If-Match 推（云端此刻若已变 → 412 → 库照常再弹面，不预设答案）；「云端覆盖本地」= safePull（这台的那份先进备份箱 →
      *  拉云端 → 校验 → 覆盖 → 谱系对齐）；「取消」= 什么都不动。用途 = 存档管理 / 图库里「这份没传上去，我要处理」的那一个按钮：
      *  以前云端没变时库不会弹面、save 只会把本机传上去，人没有「换成云端那份」的路（KudsRocket W-30；user 2026-10-16「我要的就是本地覆盖云端和云端覆盖本地二选一啊！这个才是安全的模型！」「禁止越狱」）。
-     *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。 */
+     *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。
+     *  ⚠ 这是「这份没同步好，我要处理」按钮**唯一**合法的后端。app 不许自造方向动词（传上去 / 推一把 / 重新上传 / 用这台的 / 用云端的）
+     *  绕过它——那些词不在词汇表上（词汇表 = `ResolveChoice` 三个值）。按钮文字请用字面量类型钉死（KudsRocket `panels.ts` `AttentionLabel` 是样板）。 */
     resolve(opts?: {
         adopt?: AdoptFn;
     }): Promise<ResolveOutcome>;
@@ -1063,7 +1070,9 @@ export declare interface RefreshOpts {
  *  ⚠ 无论结果如何都**不得**据此改变数据安全行为（persist 是降概率，不是保证——头注释档位定性）。 */
 export declare function requestStoragePersistence(sm?: StorageManagerLike | null): Promise<"granted" | "denied" | "unsupported">;
 
-/** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
+/** 冲突派发的选择串（keepMine / takeCloud / cancel）= **同步动词词汇表的全部**（2026-10-16 user「因为这个动词一开始就不合法，不在词汇表上」）。
+ *  keepMine = 本地覆盖云端 · takeCloud = 云端覆盖本地 · cancel = 取消。app 的任何同步 UI 只许画这三个词，不许自造「传上去 / 推一把 / 重新上传 / 用这台的」；
+ *  答案只能来自人在面上点的那一下。 */
 export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
 /** file.resolve() 的终态（0.18.0）：

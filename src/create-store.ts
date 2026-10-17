@@ -51,6 +51,10 @@ export interface StoreUI {
    *  occasion=弹窗时机（2026-08-21 grill 拍板，宿主据此分场景措辞/按钮集）：
    *    "open" = 打开文件时（keepMine/cancel 都=先打开本地暂不解决，保存时再裁）；
    *    "push" = 保存上传 412 / 谱系断裂撞名时（keepMine=**立即**本地覆盖云端，loser 进 .backup）。 */
+  //   ⚠ 滥用警示（2026-10-16 user「禁止越狱」）：这个回调的答案**必须来自人在面上的一次点击**。app 代码不许预设答案（KudsRocket v0.1.33–0.1.35
+  //   的 presetResolution = 典型越狱，已删）、不许按 occasion 自动返回、不许用 cancel 以外的默认值；也不许把三个值画成别的词——按钮文字 1:1 对应
+  //   keepMine = 本地覆盖云端、takeCloud = 云端覆盖本地、cancel = 取消（全家族 2026-10-16 统一；主按钮 = 云端覆盖本地）。库分不出人点的还是代码返回的，
+  //   这一层只能靠纪律 + 宿主的结构守卫（grep「预设 / preset」类写法）。
   resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push"; cloudState?: CloudState }) => Promise<ResolveChoice>;
   /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
   reportError: (err: unknown, level?: StoreErrorLevel) => void;
@@ -246,7 +250,10 @@ export interface RawFile {
   /** 本地落盘 + best-effort 推云（默认 tryPush:true）；tryPush:false = 只落本地不推
    *  （autosave/频繁保存；opaque Work 的 push 必须 consent-gated，ADR-0016/0018）。
    *  tryPush 是 **best-effort**：离线/冲突/失败 → 文件留 dirty、下次补推。hint 透传缩略图（store content-blind）。
-   *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。 */
+   *  **别忽略 pushed**：pushed:false 不是错误，是**事实**（离线/冲突/用户 cancel），调用方据此保住 push-pending。
+   *  ⚠ 滥用警示（2026-10-16 user「禁止越狱」）：**不要**用 `open()` 再 `save()` 来「刷新基准、把本机传上去」——那是后写的赢（LWW），
+   *  绕开了冲突面；也不要把 save 接到一个叫「传上去 / 推一把」的按钮上当成「处理没同步的文件」的动作：那个动作只有一个合法入口 = `resolve()`，
+   *  由人在面里三选一（云端覆盖本地 / 本地覆盖云端 / 取消）。save 只用于「用户刚编辑、要落盘」。 */
   save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */ onProgress?: (done: number, total: number) => void }): Promise<SaveResult>;
   /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
   open(): Promise<Blob | null>;
@@ -267,7 +274,9 @@ export interface RawFile {
    *  「本地覆盖云端」= 正常 If-Match 推（云端此刻若已变 → 412 → 库照常再弹面，不预设答案）；「云端覆盖本地」= safePull（这台的那份先进备份箱 →
    *  拉云端 → 校验 → 覆盖 → 谱系对齐）；「取消」= 什么都不动。用途 = 存档管理 / 图库里「这份没传上去，我要处理」的那一个按钮：
    *  以前云端没变时库不会弹面、save 只会把本机传上去，人没有「换成云端那份」的路（KudsRocket W-30；user 2026-10-16「我要的就是本地覆盖云端和云端覆盖本地二选一啊！这个才是安全的模型！」「禁止越狱」）。
-   *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。 */
+   *  app 只负责调它，**不传答案**——决定只发生在面里。干净的文件返 clean（要同步用 pullIfClean）。
+   *  ⚠ 这是「这份没同步好，我要处理」按钮**唯一**合法的后端。app 不许自造方向动词（传上去 / 推一把 / 重新上传 / 用这台的 / 用云端的）
+   *  绕过它——那些词不在词汇表上（词汇表 = `ResolveChoice` 三个值）。按钮文字请用字面量类型钉死（KudsRocket `panels.ts` `AttentionLabel` 是样板）。 */
   resolve(opts?: { adopt?: AdoptFn }): Promise<ResolveOutcome>;
   /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
   tryMove(to: string): Promise<TryMoveResult>;
@@ -275,10 +284,15 @@ export interface RawFile {
    *  cancelled（用户在脏文件警告里选了取消）· noop（本地云端都没有）
    *  · queuedCloudDelete:false（离线且谱系不明 → 本地 move-aside 了，但云端那份还在）。 */
   delete(): Promise<DelResult>;
+  // ⚠ 滥用警示：delete 是「两边都进回收站」，**不是**「放弃这台的改动」。把它摆在没同步好的行上当「删本地」= 用户会把云端那份一起删掉
+  //   （KudsRocket 2026-10-14 00:54 丢手动存档的根因）。「放弃这台的改动」= `resolve()` 里选云端覆盖本地。
   // gallery 层没开文件 → 必须 store 内解决，不靠编辑器 save。
   /** 重新上传（candidate-gone 的「保留重传」动作）：本地 clean 字节推云到空 path。撞名(乌龙云端已有)→抛
    *  CloudNameCollisionError（app surface conflict）；成功→采纳新 etag 变 synced + 清 candidate。 */
   reupload(): Promise<{ status: string }>;
+  // ⚠ 滥用警示：reupload 是**方向动词**（本机权威：云端没了就把本机传回去）。它只许作为 `resolve()` 面里「本地覆盖云端」那一侧的实现细节，
+  //   **不许**单独做成一个按钮摆给用户（gallery 0.7.1 及以前的「重新上传」= 这种越狱，2026-10-16 user 判定「动词不在词汇表上」）。
+  //   云端没了的文件要人决定去留 → `resolve()`（cloudState:"absent"：云端覆盖本地 = 本机进回收站；本地覆盖云端 = 传回去）。
   // 注：无 isDirty —— 「有没未推的改动」是 **sync 状态**，经 store.listAllItems 的 syncState 读（unpushed/conflict）。
   //   「是否 dirty 该推」= app 编辑逻辑（编辑器生命周期模块）的判断，不是库的事。
   // ── 离线副本（keepOffline/offload；无 LRU、无 pin flag：有本地副本 = kept offline）──
@@ -1246,7 +1260,9 @@ export function createStore(config: StoreConfig) {
         /** 把所有 dirty 文件推上云（不开文档；per-name serialize 与用户操作互斥）。
          *  failed 返名字是**错误报告**不是列举面（量级=失败数）：离线/冲突/落地未确认都算失败留 dirty（0.15.1 起**加密锁定不再是失败原因**：at-rest 字节直推，不要密码），
          *  绝不谎报——绿灯门以 `count()===0` 为准，不以本方法返回为准。冲突不在这里弹面（batch 里不级联
-         *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。 */
+         *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。
+         *  ⚠ 滥用警示：这是**自动续推**（登录后 / 回线 / 回前台把已 consent 的保存补上去），If-Match 守着、撞上就留 dirty。
+         *  **不要**把它接到用户按的「传上去 / 全部推送」按钮上——那是替人选了「本地覆盖云端」的方向。失败名单里的文件只能经 `resolve()` 处理。 */
         pushAll: async (): Promise<{ pushed: number; failed: string[] }> => {
           roGuard("dirty.pushAll");
           await migrationReady;

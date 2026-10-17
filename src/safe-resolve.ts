@@ -10,7 +10,9 @@ import { reportStoreError } from "./error-handling.ts";   // 全接但分级：�
 import type { CloudSync, LocalCache } from "./types.ts";
 import type { LocalHead } from "./local-head.ts";
 
-/** 冲突派发的选择串（keepMine / takeCloud / cancel）。 */
+/** 冲突派发的选择串（keepMine / takeCloud / cancel）= **同步动词词汇表的全部**（2026-10-16 user「因为这个动词一开始就不合法，不在词汇表上」）。
+ *  keepMine = 本地覆盖云端 · takeCloud = 云端覆盖本地 · cancel = 取消。app 的任何同步 UI 只许画这三个词，不许自造「传上去 / 推一把 / 重新上传 / 用这台的」；
+ *  答案只能来自人在面上点的那一下。 */
 export type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
 
 export type SafePullResult =
