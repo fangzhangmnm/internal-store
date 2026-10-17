@@ -22,6 +22,7 @@ Encrypted files use a **3-layer container**:
 - **`<GUID>` is just an opaque obfuscation name**, regenerated per repack — *not* an identity, needs no stability or anti-collision registry.
 - The **`peek` is opaque app bytes** (see "format-blind" below), encrypted as a custom AES-GCM blob anchored on a custom MAGIC (ciphertext has no recognizable magic). One byte-range tail read decrypts it. An **empty peek is still written** (it doubles as the "this is an encrypted container" probe marker).
 - Password is **memory-only, never persisted**; **salt is per-file in the payload/peek headers** (not device-bound, no salt file to sync). WebXiaoHeiWu migrates from its custom AES-GCM binary (no external tool opens it) to this model.
+  > **Amended 2026-10-17** (user 2026-10-15 / 10-17 decision; edited by Claude Fable 5.1): the *store* still never sees or stores the password (seam stays `getPassword`), but an **app may let the device remember it** — opt-in, sealed under a non-extractable AES-GCM key in the app's own IDB, **expires ≤ 30 days**. Decision + threat model = `@internal/encryption` repo `ai-docs/adr/0001-device-remembers-password.md`.
 
 ## Encryption is a **store-base operator**, not app code (2026-06-12)
 

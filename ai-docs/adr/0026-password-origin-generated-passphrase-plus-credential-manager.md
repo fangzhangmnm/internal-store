@@ -93,6 +93,10 @@ Safari/Chrome 的凭据管理器**没有新增任何信任**——是同一个�
 - ADR-0012「**Password is memory-only, never persisted**」**仍然成立**。我们依旧不往 IDB /
   localStorage / 云端写任何口令。凭据管理器是**平台的**存储、经用户点「保存密码？」授权进入，
   不在我们的存储面内。
+  > **2026-10-17 修订（edited by Claude Fable 5.1）**：这一条已被 user 有意吃书——2026-10-15「还是允许设备记住密码，每次进来不用输吧」、
+  > 2026-10-17「口令加一个过期时间，最多一个月」。store 侧不变（库仍不存口令），**app 侧**可按设备 opt-in 记住口令（不可导出钥匙封装、≤ 30 天过期），
+  > 住 `@internal/encryption` 0.2.0 `createPasswordKeeper`；决策与威胁模型见该仓 `ai-docs/adr/0001-device-remembers-password.md`。
+  > 本 ADR 的「口令来源 = 生成短语 + 凭据管理器」方向不受影响、仍未实现。
 - ADR-0012「do not pre-stretch」「do not enforce」**仍然成立**：短语是字面 7z 密码（可打），
   且骰子按钮是**提供**不是**强制**。
 - 硬规则 #6（appfolder scope）不受影响：本 ADR 不改任何 scope。
