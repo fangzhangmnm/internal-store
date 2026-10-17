@@ -218,7 +218,8 @@ export type CloudState = "changed" | "absent" | "unchanged" | "never";   // neve
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
  *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。
- *  0.18.5：干净的副本若「同步过 ∧ 云端确认没了」（列举里的 pendingGone）也弹面（cloudState absent）——不再回 clean；其余干净情形照旧 clean。 */
+ *  0.18.5：干净的副本若「同步过 ∧ 云端确认没了」（列举里的 pendingGone）也弹面（cloudState absent）——不再回 clean；其余干净情形照旧 clean。
+ *  0.18.6：absent / never 场合选「云端覆盖本地」只在云端**此刻**确实没有时才动；面开着时云端那份回来了 → unresolved / cloud-reappeared（两边都没动，再按一次走正常路）。 */
 export type ResolveOutcome =
   | { status: "no-local" } | { status: "clean" } | { status: "offline" } | { status: "cancelled" }
   | { status: "pushed" } | { status: "not-pushed"; reason: string }
@@ -746,7 +747,13 @@ export function createStore(config: StoreConfig) {
       return Promise.resolve().then(() => fn(...a)).finally(() => { _userWriteInFlight = null; });
     };
   }
-  const delSF = singleFlight("删除", (n: string) => { uploadReplay.remove(n); return del.del(n, { isOnline }); });   // 删=supersede：从补推队列摘掉（ADR-0018）   // 接 isOnline：离线删走 move-aside + base-etag 守卫的删队列（重连 drainDeleteQueue 重放）
+  const delSF = singleFlight("删除", (n: string) => { uploadReplay.remove(n); return del.del(n, { isOnline }); });
+  // 0.18.6：resolve() 面里「云端覆盖本地」在 absent / never 场合专用——只在云端此刻确实没有时才把本地这份移进回收站；云端回来了 / 验不了 → cancelled，两边不动。
+  const delIfCloudAbsentSF = singleFlight("删除", async (n: string) => { const d = await del.del(n, { isOnline, expectCloudAbsent: true }); if (d.status === "trashed") uploadReplay.remove(n); return d; });
+  /** cancelled 的两种原因翻成 resolve() 的终态；trashed 照返。 */
+  const trashedOrWhy = (d: DelResult): ResolveOutcome => d.status === "trashed" ? { status: "trashed" }
+    : d.status === "cancelled" ? { status: "unresolved", reason: d.reason === "cloud-present" ? "cloud-reappeared" : "offline" }
+    : { status: "unresolved", reason: d.status };   // 删=supersede：从补推队列摘掉（ADR-0018）   // 接 isOnline：离线删走 move-aside + base-etag 守卫的删队列（重连 drainDeleteQueue 重放）
   // file.tryMove(to)：改身份/移动的**唯一结果式入口**（file() 无 rename，editor-session 也走这里）——**本操作含目标占用检查**（第一行 nameOccupied，占用则不动字节直接返错）。
   //   ok:false 时调用方 surface（UI 拒绝/重问）；不抛 CloudNameCollisionError（内部护栏是兜底，这里预检过即 skip）。
   // 0.14.0 身份变更事件（user 2026-09-19「改名事件源该在 store」）：任何入口的 tryMove 成功后同步回调；图库只是发起改名的一个前端，不是事件源。
@@ -908,21 +915,12 @@ export function createStore(config: StoreConfig) {
       const asBlob = blob instanceof Blob ? blob : new Blob([blob as BlobPart]);
       return await seal.unsealForRead(name, asBlob);
     };
-    // reupload 的本体（candidate-gone 的「保留重传」）：0.18.5 起 resolve() 在「干净 ∧ 云端没了」选「本地覆盖云端」时也走它——同一段 vetted 逻辑，只是提出来共用（逐字未改）。
-    const reuploadBody = async (): Promise<{ status: string }> => {
-      if (!(await local.exists(name))) return { status: "no-local" };
-      pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
-      head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
-      head.recordEdit(name);                   // 标未推 → 走首推路径（no-base，conflictBehavior:fail 撞名不覆盖）
-      const r = await pushLocalBytes(name);    // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）
-      if (!head.isDirtyThisTab(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // per-tab episode：问「**我这次** push 落地没」；push 成功 = synced → 清 candidate + 重画
-      return r;
-    };
     // 0.18.5：resolve() 遇到**干净**的副本。以前一律回 clean、不弹面——可列举里「云端刚没了」（pendingGone = 干净 ∧ 同步过 ∧ 云端没了，宽限期 24 h 内）
     //   那一行的「处理…」因此按了没反应，一直挂在要处理的（KudsRocket 2026-10-17 user「云端没有的情况点处理没有给选项，然后一直卡着待处理」）。
     //   现在：同步过 ∧ 在线 → 问一次云端；云端确认没了 → 面照弹（cloudState absent）：云端覆盖本地 = 这份移到回收站（同 absent 分支的删除路径）、
-    //   本地覆盖云端 = reupload 首推（不带基准、撞名不覆盖）、取消 = 不动。云端还在（同版 / 有新版）、从没同步过、问不到云端 → 照旧 clean
-    //   （candidate 问不到云端 → offline，免得「没有要处理的」说谎）。
+    //   本地覆盖云端 = 断掉旧谱系、按首推传回去（云端此刻若已有同名别的文件 → 撞名不覆盖、库再弹一张「云端有新版本」的面）、取消 = 不动。
+    //   云端还在（同版 / 有新版）、从没同步过、问不到云端 → 照旧 clean（candidate 问不到云端 → offline，免得「没有要处理的」说谎）。
+    //   0.18.6（审计）：「云端覆盖本地」只在云端**此刻**确实没有时才删——面开着时别的设备把这份传回来了 → 两边都不动，返 unresolved / cloud-reappeared，人再按一次走正常的「云端有新版」路。
     const resolveCleanGone = async (): Promise<ResolveOutcome> => {
       if (head.seenBase(name) == null) return { status: "clean" };                       // 从没同步过的干净文件 = 真本地文件（local-only），没有「没同步好」
       const candidate = pendingGone.isPending(name);
@@ -933,17 +931,26 @@ export function createStore(config: StoreConfig) {
       if (meta) return { status: "clean" };                                               // 云端在：同版 = 已同步；有新版 = 走 pullIfClean，不是这里
       const choice = await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent" });
       if (choice === "cancel") return { status: "cancelled" };
-      if (choice === "takeCloud") {                                                       // 跟着云端：本地这份移到回收站（库的删除路径，可恢复；不硬删）
-        const d = await delSF(name);
-        pendingGone.clear(name);
+      if (choice === "takeCloud") {                                                       // 跟着云端：本地这份移到回收站（库的删除路径，可恢复；不硬删）——只在云端此刻确实没有时
+        const d = await delIfCloudAbsentSF(name);
+        if (d.status === "trashed") pendingGone.clear(name);
         notifyFolderOf(name);
-        return d.status === "trashed" ? { status: "trashed" } : { status: "unresolved", reason: d.status };
+        return trashedOrWhy(d);
       }
+      // 本地覆盖云端：和脏分支同一条 vetted push。先断旧谱系、标脏（= 首推，不带基准、撞名不覆盖）；撞上云端同名别的文件 → surfaceCollision → 库再弹「云端有新版本」的面，人再选。
+      const blob = await local.get(name);
+      if (!blob) return { status: "no-local" };
+      const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
+      pendingGone.clear(name);
+      head.forget(name);
+      head.recordEdit(name);
       let r;
-      try { r = await reuploadBody(); }                                                   // 本地覆盖云端 = 传回去（首推；云端此刻已有同名别的文件 → 撞名不覆盖、抛给宿主）
+      try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true }); }
       catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
       notifyFolderOf(name);
-      return r.status === "pushed" || r.status === "healed" ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
+      if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };
+      const pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
+      return pushed ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
     };
     return {
       async save(bytes, opts) {
@@ -1060,9 +1067,9 @@ export function createStore(config: StoreConfig) {
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
           if (cloudState === "absent" || cloudState === "never") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
-            const d = await delSF(name);
+            const d = await delIfCloudAbsentSF(name);                 // 0.18.6：只在云端此刻确实没有时；面开着时回来了 → 两边不动，unresolved / cloud-reappeared
             notifyFolderOf(name);
-            return d.status === "trashed" ? { status: "trashed" } : { status: "unresolved", reason: d.status };
+            return trashedOrWhy(d);
           }
           const r = await safeResolve.resolveConflict(name, "takeCloud", { adopt: opts?.adopt });
           notifyFolderOf(name);
@@ -1084,7 +1091,15 @@ export function createStore(config: StoreConfig) {
       async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
         roGuard("reupload");
-        return busyK("file.reuploading", undefined, reuploadBody);
+        return busyK("file.reuploading", undefined, async () => {
+          if (!(await local.exists(name))) return { status: "no-local" };
+          pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
+          head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
+          head.recordEdit(name);                   // 标未推 → 走首推路径（no-base，conflictBehavior:fail 撞名不覆盖）
+          const r = await pushLocalBytes(name);    // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）
+          if (!head.isDirtyThisTab(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // per-tab episode：问「**我这次** push 落地没」；push 成功 = synced → 清 candidate + 重画
+          return r;
+        });
       },
       isKeptOffline() { return local.exists(name); },   // 有本地副本 = 已留作离线（无 LRU、无独立 pin flag）
       stagingCoverage() { return sessions.coverage(name); },   // A5 透明面：只读账本，零网络（离线徽章/护栏用）

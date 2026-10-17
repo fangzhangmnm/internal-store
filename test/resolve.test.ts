@@ -231,3 +231,78 @@ test("[resolve] 干净的副本、云端还在（同版 / 有新版）、或离�
   eq((await g.resolve()).status, "clean", "离线 + 不是 candidate → clean");
   eq(faces, 0, "一张面都没弹");
 });
+
+// 0.18.6（2026-10-17 审计，Claude Fable 5.1）：面开着的几分钟里云端那份回来了（别的设备传回 / 从回收站恢复）→ 人选「云端覆盖本地」。
+//   0.18.2 / 0.18.5 走的是双向 delete：它自己再查一次云端、查到有就把**回来的那一版**也移进云端回收站，干净副本那条还把本地硬删，然后 app 说「云端那份已经没了」= 假话。
+//   现在只在云端此刻确实没有时才删；回来了 → 两边都不动，unresolved / cloud-reappeared，人再按一次走正常的「云端有新版 / 冲突」路。
+function rigRace(choices: Array<"keepMine" | "takeCloud" | "cancel">, onFace: (p: ReturnType<typeof createMockProvider>, nth: number) => void) {
+  const provider = createMockProvider(); const local = createMockLocal();
+  const states: string[] = [];
+  const ui = { busy: <T>(_l: string, fn: () => Promise<T>) => fn(), reportError: () => {},
+    resolveConflict: async (c: { cloudState?: string }) => { states.push(c.cloudState ?? "?"); onFace(provider, states.length); return choices.shift() ?? "cancel"; } } as never;
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => true, signedIn: () => true, skipMigration: true });
+  const find = (name: string) => provider._dump().find((i) => (i as { path?: string }).path?.endsWith(name) || (i as { name?: string }).name === name) as { ref?: string; id?: string; eTag?: string } | undefined;
+  const cloudText = async (name: string) => { const it = find(name); return it ? asStr(await provider.download(it.ref ?? it.id!)) : null; };
+  const gone = async (name: string) => { const it = find(name)!; await provider.delete(it.ref ?? it.id!, it.eTag); };
+  const cloudPaths = () => provider._dump().map((i) => (i as { path?: string }).path ?? (i as { name?: string }).name);
+  return { provider, local, store, states, cloudText, gone, cloudPaths };
+}
+
+test("[resolve] 干净副本、云端没了、面开着时云端那份回来了 → 「云端覆盖本地」不动任何一边，报 cloud-reappeared；再按一次 = clean（新版走 pullIfClean）", async () => {
+  const r = rigRace(["takeCloud"], (p, nth) => { if (nth === 1) p._seed("稿.ora", "BACK-FROM-OTHER-DEVICE"); });
+  const f = r.store.file("稿.ora", { mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  await r.gone("稿.ora");
+  const out = await f.resolve();
+  eq(r.states[0], "absent", "弹面那一刻云端确实没了");
+  eq(out.status, "unresolved", "没动");
+  eq((out as { reason?: string }).reason, "cloud-reappeared", "原因说清：云端那份又出现了");
+  eq(await r.cloudText("稿.ora"), "BACK-FROM-OTHER-DEVICE", "回来的那份原地没动（以前被移进云端回收站）");
+  eq(await asStr(await r.local.get("稿.ora")), "V1", "本地那份也没动（以前被硬删）——直接读本地缓存，open() 会按正常规矩快进到云端新版");
+  assert(!r.cloudPaths().some((p) => String(p).startsWith(".trash/")), "云端回收站里什么都没多");
+  eq((await f.resolve()).status, "clean", "再按一次：干净 ∧ 云端在 = clean（换成新版是 pullIfClean 的事）");
+  eq(r.states.length, 1, "第二次没弹面");
+});
+
+test("[resolve] 脏副本（0.18.2 absent 分支）同一个窗口 → 同样不动；再按一次 = 正常的「云端有新版」面，选云端 → took-cloud、本地进备份箱", async () => {
+  const r = rigRace(["takeCloud", "takeCloud"], (p, nth) => { if (nth === 1) p._seed("稿.ora", "BACK-FROM-OTHER-DEVICE"); });
+  const f = r.store.file("稿.ora", { mode: "existing" });
+  await f.save(enc("V1"), { tryPush: true });
+  await f.save(enc("MINE"), { tryPush: false });
+  await r.gone("稿.ora");
+  const out = await f.resolve();
+  eq(r.states[0], "absent", "第一张面：absent");
+  eq(out.status, "unresolved", "没动");
+  eq((out as { reason?: string }).reason, "cloud-reappeared", "原因 = 云端那份又出现了");
+  eq(await r.cloudText("稿.ora"), "BACK-FROM-OTHER-DEVICE", "云端没被碰");
+  eq(await asStr(await r.local.get("稿.ora")), "MINE", "本地的脏字节没被碰（直接读本地缓存；open() 会弹 open 面）");
+  const out2 = await f.resolve();
+  eq(r.states[1], "changed", "第二张面：云端有别的版本（正常冲突路）");
+  eq(out2.status, "took-cloud", "选云端 → 换成云端那份");
+  eq(await asStr(await f.open()), "BACK-FROM-OTHER-DEVICE", "本地 = 云端那版");
+  assert((await r.local.listBackup()).length >= 1, "这台的 MINE 进了备份箱");
+});
+
+test("[resolve] 干净副本、云端没了 → 「本地覆盖云端」时云端已有同名别的文件 → 不抛错、再弹「云端有新版本」面：选云端 → took-cloud；选本地 → pushed、云端 = 这台的", async () => {
+  // ① 第二张面选云端
+  const a = rigRace(["keepMine", "takeCloud"], (p, nth) => { if (nth === 1) p._seed("稿.ora", "OTHER-DEVICE-NEW-FILE"); });
+  const fa = a.store.file("稿.ora", { mode: "existing" });
+  await fa.save(enc("V1"), { tryPush: true });
+  await a.gone("稿.ora");
+  const ra = await fa.resolve();
+  eq(a.states.join(","), "absent,changed", "第一张 absent；首推撞名 → 第二张 changed（以前这里抛 CloudNameCollisionError 报 error）");
+  eq(ra.status, "took-cloud", "第二张选云端 → 换成云端那份");
+  eq(await asStr(await fa.open()), "OTHER-DEVICE-NEW-FILE", "本地 = 别的设备那份");
+  eq(await a.cloudText("稿.ora"), "OTHER-DEVICE-NEW-FILE", "云端没被盖");
+  // ② 第二张面选本地
+  const b = rigRace(["keepMine", "keepMine"], (p, nth) => { if (nth === 1) p._seed("稿.ora", "OTHER-DEVICE-NEW-FILE"); });
+  const fb = b.store.file("稿.ora", { mode: "existing" });
+  await fb.save(enc("V1"), { tryPush: true });
+  await b.gone("稿.ora");
+  const rb = await fb.resolve();
+  eq(b.states.join(","), "absent,changed", "两张面");
+  eq(rb.status, "pushed", "选本地 → 这台的盖上去");
+  eq(await b.cloudText("稿.ora"), "V1", "云端 = 这台的那份（别的设备那份进了云端备份箱，never-lose）");
+  eq((await fb.resolve()).status, "clean", "之后是已同步");
+});

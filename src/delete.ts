@@ -21,6 +21,10 @@ export interface DeleteCfg {
 }
 export interface DelOpts {
   isOnline?: () => boolean;
+  /** 0.18.6：**只在云端确实没有这份时**才删（resolve() 面里「云端覆盖本地」在 absent / never 场合用）。
+   *  面开着的几分钟里别的设备可能把这份传回来 / 从回收站恢复了——那时再按普通 del() 走 = 把回来的那一版也移进云端回收站（2026-10-17 审计探针坐实）。
+   *  开着：云端查到有 → 返 cancelled / cloud-present，两边都不动；离线或问不到云端 → cancelled / offline（不盲排云删）。 */
+  expectCloudAbsent?: boolean;
   confirm?: (ctx: { title: string; body: string; danger?: boolean }) => boolean | Promise<boolean>;
   onDirtyWarn?: (ctx: { name: string }) => boolean | Promise<boolean>;
   busy?: Busy;
@@ -70,7 +74,7 @@ export function createDelete(cfg: DeleteCfg) {
   }
 
   async function del(name: string, opts: DelOpts = {}): Promise<DelResult> {
-    const { isOnline = () => true, confirm, onDirtyWarn, busy = _busy } = opts;
+    const { isOnline = () => true, confirm, onDirtyWarn, busy = _busy, expectCloudAbsent = false } = opts;
     if (confirm && !(await confirm({ title: "删除", body: name, danger: true }))) return { status: "cancelled" };
     if (head.isDirtyAnywhere(name) && onDirtyWarn && !(await onDirtyWarn({ name }))) return { status: "cancelled" };
 
@@ -80,6 +84,7 @@ export function createDelete(cfg: DeleteCfg) {
     //   单腿删除交叉时会把两次无关的删除配成一行 → purge 掉两个不相干的文件还只报删了一个。
     const deleteEventId = asideStamp(Date.now());
     if (!isOnline()) {
+      if (expectCloudAbsent) return { status: "cancelled", reason: "offline" };   // 「云端确实没有」离线验不了 → 不动、不排队
       const baseEtag = cloud.getETag(name);                 // 供重放时 If-Match 式守卫
       let trashKey: string | null = null;
       if (localPresent) trashKey = await local!.trash(name, deleteEventId);
@@ -92,8 +97,10 @@ export function createDelete(cfg: DeleteCfg) {
       return { status: "trashed", where: "local", queuedCloudDelete, baseEtag, trashKey };
     }
     return busy("file.deleting", async () => {
-      let cloudPresent = false;
-      try { cloudPresent = !!(await cloud.fetchMeta(name)); } catch (e) { reportStoreError(e, "log"); cloudPresent = false; }
+      let cloudPresent = false, metaFailed = false;
+      try { cloudPresent = !!(await cloud.fetchMeta(name)); } catch (e) { reportStoreError(e, "log"); cloudPresent = false; metaFailed = true; }
+      if (expectCloudAbsent && metaFailed) return { status: "cancelled", reason: "offline" };          // 未知 ≠ 没了
+      if (expectCloudAbsent && cloudPresent) return { status: "cancelled", reason: "cloud-present" };  // 面开着时云端那份回来了：两边都不动，交回上层说清
       if (cloudPresent) {
         const wasDirty = head.isDirtyAnywhere(name);        // ★trash 前取（trash 后谱系会被 forget）。anywhere：它路由 hardDelete vs 本地 .trash——别 tab 的未推字节 per-tab 看不见，误判 clean = 硬删世界唯一字节（§A）
         const trashed = await cloud.trash(name, deleteEventId);   // 先云端进 .trash（失败抛 → 本地不动）

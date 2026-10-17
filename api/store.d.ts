@@ -1080,7 +1080,8 @@ export declare type ResolveChoice = "keepMine" | "takeCloud" | "cancel";
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
  *  took-cloud 人选「云端覆盖本地」且已换成云端那份（这台的那份进了备份箱；**app 必须整份重读**）· unresolved 选了云端但没换成（reason）。
- *  0.18.5：干净的副本若「同步过 ∧ 云端确认没了」（列举里的 pendingGone）也弹面（cloudState absent）——不再回 clean；其余干净情形照旧 clean。 */
+ *  0.18.5：干净的副本若「同步过 ∧ 云端确认没了」（列举里的 pendingGone）也弹面（cloudState absent）——不再回 clean；其余干净情形照旧 clean。
+ *  0.18.6：absent / never 场合选「云端覆盖本地」只在云端**此刻**确实没有时才动；面开着时云端那份回来了 → unresolved / cloud-reappeared（两边都没动，再按一次走正常路）。 */
 export declare type ResolveOutcome = {
     status: "no-local";
 } | {
