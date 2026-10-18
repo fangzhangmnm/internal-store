@@ -16,6 +16,11 @@
 //
 // 纯函数、零 IO。库内 cloud-sync / trash-merge / local-cache / move-aside / seal 都从这里取答案；gallery 和宿主也直接用 store.identifiers。
 
+/** 公民等级（2.1.0）：家族根 `ai-docs/20261016-data-safety-model.md` §2 四等表的前三等（第四等「设备状态」不进文件 store）。
+ *  user 2026-10-17 深夜「能kind和等级绑定吗（允许一kind多等级？)然后ctor的时候传死」→ 等级是表里每一行的属性，createStore 时传死；
+ *  一个 kind 要两种等级就声明两行（同 suffix、不同 stem 形）；**没有按次调用改等级的口**（那就是 presetResolution 那种越狱）。 */
+export type DocTier = "work" | "auto-backup" | "resource";
+
 export interface DocKind {
   /** app 自己的标签（开放集，如 "book" / "draft" / "painting"）。几行可以是同一个 kind（同一种文档几种拼法）。 */
   kind: string;
@@ -23,6 +28,17 @@ export interface DocKind {
   suffix: string;
   /** 明文字节是什么容器。"zip" = 能按条目名取一小段（封面 peek，`store.zip()`）；"raw" = 不能。库仍然不看内容。 */
   container: "raw" | "zip";
+  /** 2.1.0 公民等级，不传 = "work"（一等作品：If-Match / 冲突面 / 回收站 / 脏的永不驱逐 = 2.0 的全部行为）。
+   *  "auto-backup" 二等：库**永不弹面**——推撞 412 / 撞名、open 时云端变了，一律这台的赢（本地覆盖云端），输的那份**不进备份箱**；
+   *    干净副本碰上云端没了 → 跟着云端（本地那份进回收站）。其余（脏不驱逐、离线补推…）同作品。机器可以轮转它、可以丢它、但永远不能替人把它提升成一等。
+   *  "resource" 三等：files 写面全部抛 ReadOnlyFilesError（save / tryMove / delete / reupload / encrypt / decrypt / rekey）；open 不留本地副本（过路）；
+   *    云端没了本地缓存直接丢、不进回收站；resolve() 恒 clean。读走 openStream / keepOffline / offload。 */
+  tier?: DocTier;
+  /** 2.1.0 同一个后缀分几行时的主干形：stem 匹配这个正则才算这一行。带 stem 的行按声明顺序先试，都不中落到那个不带 stem 的行；
+   *  一个后缀最多一行不带 stem。不许带 g / y 旗（有状态）。例：KudsRocket 的 `.crumb`，`/-[ah]\d+$/` = 自动格 / 历史份（二等），其余手动格（一等）。 */
+  stem?: RegExp;
+  /** 2.1.0 这一种文档自己的采纳验真（云端字节覆盖本地前验**明文**）；不传用 createStore 的 validateAdopt。 */
+  validate?: (plain: Blob) => boolean | Promise<boolean>;
 }
 
 /** 一条文档身份切开之后。 */
@@ -37,6 +53,8 @@ export interface DocIdentifier {
   suffix: string;
   kind: string;
   container: "raw" | "zip";
+  /** 2.1.0 公民等级（表里没写 → "work"）。 */
+  tier: DocTier;
 }
 
 export interface Identifiers {
@@ -44,6 +62,8 @@ export interface Identifiers {
   readonly kinds: readonly DocKind[];
   /** 切开。不是本 app 的文档 → null。几个后缀都命中取最长的；主干不能为空（身份整个就是后缀不算文档）。 */
   parse(identifier: string): DocIdentifier | null;
+  /** 2.1.0 命中的那一行（含 validate 等回调）；不是本 app 的文档 → null。 */
+  rowOf(identifier: string): DocKind | null;
   /** 拼回去：`folder/stem + suffix`（folder 为空就没有斜杠）。不检查 suffix 在不在表里——拼非文档的名字也允许。 */
   join(parts: { folder: string; stem: string; suffix: string }): string;
 }
@@ -65,13 +85,21 @@ export interface IdentifierCodec extends Identifiers {
 export function validateDocKinds(docKinds: readonly DocKind[]): void {
   if (!Array.isArray(docKinds)) throw new Error("docKinds must be an array (pass [] to declare that this app has no document kinds)");
   const seen = new Set<string>();
+  const plain = new Set<string>();   // 不带 stem 的行（一个后缀最多一行）
   for (const k of docKinds) {
     if (!k || typeof k.kind !== "string" || !k.kind) throw new Error(`docKinds: every row needs a non-empty kind (got ${JSON.stringify(k)})`);
     if (typeof k.suffix !== "string" || k.suffix.length < 2 || !k.suffix.startsWith(".")) throw new Error(`docKinds[${k.kind}]: suffix must start with "." and have at least one character after it (got ${JSON.stringify(k.suffix)})`);
     if (k.suffix.includes("/") || /\s$/.test(k.suffix)) throw new Error(`docKinds[${k.kind}]: suffix must not contain "/" or end with whitespace (got ${JSON.stringify(k.suffix)})`);
     if (k.container !== "raw" && k.container !== "zip") throw new Error(`docKinds[${k.kind}]: container must be "raw" or "zip" (got ${JSON.stringify(k.container)})`);
+    if (k.tier !== undefined && k.tier !== "work" && k.tier !== "auto-backup" && k.tier !== "resource") throw new Error(`docKinds[${k.kind}]: tier must be "work" | "auto-backup" | "resource" (got ${JSON.stringify(k.tier)})`);
+    if (k.stem !== undefined && !(k.stem instanceof RegExp)) throw new Error(`docKinds[${k.kind}]: stem must be a RegExp (got ${JSON.stringify(String(k.stem))})`);
+    if (k.stem && (k.stem.global || k.stem.sticky)) throw new Error(`docKinds[${k.kind}]: stem must not use the g / y flags (stateful)`);
+    if (k.validate !== undefined && typeof k.validate !== "function") throw new Error(`docKinds[${k.kind}]: validate must be a function`);
     const low = k.suffix.toLowerCase();
-    if (seen.has(low)) throw new Error(`docKinds: suffix ${JSON.stringify(k.suffix)} declared twice`);
+    if (!k.stem) {
+      if (plain.has(low)) throw new Error(`docKinds: suffix ${JSON.stringify(k.suffix)} declared twice (rows sharing a suffix must carry a stem pattern; at most one may not)`);
+      plain.add(low);
+    }
     seen.add(low);
   }
   // 和加密后缀的歧义：某个后缀 S 以 ".zip" 结尾，去掉 ".zip" 剩 T；若表里有 S1 使得 T 与 S1 互为结尾（含 T 为空），
@@ -92,24 +120,33 @@ export function validateDocKinds(docKinds: readonly DocKind[]): void {
 
 export function createIdentifiers(docKinds: readonly DocKind[]): IdentifierCodec {
   validateDocKinds(docKinds);
-  const kinds: readonly DocKind[] = Object.freeze(docKinds.map((k) => Object.freeze({ kind: k.kind, suffix: k.suffix, container: k.container })));
-  // 长的先试：几个后缀都命中取最长的（".webxiaoheiwu.zip" 优先于 ".zip"）
-  const bySuffixLength = [...kinds].sort((a, b) => b.suffix.length - a.suffix.length);
+  const kinds: readonly DocKind[] = Object.freeze(docKinds.map((k) => Object.freeze({
+    kind: k.kind, suffix: k.suffix, container: k.container, tier: k.tier ?? "work",
+    ...(k.stem ? { stem: k.stem } : {}), ...(k.validate ? { validate: k.validate } : {}),
+  })));
+  // 同一后缀的几行按声明顺序；后缀长的先试：几个后缀都命中取最长的（".webxiaoheiwu.zip" 优先于 ".zip"）
+  const bySuffix = new Map<string, DocKind[]>();
+  for (const k of kinds) { const low = k.suffix.toLowerCase(); (bySuffix.get(low) ?? bySuffix.set(low, []).get(low)!).push(k); }
+  const suffixesLongestFirst = [...bySuffix.keys()].sort((a, b) => b.length - a.length);
 
-  function parse(identifier: string): DocIdentifier | null {
+  function match(identifier: string): { d: DocIdentifier; row: DocKind } | null {
     if (typeof identifier !== "string" || !identifier) return null;
     const slash = identifier.lastIndexOf("/");
     const folder = slash < 0 ? "" : identifier.slice(0, slash);
     const base = slash < 0 ? identifier : identifier.slice(slash + 1);
     const low = base.toLowerCase();
-    for (const k of bySuffixLength) {
-      const s = k.suffix.toLowerCase();
-      if (low.length > s.length && low.endsWith(s)) {
-        return { identifier, folder, stem: base.slice(0, base.length - s.length), suffix: base.slice(base.length - s.length), kind: k.kind, container: k.container };
-      }
+    for (const s of suffixesLongestFirst) {
+      if (!(low.length > s.length && low.endsWith(s))) continue;
+      const stem = base.slice(0, base.length - s.length);
+      const rows = bySuffix.get(s)!;
+      const row = rows.find((r) => r.stem && r.stem.test(stem)) ?? rows.find((r) => !r.stem);   // 2.1.0：带 stem 的先试，都不中落默认行
+      if (!row) continue;   // 这个后缀只有带 stem 的行且都不中 → 不是这种文档；试更短的后缀
+      return { row, d: { identifier, folder, stem, suffix: base.slice(base.length - s.length), kind: row.kind, container: row.container, tier: row.tier ?? "work" } };
     }
     return null;
   }
+  const parse = (identifier: string): DocIdentifier | null => match(identifier)?.d ?? null;
+  const rowOf = (identifier: string): DocKind | null => match(identifier)?.row ?? null;
   function join(parts: { folder: string; stem: string; suffix: string }): string {
     const folder = parts.folder ?? "";
     return `${folder ? `${folder}/` : ""}${parts.stem}${parts.suffix}`;
@@ -124,7 +161,7 @@ export function createIdentifiers(docKinds: readonly DocKind[]): IdentifierCodec
     }
     return { identifier: cloudName, sealed: false };
   }
-  return { kinds, parse, join, sealed, fromCloud };
+  return { kinds, parse, rowOf, join, sealed, fromCloud };
 }
 
 /** 身份里插一段（副本 / 撞名时间戳 / 序号）：文档 → 主干后面、后缀前面；不是文档 → 最后一个点之前（没有点就接在末尾）。

@@ -8,7 +8,7 @@ import { toU8, createSubstrate } from "./substrate.ts";
 import type { Bytes } from "./substrate.ts";
 import { createLocalHead } from "./local-head.ts";
 import { createSeal, cryptExtFor } from "./seal.ts";
-import { createIdentifiers, type DocKind, type Identifiers, type IdentifierCodec } from "./identifiers.ts";
+import { createIdentifiers, type DocKind, type DocTier, type Identifiers, type IdentifierCodec } from "./identifiers.ts";
 import { createSafeResolve, type ResolveChoice } from "./safe-resolve.ts";
 import { createPush } from "./push.ts";
 import { createFreshness, type RefreshOpts, type FreshResult } from "./freshness.ts";
@@ -192,7 +192,8 @@ export interface StoreConfig {
 
 /** files 面只读镜像（readOnlyFiles:true）下调用写路径 → 抛此错（app surface；这不是失败，是契约）。 */
 export class ReadOnlyFilesError extends Error {
-  constructor(op: string) { super(`只读镜像：files 面不可写（${op}）`); this.name = "ReadOnlyFilesError"; }
+  /** resource 给了 = 2.1.0 三等资源那一种文档只读（docKinds 行 tier:"resource"）；没给 = readOnlyFiles:true 的整面只读。 */
+  constructor(op: string, resource?: string) { super(resource ? `三等资源「${resource}」只读：${op}` : `只读镜像：files 面不可写（${op}）`); this.name = "ReadOnlyFilesError"; }
 }
 
 /** store.dispose() 之后再调任何面 → 抛此错（app surface；这不是失败，是契约——切库/登出后旧句柄必须响亮死，绝不静默半工作）。 */
@@ -410,6 +411,9 @@ export function createStore(config: StoreConfig) {
   const kv = namespacedKv(rawKv, ns.root);
   // 身份的语法（0.16.0）：表在这里校验一次（歧义当场抛），之后 local / cloud / trash-merge / seal 全从它取答案
   const ids: IdentifierCodec = createIdentifiers(config.docKinds);
+  // 2.1.0 公民等级（docKinds 行的 tier；不是文档的名字按作品 = 2.0 行为）。等级在这里传死，没有按次调用改等级的口。
+  const tierOf = (name: string): DocTier => ids.parse(name)?.tier ?? "work";
+  const tierGuard = (op: string, name: string): void => { roGuard(op); if (tierOf(name) === "resource") throw new ReadOnlyFilesError(op, name); };
   const local = config.local ?? createLocalCache(ns.dbName, { identifiers: ids });              // 文件缓存（files/trash/backup 分区）；prod=idb、测试注入 mock
   const collectionLocal = config.local ?? createCollectionCache(ns.dbName);   // collections 分区缓存（collection 自带 `collections/` 前缀）
   const rawOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
@@ -456,7 +460,7 @@ export function createStore(config: StoreConfig) {
   // 云端防抖标记（candidate-gone）：clean cloud-gone 孤儿第一次权威见 gone 只标记，跨 GRACE 第二次+ 才 send trash（用户拍板 ~24h，2026-07-17）。
   const CLOUD_GONE_GRACE_MS = 24 * 3600 * 1000;
   const pendingGone = createPendingGone(kv, config.cloudGoneGraceMs ?? CLOUD_GONE_GRACE_MS);
-  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeIdentifier: config.activeIdentifier, hidden: config.hidden });
+  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeIdentifier: config.activeIdentifier, hidden: config.hidden, drop: (n) => tierOf(n) === "resource" });   // 2.1.0：三等资源云端没了本地直接丢
 
   // ── 分片下载会话（A1）：staging tee + 播放优先/pin 严格串行调度。keepOffline / openStream 走它。──
   const stagingStore = config.staging ?? createStagingStore(ns.dbName);
@@ -672,7 +676,7 @@ export function createStore(config: StoreConfig) {
     cloud, local, head,
     localDirty: () => sub.edits.localDirty(),
     serialize: sub.serialize,                           // 0.15.2：拉云覆盖的临界段与用户保存的本地写同链互斥
-    validateAdopt,
+    validateAdopt: (plain, name) => (ids.rowOf(name)?.validate ?? validateAdopt)(plain),   // 2.1.0：每种文档可带自己的验真，没带用全局的
     unseal: (n, blob) => seal.unsealForRead(n, blob),   // 返明文；加密但锁定 → null（safePull 退验封套）
     looksEncrypted: (b) => enc.looksEncryptedContainer(b),
   });
@@ -784,6 +788,7 @@ export function createStore(config: StoreConfig) {
   //   预拉整份云端 = sheet 前双倍下载（takeCloud 时 safePull 反正会拉**最新**），且弹 sheet 前的长拉窗口
   //   会吞掉用户点「跳过到离线」。将来宿主要预览云端版 → escalate 改 StoreUI 契约（懒取），别回填这里。──
   const onConflictFor = (occasion: "open" | "push") => async ({ name }: { name: string }): Promise<ResolveChoice> => {
+    if (tierOf(name) === "auto-backup") return "keepMine";   // 2.1.0 二等自动备份：永不弹面，这台的赢（输的那份不进备份箱 —— push 的 loserBackup）
     return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: "changed" });   // 412 / 撞名 / open 时云端更新：云端一定有别的版本
   };
   const onConflict = onConflictFor("push");   // save 的 push 412 / surfaceCollision 走这份；open 路径用 onConflictFor("open")
@@ -939,7 +944,8 @@ export function createStore(config: StoreConfig) {
       try { meta = await cloud.fetchMeta(name); }
       catch (e) { ui.reportError(e, "log"); return candidate ? { status: "offline" } : { status: "clean" }; }   // 未知 ≠ 没了：不据此弹面
       if (meta) return { status: "clean" };                                               // 云端在：同版 = 已同步；有新版 = 走 pullIfClean，不是这里
-      const choice = await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent" });
+      const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "takeCloud"   // 2.1.0 二等：云端没了就跟着云端（别的设备轮转掉的格子不该被这台复活），不问人
+        : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent" });
       if (choice === "cancel") return { status: "cancelled" };
       if (choice === "takeCloud") {                                                       // 跟着云端：本地这份移到回收站（库的删除路径，可恢复；不硬删）——只在云端此刻确实没有时
         const d = await delIfCloudAbsentSF(name);
@@ -955,7 +961,7 @@ export function createStore(config: StoreConfig) {
       head.forget(name);
       head.recordEdit(name);
       let r;
-      try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true }); }
+      try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }
       catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
       notifyFolderOf(name);
       if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };
@@ -964,7 +970,7 @@ export function createStore(config: StoreConfig) {
     };
     return {
       async save(bytes, opts) {
-        roGuard("save");
+        tierGuard("save", name);
         await migrationReady;
         if (!_createChecked) {                                   // mode="new" 首存护栏：撞名不覆盖（本地/在线云端任一占用即抛）
           _createChecked = true;
@@ -988,7 +994,7 @@ export function createStore(config: StoreConfig) {
         //   mode:"new" 的首存不给 —— 那里撞名是「别的设备建了同名不同物」，抛错两份都留是 §A 身份行的保证。
         let pushed = false, reason: string | undefined, resolution: SaveResult["resolution"];
         try {
-          const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress });
+          const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress, loserBackup: tierOf(name) !== "auto-backup" });
           // 只有拿到新 etag 的落地才算推上去了。deferred(落地未确认)/unresolved/cancelled 一律不算——
           //   把它们当成功正是 F0 红线要拦的那类「落地未确认当落地成功」。
           pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
@@ -1025,7 +1031,7 @@ export function createStore(config: StoreConfig) {
           } finally { esc?.settle(); }
           return readLocal();
         }
-        if (autoCacheOpenedFile) {                                          // 本地没有、持有模式 → 拉云落本地（无可显示，必须等）
+        if (autoCacheOpenedFile && tierOf(name) !== "resource") {           // 本地没有、持有模式 → 拉云落本地（无可显示，必须等）；2.1.0 三等资源一律过路
           // ⚠ 这条分支（打开一个**纯云端、本地从没缓存过**的作品）以前没有任何出口：
           //   「在线但 OneDrive 不可达」（DNS 挂 / 代理 / 企业网限流）时 provider 的 fetch 可能挂很久，
           //   spinner 就一直转，用户连退回离线去读别的本地文件都做不到。
@@ -1066,6 +1072,7 @@ export function createStore(config: StoreConfig) {
       async resolve(opts) {
         await migrationReady;
         roGuard("resolve");
+        if (tierOf(name) === "resource") return { status: "clean" };   // 2.1.0 三等资源：没有「没同步好」这回事（永不脏）
         if (!(await local.exists(name))) return { status: "no-local" };
         if (!head.isDirtyAnywhere(name)) return resolveCleanGone();
         if (!isOnline()) return { status: "offline" };
@@ -1073,7 +1080,8 @@ export function createStore(config: StoreConfig) {
         let cloudState: CloudState = "changed";
         try { const meta = await cloud.fetchMeta(name); cloudState = !meta ? (head.seenBase(name) == null ? "never" : "absent") : meta.etag === head.seenBase(name) ? "unchanged" : "changed"; }
         catch (e) { ui.reportError(e, "log"); }   // 拿不到就按「可能变了」问
-        const choice = await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
+        const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "keepMine"   // 2.1.0 二等：不问人，这台的赢
+          : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
           if (cloudState === "absent" || cloudState === "never") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
@@ -1090,17 +1098,17 @@ export function createStore(config: StoreConfig) {
         if (!blob) return { status: "no-local" };
         const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
         let r;
-        try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true }); }
+        try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }
         catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
         notifyFolderOf(name);
         if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };   // 推时撞上真分叉、人在第二张面选了云端
         const pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
         return pushed ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
       },
-      tryMove(to) { roGuard("tryMove"); return tryMoveSF(name, to); },
-      async delete() { roGuard("delete"); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
+      tryMove(to) { tierGuard("tryMove", name); return tryMoveSF(name, to); },
+      async delete() { tierGuard("delete", name); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
       reupload() {
-        roGuard("reupload");
+        tierGuard("reupload", name);
         return busyK("file.reuploading", undefined, async () => {
           if (!(await local.exists(name))) return { status: "no-local" };
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
@@ -1164,14 +1172,14 @@ export function createStore(config: StoreConfig) {
       async offload() { await offloadMod.offload(name); notifyFolderOf(name); },   // 成功后重画本夹（badge 即时 → cloud-only）
       isEncrypted() { return encIsEncrypted(name); },
       encrypt(opts) {
-        roGuard("encrypt");
+        tierGuard("encrypt", name);
         // 0.16.0：只有声明过种类的文档才能加密——容器的云端名 = 身份 + .zip，列举时靠「去掉 .zip 剩下的认得是文档」认回来；
         //   非文档封了之后云端名认不回（会被当成一个叫 X.zip 的明文杂物）。这是调用方的 bug，响亮抛。
         if (!ids.parse(name)) throw new Error(`store: "${name}" is not a document of any declared kind and cannot be encrypted (docKinds: ${ids.kinds.map((k) => k.suffix).join(", ") || "none"})`);
         return encEncrypt(name, opts?.isOnline ?? isOnline);
       },
-      decrypt(opts) { roGuard("decrypt"); return encDecrypt(name, opts?.isOnline ?? isOnline); },
-      rekey(opts) { roGuard("rekey"); return encRekey(name, opts.newPassword, opts.isOnline ?? isOnline); },
+      decrypt(opts) { tierGuard("decrypt", name); return encDecrypt(name, opts?.isOnline ?? isOnline); },
+      rekey(opts) { tierGuard("rekey", name); return encRekey(name, opts.newPassword, opts.isOnline ?? isOnline); },
       // at-rest 密文字节原样（内容盲、不解壳、不碰密码）。非加密件 / 无本地副本 → null。
       async getEncryptedBlob(): Promise<EncryptedBlob | null> {
         const blob = await local.get(name);

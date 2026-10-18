@@ -16,8 +16,8 @@ const oldWxhwToName = (c: string) => (c.endsWith(".zip") && /(\.txt|\.webxiaohei
 
 test("[identifiers] parse：文件夹 / 主干 / 后缀 / 种类；整串比对不数点；几个都命中取最长；主干不能为空", () => {
   const ids = createIdentifiers(WXHW);
-  deq(ids.parse("草稿/樱川.webxiaoheiwu.zip"), { identifier: "草稿/樱川.webxiaoheiwu.zip", folder: "草稿", stem: "樱川", suffix: ".webxiaoheiwu.zip", kind: "book", container: "zip" });
-  deq(ids.parse("20260929-5c5c.txt"), { identifier: "20260929-5c5c.txt", folder: "", stem: "20260929-5c5c", suffix: ".txt", kind: "draft", container: "raw" });
+  deq(ids.parse("草稿/樱川.webxiaoheiwu.zip"), { identifier: "草稿/樱川.webxiaoheiwu.zip", folder: "草稿", stem: "樱川", suffix: ".webxiaoheiwu.zip", kind: "book", container: "zip", tier: "work" });
+  deq(ids.parse("20260929-5c5c.txt"), { identifier: "20260929-5c5c.txt", folder: "", stem: "20260929-5c5c", suffix: ".txt", kind: "draft", container: "raw", tier: "work" });
   eq(ids.parse("v1.2 草稿.txt")!.stem, "v1.2 草稿", "主干里的点不是分隔");
   eq(ids.parse("笔记.txt.webxiaoheiwu.zip")!.stem, "笔记.txt", "主干以另一个后缀结尾也照样：取最长命中");
   eq(ids.parse("A.WEBXIAOHEIWU.ZIP")!.suffix, ".WEBXIAOHEIWU.ZIP", "大小写不敏感、保留原样");

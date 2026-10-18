@@ -54,6 +54,8 @@ export interface PushOpts {
   surfaceCollision?: boolean;
   /** 0.17.0：上传进度透传 provider.upload（宿主画进度条）。 */
   onProgress?: (done: number, total: number) => void;
+  /** 2.1.0：keepMine 时输的那份进不进 .backup（默认进；二等自动备份传 false）。 */
+  loserBackup?: boolean;
 }
 
 // push 的终态全集（收成联合类型，别再用裸 string —— "deferred" 拼错要在编译期就炸）：
@@ -67,7 +69,7 @@ export function createPush(cfg: PushCfg) {
   const { cloud, head, seal, safeResolve, serialize, editVersion,
     busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, exponential = pushRetryDefaults.exponential, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
-  async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress }: PushOpts): Promise<PushResult> {
+  async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress, loserBackup }: PushOpts): Promise<PushResult> {
     const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
     const v0 = getEditVersion();
     // 0.15.2：这个文件的保存计数。全局游标（getEditVersion）要宿主自己推进，拆库后没人推进过 → dirtyAfter 恒 false：
@@ -99,7 +101,7 @@ export function createPush(cfg: PushCfg) {
               return { status: "healed", dirtyAfter };
             }
             const choice = onConflict ? await onConflict({ name }) : "cancel";   // 真分叉 → 交 ui 选（默认 cancel=留 dirty）
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
+            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
           // 谱系断裂：无 base 推撞上云端同名（cloud-sync 的 409 + 尾字节 differ → CloudNameCollisionError）。
           //   两种情形共用这一个错误，但该走的路完全相反：
@@ -112,7 +114,7 @@ export function createPush(cfg: PushCfg) {
           //   两条路都不盲目覆盖、都不丢字节；差别只是 ② 给了用户一条出路。
           if (surfaceCollision && (e as { name?: string })?.name === "CloudNameCollisionError") {
             const choice = onConflict ? await onConflict({ name }) : "cancel";
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
+            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
           if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(exponential ? Math.min(backoffMs * 2 ** (attempt - 1), 15_000) : backoffMs * attempt); continue; }
           throw e;

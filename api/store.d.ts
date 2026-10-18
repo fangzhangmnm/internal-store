@@ -147,6 +147,7 @@ export declare interface CloudSync {
     /** 弱覆盖：覆盖云端 + 留底。 */
     weakOverride(name: string, bytes: Bytes, opts?: {
         encrypted?: boolean;
+        backup?: boolean;
     }): Promise<WeakOverrideResult>;
     /** 移进云端 .trash。deleteEventId 同上——两条腿必须是同一个，否则回收站里一次删除会裂成两行/误配。 */
     trash(name: string, deleteEventId: string, opts?: {
@@ -457,6 +458,8 @@ export declare interface DocIdentifier {
     suffix: string;
     kind: string;
     container: "raw" | "zip";
+    /** 2.1.0 公民等级（表里没写 → "work"）。 */
+    tier: DocTier;
 }
 
 export declare interface DocKind {
@@ -466,7 +469,23 @@ export declare interface DocKind {
     suffix: string;
     /** 明文字节是什么容器。"zip" = 能按条目名取一小段（封面 peek，`store.zip()`）；"raw" = 不能。库仍然不看内容。 */
     container: "raw" | "zip";
+    /** 2.1.0 公民等级，不传 = "work"（一等作品：If-Match / 冲突面 / 回收站 / 脏的永不驱逐 = 2.0 的全部行为）。
+     *  "auto-backup" 二等：库**永不弹面**——推撞 412 / 撞名、open 时云端变了，一律这台的赢（本地覆盖云端），输的那份**不进备份箱**；
+     *    干净副本碰上云端没了 → 跟着云端（本地那份进回收站）。其余（脏不驱逐、离线补推…）同作品。机器可以轮转它、可以丢它、但永远不能替人把它提升成一等。
+     *  "resource" 三等：files 写面全部抛 ReadOnlyFilesError（save / tryMove / delete / reupload / encrypt / decrypt / rekey）；open 不留本地副本（过路）；
+     *    云端没了本地缓存直接丢、不进回收站；resolve() 恒 clean。读走 openStream / keepOffline / offload。 */
+    tier?: DocTier;
+    /** 2.1.0 同一个后缀分几行时的主干形：stem 匹配这个正则才算这一行。带 stem 的行按声明顺序先试，都不中落到那个不带 stem 的行；
+     *  一个后缀最多一行不带 stem。不许带 g / y 旗（有状态）。例：KudsRocket 的 `.crumb`，`/-[ah]\d+$/` = 自动格 / 历史份（二等），其余手动格（一等）。 */
+    stem?: RegExp;
+    /** 2.1.0 这一种文档自己的采纳验真（云端字节覆盖本地前验**明文**）；不传用 createStore 的 validateAdopt。 */
+    validate?: (plain: Blob) => boolean | Promise<boolean>;
 }
+
+/** 公民等级（2.1.0）：家族根 `ai-docs/20261016-data-safety-model.md` §2 四等表的前三等（第四等「设备状态」不进文件 store）。
+ *  user 2026-10-17 深夜「能kind和等级绑定吗（允许一kind多等级？)然后ctor的时候传死」→ 等级是表里每一行的属性，createStore 时传死；
+ *  一个 kind 要两种等级就声明两行（同 suffix、不同 stem 形）；**没有按次调用改等级的口**（那就是 presetResolution 那种越狱）。 */
+export declare type DocTier = "work" | "auto-backup" | "resource";
 
 /** emptyTrash（批量彻底删）的选项。 */
 export declare interface EmptyTrashOpts {
@@ -698,6 +717,8 @@ export declare interface Identifiers {
     readonly kinds: readonly DocKind[];
     /** 切开。不是本 app 的文档 → null。几个后缀都命中取最长的；主干不能为空（身份整个就是后缀不算文档）。 */
     parse(identifier: string): DocIdentifier | null;
+    /** 2.1.0 命中的那一行（含 validate 等回调）；不是本 app 的文档 → null。 */
+    rowOf(identifier: string): DocKind | null;
     /** 拼回去：`folder/stem + suffix`（folder 为空就没有斜杠）。不检查 suffix 在不在表里——拼非文档的名字也允许。 */
     join(parts: {
         folder: string;
@@ -1070,7 +1091,8 @@ export declare interface RawGraphItem {
 
 /** files 面只读镜像（readOnlyFiles:true）下调用写路径 → 抛此错（app surface；这不是失败，是契约）。 */
 export declare class ReadOnlyFilesError extends Error {
-    constructor(op: string);
+    /** resource 给了 = 2.1.0 三等资源那一种文档只读（docKinds 行 tier:"resource"）；没给 = readOnlyFiles:true 的整面只读。 */
+    constructor(op: string, resource?: string);
 }
 
 /** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），

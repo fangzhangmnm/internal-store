@@ -97,7 +97,7 @@ interface CloudSyncCfg {
  *  X.dat→X.dat、X.dat.zip→X.dat、Y.zip→Y、Y.zip.zip→Y.zip；与默认 encFileName「追加 .zip」互逆、无损。
  *  ⚠ 对「身份本身以 .zip 结尾的明文文件」它是错的（Y.zip 会被还原成 Y 并被当加密件）——这类 app 配 config.toName。 */
 const NO_KINDS: Identifiers = createIdentifiersNoKinds();
-function createIdentifiersNoKinds(): Identifiers { return { kinds: [], parse: () => null, join: (p) => `${p.folder ? `${p.folder}/` : ""}${p.stem}${p.suffix}` }; }
+function createIdentifiersNoKinds(): Identifiers { return { kinds: [], parse: () => null, rowOf: () => null, join: (p) => `${p.folder ? `${p.folder}/` : ""}${p.stem}${p.suffix}` }; }
 export const defaultCloudToName = (cloudName: string): string => (cloudName.endsWith(".zip") ? cloudName.slice(0, -4) : cloudName);
 
 export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
@@ -372,16 +372,18 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   //   copy 时捕获的 etag 做 **If-Match CAS replace**（「我覆盖的正是我刚备份的那一版」）。任何一步失败 →
   //   原位原版完好，ghost 不可表示；窗口内云端又动了 → 412 抛、上层重新 surface（.backup 多出的那份 copy
   //   留着——多备不删，§A 绝不删字节）。全库最后一个裸 replace 就此收编（全库 If-Match 家规 2026-08-25）。
-  async function weakOverride(name: string, bytes: Bytes, opts: { encrypted?: boolean } = {}): Promise<WeakOverrideResult> {
+  async function weakOverride(name: string, bytes: Bytes, opts: { encrypted?: boolean; backup?: boolean } = {}): Promise<WeakOverrideResult> {
     const path = (encFileName && opts.encrypted) ? encFileName(name) : fileName(name);
     const cur = await _find(name);
     let backedUp = null;
     let item: CloudItem | null;
     if (cur.item) {
-      const folderId = await provider.ensureFolder(backupFolder);
-      const stamped = stampedName(name, cur.enc);   // ts-counter 防同名多次备份撞（旧版同 ms 会 fail 抛错）；loser 保留其扩展名
-      await provider.copy(cur.item.ref, folderId, stamped);
-      backedUp = `${backupFolder}/${stamped}`;
+      if (opts.backup !== false) {   // 2.1.0：二等自动备份的输家不进 .backup（表里说机器可以丢它）；作品照旧先留底
+        const folderId = await provider.ensureFolder(backupFolder);
+        const stamped = stampedName(name, cur.enc);   // ts-counter 防同名多次备份撞（旧版同 ms 会 fail 抛错）；loser 保留其扩展名
+        await provider.copy(cur.item.ref, folderId, stamped);
+        backedUp = `${backupFolder}/${stamped}`;
+      }
       item = await provider.upload(path, bytes, { contentType, eTag: cur.item.eTag, conflictBehavior: "replace" });
     } else {
       // 无既有 → 创建门（不存在才准建；撞上窗口里第三设备的新建 → 409，绝不盲覆盖）。

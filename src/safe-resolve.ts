@@ -31,7 +31,7 @@ export interface SafeResolveCfg {
   localDirty?: () => boolean;                                  // 活动 doc 未落盘（substrate.edits.localDirty）
   // N2 采纳云字节前的校验闸——**必传，无 noop 默认**（store 格式盲，逻辑 app 给）。验的是**解密后的明文**
   //   （库对加密透明）：app 看到的是真明文文档，不是密文容器。挡 captive-portal HTML / 损坏云副本覆盖好本地。
-  validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
+  validateAdopt: (plain: Blob, name: string) => boolean | Promise<boolean>;   // 2.1.0 带 name：每种文档可带自己的验真（create-store 按 docKinds 行派发）
   unseal?: (name: string, blob: Blob) => Promise<Blob | null>; // adopt 前解壳（seal 提供）：返明文；加密但锁定 → null。默认明文原样。
   onReplacing?: (on: boolean) => void;                         // N10：换内容临界段 gate（input 起笔门读它降级）
   looksEncrypted?: (bytes: Blob | Bytes) => Promise<boolean>;  // 是否加密容器（weakOverride 扩展名 + 锁定时退验封套）
@@ -47,7 +47,7 @@ export interface SafeResolve {
   safePull(name: string, opts?: { adopt?: AdoptFn; forceBackup?: boolean; inChain?: boolean }): Promise<SafePullResult>;
   tryHeal(name: string, bytes: Bytes): Promise<boolean>;
   weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }>;
-  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean }): Promise<ResolveConflictResult>;
+  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean }): Promise<ResolveConflictResult>;
 }
 
 export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
@@ -98,7 +98,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
       const plain = await unseal(name, r.blob);             // 加密但锁定 → null（无密码解不开）
       // N2：坏字节（captive-portal 200-HTML / 损坏云副本）→ 拒绝，绝不覆盖唯一一份好本地（clean 没 backup）。
       //   锁定解不开 → 退验加密容器封套（captive-portal HTML 不是合法容器；无密码时能做的最强校验）。
-      const ok = plain != null ? await validateAdopt(plain) : await looksEncrypted(r.blob);
+      const ok = plain != null ? await validateAdopt(plain, name) : await looksEncrypted(r.blob);
       if (!ok) return { ok: false, reason: "invalid-cloud-bytes", backupName };
       const commit = async (): Promise<SafePullResult> => {
         const e1 = editCount(name);
@@ -134,8 +134,8 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   }
 
   // keepMine：云端→.backup，再 force-push 本地（never-lose 覆盖）。本地胜、loser 进 .backup → 落地为 synced。
-  async function weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }> {
-    const r = await cloud.weakOverride(name, bytes, { encrypted: await looksEncrypted(bytes) });
+  async function weakOverride(name: string, bytes: Bytes, backup = true): Promise<{ backedUp: string | null; deferred?: boolean }> {
+    const r = await cloud.weakOverride(name, bytes, { encrypted: await looksEncrypted(bytes), backup });   // backup=false（2.1.0 二等自动备份）：输的那份不进 .backup
     // F0 红线同款 deferred guard（push.ts:73-77 的形状，2026-08-25 案卷 §4(b) 补）：provider 没回 item/eTag
     //   = 落地未确认（响应丢失/分块吞 body）。旧版无条件 markSynced(name, null)——dirty 清、etag 清、badge
     //   假 synced，且下次推 no-base fail 409。→ 不 markSynced（dirty/parent 原样保住），报 deferred；
@@ -146,7 +146,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   }
 
   // 3 选项派发（README.md §7）：takeCloud=safePull · keepMine=weakOverride · cancel=什么都不动（留 dirty）。
-  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean } = {}): Promise<ResolveConflictResult> {
+  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean } = {}): Promise<ResolveConflictResult> {
     if (choice === "takeCloud") {
       const r = await safePull(name, { adopt: ctx.adopt, forceBackup: true, inChain: ctx.inChain });   // 换世界线 → 当前世界线无条件进 .backup（user 2026-08-25 拍板）
       return r.ok
@@ -154,7 +154,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
         : { status: "unresolved", reason: r.reason, backupName: r.backupName };
     }
     if (choice === "keepMine" && ctx.bytes != null) {
-      const r = await weakOverride(name, ctx.bytes);
+      const r = await weakOverride(name, ctx.bytes, ctx.loserBackup !== false);
       if (r.deferred) return { status: "unresolved", reason: "deferred", backedUp: r.backedUp };   // 落地未确认 ≠ 已化解：dirty 保住，下次推自愈（tryHeal）
       return { status: "resolved", resolution: "keepMine", backedUp: r.backedUp };
     }

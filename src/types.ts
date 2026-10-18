@@ -238,7 +238,7 @@ export interface CloudSync {
   /** 任意绝对偏移 byte-range 纯读（getPeek 的「CD / entry 溢出尾片时二次拉」、getHead 的头片）。越界自动钳。encrypted 同上。 */
   pullRange(name: string, offset: number, length: number): Promise<{ bytes: Bytes; item: CloudItem; encrypted: boolean } | null>;
   /** 弱覆盖：覆盖云端 + 留底。 */
-  weakOverride(name: string, bytes: Bytes, opts?: { encrypted?: boolean }): Promise<WeakOverrideResult>;
+  weakOverride(name: string, bytes: Bytes, opts?: { encrypted?: boolean; backup?: boolean }): Promise<WeakOverrideResult>;   // backup=false：输家不进 .backup（2.1.0 二等）
   /** 移进云端 .trash。deleteEventId 同上——两条腿必须是同一个，否则回收站里一次删除会裂成两行/误配。 */
   trash(name: string, deleteEventId: string, opts?: { baseEtag?: string | null }): Promise<unknown>;
   /** enc.encrypted：trash 里的字节是加密容器（.zip 尾）→ 恢复必须落 encFileName（否则加密件被恢复到明文路径 = 打不开）。

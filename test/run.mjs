@@ -20,6 +20,7 @@ import "./chunk-scheduler.test.mjs";   // 2026-10-17 2.0.0：分片调度（互�
 import "./mirror.test.mjs";            // 2026-10-17 2.0.0：替代来源（本机文件 / HTTP 镜像）
 import "./graph-range-progress.test.ts";   // 2026-10-17 2.0.0：range 按流报进度 + 中止不重试
 import "./engine-boundary-guard.test.mjs";   // 2026-10-17 2.0.0：两台引擎互不 import、只共用底座（结构守卫）
+import "./doc-tiers.test.ts";   // 2026-10-17 2.1.0：docKinds[].tier（一等作品 / 二等自动备份 / 三等资源在 API 层表达；stem 形分行；每种自己的 validate）
 import "./read-only-files.test.mjs";
 import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";

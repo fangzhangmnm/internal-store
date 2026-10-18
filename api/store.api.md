@@ -147,6 +147,7 @@ export interface CloudSync {
     }): Promise<unknown>;
     weakOverride(name: string, bytes: Bytes, opts?: {
         encrypted?: boolean;
+        backup?: boolean;
     }): Promise<WeakOverrideResult>;
 }
 
@@ -305,14 +306,21 @@ export interface DocIdentifier {
     kind: string;
     stem: string;
     suffix: string;
+    tier: DocTier;
 }
 
 // @public (undocumented)
 export interface DocKind {
     container: "raw" | "zip";
     kind: string;
+    stem?: RegExp;
     suffix: string;
+    tier?: DocTier;
+    validate?: (plain: Blob) => boolean | Promise<boolean>;
 }
+
+// @public
+export type DocTier = "work" | "auto-backup" | "resource";
 
 // @public
 export interface EmptyTrashOpts {
@@ -508,6 +516,7 @@ export interface Identifiers {
     }): string;
     readonly kinds: readonly DocKind[];
     parse(identifier: string): DocIdentifier | null;
+    rowOf(identifier: string): DocKind | null;
 }
 
 // @public
@@ -745,7 +754,7 @@ export interface RawGraphItem {
 
 // @public
 export class ReadOnlyFilesError extends Error {
-    constructor(op: string);
+    constructor(op: string, resource?: string);
 }
 
 // @public

@@ -153,6 +153,16 @@ store.files.emptyBackup({ scope: "both" });                         // 清空备
 
 **表报一次，其余推导。** `createStore({ docKinds })` 必填：每行 = 一种文档怎么拼（`suffix`，含点，可以多段，**整串比对不数点**，大小写不敏感）、是什么容器（`container: "zip" | "raw"`）、app 自己的标签（`kind`，开放集，库原样带着不解释）。空数组 = 明确声明没有文档种类。表有歧义（某个后缀去掉结尾 `.zip` 之后和表里另一个后缀互为结尾；或光秃秃的 `.zip`）→ `createStore` 当场抛。
 
+**公民等级也在这张表里（2.1.0；user 2026-10-17「能kind和等级绑定吗（允许一kind多等级？)然后ctor的时候传死」）。** 每行可带 `tier`：不传 = `"work"`（一等作品，= 2.0 的全部行为）；`"auto-backup"` 二等自动备份——库**永不弹面**，412 / 撞名 / open 时云端变了一律这台的赢，输的那份不进备份箱，干净副本碰上云端没了就跟着云端；`"resource"` 三等资源——`save / tryMove / delete / reupload / encrypt / decrypt / rekey` 全抛 `ReadOnlyFilesError`，`open` 过路不留本地，云端没了本地缓存直接丢（不进回收站），读走 `openStream / keepOffline`。等级是**行的属性、createStore 时传死**，没有按次调用改等级的口（那就是越狱）。一个 kind 要两种等级就声明两行：同 `suffix`、不同 `stem`（正则，匹配主干；带 stem 的行按声明顺序先试，都不中落到那个不带 stem 的行；一个后缀最多一行不带 stem）。每行还可带自己的 `validate(plain)`（没带用 `validateAdopt`）。四等表的 SSoT = 家族根 `ai-docs/20261016-data-safety-model.md` §2；第四等「设备状态」不进文件 store。例（KudsRocket 形状）：
+
+```ts
+docKinds: [
+  { kind: "snap", suffix: ".crumb", container: "raw" },                                              // 手动格 = 一等
+  { kind: "snap", suffix: ".crumb", container: "raw", tier: "auto-backup", stem: /-[ah]\d+$/ },      // 自动格 / 历史份 = 二等
+  { kind: "asset", suffix: ".pack", container: "raw", tier: "resource" },                            // 大资源 = 三等
+]
+```
+
 从这张表推导出来的（0.15.2 之前是七八个各答各的回调）：
 
 | 问题 | 答案从哪来 |

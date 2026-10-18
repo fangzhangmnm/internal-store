@@ -46,13 +46,15 @@ export function classifyCloudGone(
 
 export interface ReconcileCfg {
   cloud: Pick<CloudSync, "listAll" | "listFolder" | "clearState">;
-  local: Pick<LocalCache, "appKeys" | "trash">;
+  local: Pick<LocalCache, "appKeys" | "trash" | "hardDelete">;
   head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere" | "forget">;
   pending: PendingGone;                 // 云端防抖（candidate-gone）标记
   now?: () => number;                   // 时钟（测试注入；默认 Date.now）
   isOnline?: () => boolean;
   activeIdentifier?: () => string | null;   // 当前打开的 doc（身份）——**去抖 trash 绝不碰活动 doc**（K1，reconcileFolder 也用，避免 trash 掉开着的 clean 文件本地缓存）
   hidden?: (name: string) => boolean;       // 0.14.0：宿主额外隐藏名（config.hiddenName）——隐藏项云端本就不列，绝不据此误判 gone
+  /** 2.1.0：这个名字的本地副本只是缓存（三等资源）→ 云端没了直接丢，不进回收站。 */
+  drop?: (name: string) => boolean;
 }
 
 export function createReconcile(cfg: ReconcileCfg) {
@@ -82,7 +84,8 @@ export function createReconcile(cfg: ReconcileCfg) {
     for (const name of demote) {
       if (!pending.seenGone(name, now())) continue;   // 首次见 gone / grace 内 → 标记+留着（badge），不删
       // 单腿事件（云端已经没了，只有本地这一条腿）→ 自己生成 id，无配对需求。
-      await local.trash(name, asideStamp(now()));     // 跨 GRACE 第二次+ → 本地 send trash（move-aside，可恢复）
+      if (cfg.drop?.(name)) await local.hardDelete(name);   // 2.1.0 三等资源：本地只是缓存，云端没了直接丢（不进回收站）
+      else await local.trash(name, asideStamp(now()));     // 跨 GRACE 第二次+ → 本地 send trash（move-aside，可恢复）
       cloud.clearState(name); head.forget(name); pending.clear(name);   // 清两条 etag 轨道 + candidate
       demoted.push(name);
     }
