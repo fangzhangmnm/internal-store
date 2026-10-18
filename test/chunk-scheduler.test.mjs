@@ -9,7 +9,7 @@
 //   · 字节到了都交 arrived（赢家、没理会中止的晚到者）。preflight 命中不上网、不 arrived。
 //   · status() 数在飞 / 卡住。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { createChunkScheduler, StreamStallError } from "../src/chunk-scheduler.ts";
+import { createChunkScheduler, StreamStallError } from "../src/stream/chunk-scheduler.ts";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const bytes = (n, seed = 0) => Uint8Array.from({ length: n }, (_, i) => (i + seed) % 251);

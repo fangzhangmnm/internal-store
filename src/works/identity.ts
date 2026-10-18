@@ -6,16 +6,16 @@
 //     旧名的去向**看谱系**：完好 → 进 .trash（move 语义）；不明/分叉 → 原地留着（save-as 语义，
 //     因为改名是「上传失败后的逃生通道」，此时本地并非旧名的后代）。详见 rename 内的长注释。
 //   串行 against 两名 in-flight（serialize2）。编排 push 深模块 + cloud.rename + local-head。
-import { toU8 } from "./substrate.ts";
-import type { BytesSource } from "./substrate.ts";
-import { reportStoreError } from "./error-handling.ts";
-import { asideStamp } from "./move-aside.ts";   // 单腿 trash 事件的 deleteEventId 生成器
+import { toU8 } from "../base/substrate.ts";
+import type { BytesSource } from "../base/substrate.ts";
+import { reportStoreError } from "../base/error-handling.ts";
+import { asideStamp } from "../base/move-aside.ts";   // 单腿 trash 事件的 deleteEventId 生成器
 import { CloudNameCollisionError } from "./cloud-sync.ts";
-import type { CloudSync, FetchMetaResult, LocalCache } from "./types.ts";
+import type { CloudSync, FetchMetaResult, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
 
-import type { Busy } from "./types.ts";
+import type { Busy } from "../base/types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 type Bytes = Uint8Array;
 type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;

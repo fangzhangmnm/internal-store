@@ -10,7 +10,7 @@
 
 import { test, eq, assert } from "./runner.mjs";
 import { createMockLocal, createMockLocalBacking } from "../src/testing/mock-local.ts";
-import type { LocalSaveReceipt } from "../src/types.ts";
+import type { LocalSaveReceipt } from "../src/base/types.ts";
 
 const u8 = (s: string) => new TextEncoder().encode(s);
 const txt = (b: unknown) => new TextDecoder().decode(b as Uint8Array);

@@ -12,12 +12,12 @@
 // 失败-fetch 守卫（命门）：列举不完整(partial) / 空列表 / 离线 → **不权威 → 整个 no-op**。
 //   partial 里「某 name 缺失」≠「云端真没了」（可能子树列举失败）；空列表多半是未登录/网抖——
 //   据此降级会误把一堆好文件断了云端谱系。所以只在「在线 ∧ listAll.complete ∧ 非空」时才收敛。
-import type { CloudSync, LocalCache } from "./types.ts";
+import type { CloudSync, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { PendingGone } from "./pending-gone.ts";
-import { isHidden } from "./is-hidden.ts";   // 隐藏项（.trash/.backup/.<appId>/任意 dot）：云端已过滤，本地侧也别据此误判 gone
-import { reportStoreError } from "./error-handling.ts";
-import { asideStamp } from "./move-aside.ts";   // 单腿 trash 事件的 deleteEventId 生成器
+import { isHidden } from "../base/is-hidden.ts";   // 隐藏项（.trash/.backup/.<appId>/任意 dot）：云端已过滤，本地侧也别据此误判 gone
+import { reportStoreError } from "../base/error-handling.ts";
+import { asideStamp } from "../base/move-aside.ts";   // 单腿 trash 事件的 deleteEventId 生成器
 
 // 纯分类器（零 IO、可穷举单测）：返回该 demote 的 clean 孤儿名。
 //   规则（对齐前身宿主 gallery-model.classifyCloudGone，去掉 ghost/pin 轴——库不做 pin，dirty 孤儿一律留）：

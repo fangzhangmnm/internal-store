@@ -2,7 +2,7 @@
 //   起因 = KudsRocket「边加密边上传、不留本地副本」（上 GB 的媒体文件，整份进内存 / IDB 都不行）。created 2026-10-14 by Claude Fable 5.1
 import { test, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { memKv } from "../src/cloud-sync.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createStore } from "../src/create-store.ts";

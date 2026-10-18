@@ -6,9 +6,9 @@
 //
 // 红线：明文绝不落盘（加密文件 + 无密码 → 写路径**响亮抛 LOCKED**，绝不静默存明文）。
 //   读路径锁定（无/错密码）→ 返 null（**不弹窗**；解锁循环是 UI 在 busy 外的事，见 README.md §7）。
-import { toU8 } from "./substrate.ts";
-import type { Bytes } from "./substrate.ts";
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { toU8 } from "../base/substrate.ts";
+import type { Bytes } from "../base/substrate.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
 export class LockedError extends Error {
   code = "LOCKED";

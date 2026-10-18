@@ -8,10 +8,10 @@
 //   node 用真 cloud-sync + listing over mock-provider（此前测试都用无扩展名 mock → 漏掉带扩展名的往返）。
 import { test, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
-import { createListing } from "../src/listing.ts";
+import { createListing } from "../src/works/listing.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 

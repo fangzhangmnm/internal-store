@@ -9,8 +9,8 @@
 //
 // 结构：① 纯逻辑（版本戳解析/比较）；② 命名空间派生；③ 编排；④ IO 薄壳（localStorage 包装）。
 
-import type { Kv } from "./types.ts";
-import { namespacedKv } from "./kv-namespace.ts";
+import type { Kv } from "../base/types.ts";
+import { namespacedKv } from "../base/kv-namespace.ts";
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // ① schema 版本戳（namespacedKv 下 schemaKey="database-version" → `${ns}.database-version` = "vNNN-yyyymmdd"，NNN 零填充=单调序号，yyyymmdd=落地日）

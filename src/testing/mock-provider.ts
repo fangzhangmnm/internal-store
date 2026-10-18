@@ -12,9 +12,9 @@
 //   - upload 到嵌套 path 自动建中间文件夹（Graph PUT-by-path 行为）
 //   - downloadRange(offset=null, n) 取末尾 n 字节（peek byte-range 依赖）
 
-import type { Bytes } from "../substrate.ts";
-import type { CloudProvider, CloudItem, UploadOpts, MoveOpts, ByteSource } from "../types.ts";
-import { deleteEmptyFolderVia } from "../folder-delete.ts";
+import type { Bytes } from "../base/substrate.ts";
+import type { CloudProvider, CloudItem, UploadOpts, MoveOpts, ByteSource } from "../base/types.ts";
+import { deleteEmptyFolderVia } from "../base/folder-delete.ts";
 
 // 带 .status 的 HTTP 风格错误（与 graph.js err.status 一致）。
 interface HttpError extends Error {

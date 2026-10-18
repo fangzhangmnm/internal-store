@@ -2,7 +2,7 @@
 //   §A 名字语料对账：四家宿主今天的配置 + 今天的行为（0.15.2 的 defaultCloudToName、WXHW 手写的 toName 正则）逐条和新推导比，
 //   只有提案 §3 标了「坏的」那几处允许不同，而且逐条列出来。
 import { test, eq, assert } from "./runner.mjs";
-import { createIdentifiers, validateDocKinds, withStemTail, SEAL_SUFFIX, type DocKind } from "../src/identifiers.ts";
+import { createIdentifiers, validateDocKinds, withStemTail, SEAL_SUFFIX, type DocKind } from "../src/base/identifiers.ts";
 const deq = (a: unknown, b: unknown, msg?: string) => eq(JSON.stringify(a), JSON.stringify(b), msg);
 
 const WXHW: DocKind[] = [{ kind: "book", suffix: ".webxiaoheiwu.zip", container: "zip" }, { kind: "draft", suffix: ".txt", container: "raw" }];

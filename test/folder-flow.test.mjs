@@ -1,8 +1,8 @@
 // FolderFlow 同步循环验收（mock cloud，桌面可测）：
 //   offline / 伪在线(decode→null) / 首推 / 拉-合-推 / 跳推(本地无新) / 412 重试收敛。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { createFolderFlow } from "../src/folder-flow.ts";
-import { emptyFolder, normalizeFolder } from "../src/folder-merge.ts";
+import { createFolderFlow } from "../src/works/folder-flow.ts";
+import { emptyFolder, normalizeFolder } from "../src/works/folder-merge.ts";
 
 const blobOf = (s) => ({ text: async () => s });
 const J = (f) => JSON.stringify(f);

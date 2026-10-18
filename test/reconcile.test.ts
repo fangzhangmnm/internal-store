@@ -2,8 +2,8 @@
 // 红线（升级后 2026-07-17）：clean 孤儿走**去抖**——第一次权威见 gone 只标 candidate（不删）；连续第二次+且跨 GRACE
 //   → 本地 send trash（可恢复）+ 清两轨 etag；重现/被编辑 → 自愈清 candidate；dirty/从没synced/在云端/非权威 一律不动。
 import { test, eq, assert } from "./runner.mjs";
-import { classifyCloudGone, createReconcile } from "../src/reconcile.ts";
-import { createPendingGone } from "../src/pending-gone.ts";
+import { classifyCloudGone, createReconcile } from "../src/works/reconcile.ts";
+import { createPendingGone } from "../src/works/pending-gone.ts";
 
 function memKv() {
   const m = new Map<string, string>();

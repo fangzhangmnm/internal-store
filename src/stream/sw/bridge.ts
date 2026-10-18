@@ -5,7 +5,7 @@
 //   活着的页面每 ~35 分钟静默续一次凭据，边界时刻 SW 手里的 token 大概率新鲜。
 // 密级说明（2026-08-15 user 拍板实验）：access token 本就躺在 MSAL 的 localStorage 里，IDB 多一份密级相当；
 //   token 短效（~1h），signOut 时调 stop({wipe:true}) 抹掉。
-import { createPartitionedBlobStore } from "../blob-partition.ts";
+import { createPartitionedBlobStore } from "../../base/blob-partition.ts";
 
 export interface SwAuthBridgeCfg {
   /** 与 SW 网关同一个 IDB 库名。 */

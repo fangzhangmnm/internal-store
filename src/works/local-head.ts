@@ -13,7 +13,7 @@
 //     local-head 是唯一碰这个回退的地方（两条 etag 轨道唯一接触点）。
 //   · markSynced（且**只有** markSynced）把 etag 提交进 durable 轨：它是唯一一个断言「盘上字节 == 云端某版」
 //     的迁移，而那是跨 reload 的事实。markSeen 不写（只是"看到云端 meta"，盘上字节没动）。详见 markSynced 内注释。
-import type { Kv } from "./types.ts";
+import type { Kv } from "../base/types.ts";
 
 export class BypassError extends Error {
   code = "BYPASS";

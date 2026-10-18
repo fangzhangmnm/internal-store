@@ -1,6 +1,6 @@
 import { test, eq, assert } from "./runner.mjs";
-import { mergeTrash } from "../src/trash-merge.ts";
-import type { CloudItem, TrashEntry } from "../src/types.ts";
+import { mergeTrash } from "../src/works/trash-merge.ts";
+import type { CloudItem, TrashEntry } from "../src/base/types.ts";
 
 // 造一个云端 trash CloudItem（mergeTrash 只读 .name/.ref；其余按类型填占位）。
 const ci = (ref: string, name: string): CloudItem => ({ ref, name, path: `.trash/${name}`, size: 1, eTag: "e", lastModifiedDateTime: 0 });

@@ -9,8 +9,8 @@
 //   · 写后重画（notifyFolderOf 本地帧）仍含 stale cloud-only 项（不闪没）。
 import { describe, it, assert, eq } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { createListing } from "../src/listing.ts";
-import { memKv } from "../src/cloud-sync.ts";
+import { createListing } from "../src/works/listing.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";

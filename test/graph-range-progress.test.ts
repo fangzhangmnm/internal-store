@@ -1,7 +1,7 @@
 // graph byte-range 的 2.0.0 旁路（2026-10-17 Claude Fable 5.1）：按流读报进度；调度层中止 → 不重申请 downloadUrl、不重试。
 import { test, assert, eq } from "./runner.mjs";
-import { createGraph, downloadRangeFromUrl } from "../src/providers/graph.ts";
-import { CloudNetworkError } from "../src/errors.ts";
+import { createGraph, downloadRangeFromUrl } from "../src/base/providers/graph.ts";
+import { CloudNetworkError } from "../src/base/errors.ts";
 
 const data = Uint8Array.from({ length: 100 }, (_, i) => i);
 const streamOf = (parts: Uint8Array[], hangAfter = false): ReadableStream<Uint8Array> => new ReadableStream({

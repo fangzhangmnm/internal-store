@@ -1,7 +1,7 @@
 // pending-gone 深模块（云端防抖 candidate-gone）+ listing.classifySyncState 的 pendingGone 分支。
 import { test, eq, assert } from "./runner.mjs";
-import { createPendingGone } from "../src/pending-gone.ts";
-import { classifySyncState } from "../src/listing.ts";
+import { createPendingGone } from "../src/works/pending-gone.ts";
+import { classifySyncState } from "../src/works/listing.ts";
 
 function memKv() {
   const m = new Map<string, string>();

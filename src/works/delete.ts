@@ -4,12 +4,12 @@
 //   三态：仅本地 / 仅云端 / 两者（两者→云端进 .trash + 本地干净副本直删，不留双份；本地脏→降级 local-only）。
 //   离线：本地 move-aside + 持久化排队（base-etag 守卫），重连 drainDeleteQueue 重放——
 //   被别处改过（含同名新文件）→ conflict-edit-wins → **不删**（防"旧设备攒删除很久后上线删掉别人的新文件"）。
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import { asideStamp } from "./move-aside.ts";              // deleteEventId 生成器（时间戳+guid，兼作防撞后缀）
-import type { CloudSync, Kv, LocalCache } from "./types.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { asideStamp } from "../base/move-aside.ts";              // deleteEventId 生成器（时间戳+guid，兼作防撞后缀）
+import type { CloudSync, Kv, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 
-import type { Busy } from "./types.ts";
+import type { Busy } from "../base/types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 
 export interface DeleteCfg {

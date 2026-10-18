@@ -9,8 +9,8 @@
 //   （`tailscale serve` 给 tailnet 域名发证书；裸 http://100.x.x.x 会被浏览器当混合内容拦掉）；主机要回 CORS 头
 //   （Access-Control-Allow-Origin、Access-Control-Expose-Headers: Content-Range, Content-Length）并支持 Range（回 206）。
 import type { MirrorHandle, MirrorSource } from "./download-session.ts";
-import type { RangeOpts } from "./types.ts";
-import { anySignal, readBody } from "./providers/range-body.ts";
+import type { RangeOpts } from "../base/types.ts";
+import { anySignal, readBody } from "../base/providers/range-body.ts";
 
 /** 这台设备上的文件当镜像（File API：`<input type=file>` / showOpenFilePicker 拿到的 File，slice 白送、零网络）。
  *  lookup 按云端文件名给 File；没有 → null。尺寸不等 = 不是同一份 → 不用。 */

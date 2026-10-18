@@ -5,13 +5,13 @@
 //   （localSettings/syncedSettings 已删 2026-07-13——设置/状态全走 collection。）
 import { test, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { isHidden, assertValidFileName, assertValidCollectionName } from "../src/is-hidden.ts";
-import { namespacedKv } from "../src/kv-namespace.ts";
+import { isHidden, assertValidFileName, assertValidCollectionName } from "../src/base/is-hidden.ts";
+import { namespacedKv } from "../src/base/kv-namespace.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync } from "../src/cloud-sync.ts";
+import { createCloudSync } from "../src/works/cloud-sync.ts";
 
 // 可 dump 的内存 kv（含 keys()）——检查命名空间。
 function dumpKv() {
@@ -117,7 +117,7 @@ test("[collection] pre-init 守卫：init 前 setItem 抛、getItem 返 default"
 //   本次审计的核心发现：深模块的返回类型早就是有信息量的联合类型，所有活着的谎报都发生在
 //   store 与 UI 之间那一层。这几条锁住「结果确实流出来了」。
 test("collection.flushLocal 本地写失败 → ok:false（不得 resolve 成功；三个 unload 屏障全靠它）", async () => {
-  const { createCollection } = await import("../src/collection.ts");
+  const { createCollection } = await import("../src/works/collection.ts");
   const col = createCollection({
     name: "c", cloud: { setDirty: () => {}, isDirty: () => false, getETag: () => null, setETag: () => {} }, manual: true,
     local: { save: async () => { throw new Error("QuotaExceeded"); }, get: async () => null },
@@ -130,7 +130,7 @@ test("collection.flushLocal 本地写失败 → ok:false（不得 resolve 成功
 });
 
 test("collection.flushLocal 正常路径 → ok:true", async () => {
-  const { createCollection } = await import("../src/collection.ts");
+  const { createCollection } = await import("../src/works/collection.ts");
   const saved: unknown[] = [];
   const col = createCollection({
     name: "c", cloud: { setDirty: () => {}, isDirty: () => false, getETag: () => null, setETag: () => {} }, manual: true,

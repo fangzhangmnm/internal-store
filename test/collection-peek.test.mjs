@@ -9,7 +9,7 @@ import { createStore, StoreDisposedError } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { emptyCollectionBytes } from "../src/collection.ts";
+import { emptyCollectionBytes } from "../src/works/collection.ts";
 
 function dumpKv() {
   const m = new Map();

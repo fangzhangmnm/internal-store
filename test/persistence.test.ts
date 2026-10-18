@@ -1,8 +1,8 @@
-// persist 三件套契约测试（user 2026-08-27 拍板；全案 = src/persistence.ts 头注释）。
+// persist 三件套契约测试（user 2026-08-27 拍板；全案 = src/base/persistence.ts 头注释）。
 // created 2026-08-27 by Claude Fable 5 (claude-fable-5)
 import { test, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { queryStoragePersistence, requestStoragePersistence } from "../src/persistence.ts";
+import { queryStoragePersistence, requestStoragePersistence } from "../src/base/persistence.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";

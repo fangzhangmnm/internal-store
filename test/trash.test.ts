@@ -1,10 +1,10 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
-import { createLocalHead } from "../src/local-head.ts";
-import { createTrash } from "../src/trash.ts";
-import { toU8 } from "../src/substrate.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
+import { createLocalHead } from "../src/works/local-head.ts";
+import { createTrash } from "../src/works/trash.ts";
+import { toU8 } from "../src/base/substrate.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 

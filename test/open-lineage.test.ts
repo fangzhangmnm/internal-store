@@ -4,10 +4,10 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
-import { createLocalHead } from "../src/local-head.ts";
-import { createSafeResolve } from "../src/safe-resolve.ts";
-import { createFreshness } from "../src/freshness.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
+import { createLocalHead } from "../src/works/local-head.ts";
+import { createSafeResolve } from "../src/works/safe-resolve.ts";
+import { createFreshness } from "../src/works/freshness.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 
@@ -84,7 +84,7 @@ test("[open-lineage] 从没同步过（无 durable etag）→ 不标；开关关
 });
 
 // 0.18.1：refresh 的 trustHints:false —— 醒来 / 回前台这种时刻别信 30 s 内的旧清单，一定问云端。
-import { createFreshHints } from "../src/fresh-hints.ts";
+import { createFreshHints } from "../src/works/fresh-hints.ts";
 test("[refresh] 30 s 内的旧清单说没动，但云端其实动了：默认采信 → in-sync 不快进；trustHints:false → 问云端 → 快进", async () => {
   const provider = createMockProvider();
   const cloud = createCloudSync({ provider, kv: memKv(), fileName: (n: string) => n });

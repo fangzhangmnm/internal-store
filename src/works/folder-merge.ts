@@ -12,7 +12,7 @@
 // │ 集合、无 resetAt 水位线（2026-07 tombstone 化）。                              │
 // └──────────────────────────────────────────────────────────────────────────┘
 
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
 // ---- Folder shape 类型（本文件 SSoT，collection / folder-flow 从这里 import）----
 // 知识面只有 id / uat / name?；其余字段 opaque payload，原样搬运（[k: string]: unknown）。

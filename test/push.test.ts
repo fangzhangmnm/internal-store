@@ -1,12 +1,12 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
-import { createLocalHead, BypassError } from "../src/local-head.ts";
-import { createSafeResolve } from "../src/safe-resolve.ts";
-import { createSubstrate } from "../src/substrate.ts";
-import { createPush } from "../src/push.ts";
-import { createOffload } from "../src/offload.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
+import { createLocalHead, BypassError } from "../src/works/local-head.ts";
+import { createSafeResolve } from "../src/works/safe-resolve.ts";
+import { createSubstrate } from "../src/base/substrate.ts";
+import { createPush } from "../src/works/push.ts";
+import { createOffload } from "../src/works/offload.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 async function asStr(x: unknown): Promise<string | null> {

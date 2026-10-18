@@ -10,12 +10,12 @@
 //   分片末响应无 item→拉权威 etag 不崩不缓存 null（H7）· trash=move-aside 加 [ts] 后缀（A8/C2）·
 //   restore 撞名 (2)(3) 防覆盖。
 
-import { asideStamp, restoreStampDisplay } from "./move-aside.ts";
-import { withStemTail, type Identifiers } from "./identifiers.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
-import { isHidden } from "./is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import { CloudStaleRefError } from "./errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
-import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "./types.ts";
+import { asideStamp, restoreStampDisplay } from "../base/move-aside.ts";
+import { withStemTail, type Identifiers } from "../base/identifiers.ts";   // 深模块的 move-aside 命名策略（yyyymmddhhmmss-guid 防撞）
+import { isHidden } from "../base/is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { CloudStaleRefError } from "../base/errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
+import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "../base/types.ts";
 
 export class CloudConflictError extends Error {
   sessionName: string;

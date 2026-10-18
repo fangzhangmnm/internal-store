@@ -2,7 +2,7 @@
 //   这是引擎**唯一**静默丢数据路径（path-身份红线 + postmortem 2026-06-05 第④级）——
 //   N6 尾字节守卫：同名同大小**异内容**绝不静默认领。补 WebPaint store-lost-response-claim 的对应覆盖。
 import { test, eq, assert } from "./runner.mjs";
-import { createCloudSync, memKv, CloudConflictError, CloudNameCollisionError } from "../src/cloud-sync.ts";
+import { createCloudSync, memKv, CloudConflictError, CloudNameCollisionError } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);

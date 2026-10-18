@@ -1,7 +1,7 @@
 // maintenance（深清两口子）契约测试。node 无 idb/localStorage → globalThis 垫假件（测完还原）。
 // created 2026-08-28 by Claude Fable 5.
 import { describe, it, assert, eq } from "./runner.mjs";
-import { wipeAppNamespace, scanAppNamespace, WipeConsentError } from "../src/maintenance.ts";
+import { wipeAppNamespace, scanAppNamespace, WipeConsentError } from "../src/works/maintenance.ts";
 
 function fakeEnv({ dbs = [], blocked = [], lsKeys = [] } = {}) {
   const alive = new Set(dbs);

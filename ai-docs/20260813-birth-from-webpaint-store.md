@@ -17,9 +17,9 @@
 
 ## 已知 app 残留（过目关卡逐条拍板，出生版未动）
 
-1. `src/providers/auth.ts:76` — 硬编码 `window.dispatchEvent(new Event("wp:auth-changed"))`（WebPaint 命名空间）。修法候选：事件名进 `configureOneDriveAuth` 配置 / 换回调。**接口改动，human 拍板。**
+1. `src/base/providers/auth.ts:76` — 硬编码 `window.dispatchEvent(new Event("wp:auth-changed"))`（WebPaint 命名空间）。修法候选：事件名进 `configureOneDriveAuth` 配置 / 换回调。**接口改动，human 拍板。**
 2. `src/crypto-container.ts:77` — `CONTAINER_PEEK_ENTRIES` 硬编码 `"thumb"`（WebPaint v233/234 老容器兼容名）。
-3. `src/providers/graph.ts:2` — 注释误写 `Apps/AtlasMaker/`（代码本身 generic，走 approot）。
+3. `src/base/providers/graph.ts:2` — 注释误写 `Apps/AtlasMaker/`（代码本身 generic，走 approot）。
 4. 文档清洗项（不影响运行）：`src/README.md` 等约 9 处「笔架」字样、~30 处 WebPaint/.ora/JRP 字样。
 
 ## 未决 / 待办

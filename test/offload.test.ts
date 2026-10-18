@@ -1,7 +1,7 @@
 // offload 深模块对抗测试：合法(clean∧在线∧曾synced(seenBase!=null)∧云端有完整(size>0))→hardDelete；
 // 非法(dirty/离线/local-only/cloud-gone/0B incomplete)→抛 OffloadIllegalError，绝不静默丢字节。cloudMoved+clean 仍合法。
 import { test, eq, assert } from "./runner.mjs";
-import { createOffload, OffloadIllegalError } from "../src/offload.ts";
+import { createOffload, OffloadIllegalError } from "../src/works/offload.ts";
 
 function setup(opts: { online?: boolean } = {}) {
   const localSet = new Set<string>();

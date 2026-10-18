@@ -2,7 +2,7 @@
 // 案发 2026-09-08 黑匣子：RT 过期后同一毫秒 6 个 getTokenFor 并发 → 6 个隐藏 iframe 往返 + 6 组日志 + 多条 E 级横幅。
 // 用 query-string 拿独立模块实例（模块级 pca/initPromise 只跑一次）。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { setStoreErrorReporter } from "../src/error-handling.ts";
+import { setStoreErrorReporter } from "../src/base/error-handling.ts";
 
 class Pca {
   constructor(cfg) { this.cfg = cfg; this.active = null; this.silentCalls = 0; this.mode = "ok"; this.accounts = [{ homeAccountId: "h1", username: "u@example.com" }]; }
@@ -26,7 +26,7 @@ globalThis.location ??= { origin: "https://weebpaint.test", pathname: "/dev/" };
 async function fresh(tag) {
   const prev = globalThis.window.msal; let pca = null;
   globalThis.window.msal = { PublicClientApplication: class extends Pca { constructor(c) { super(c); pca = this; } }, LogLevel: { Error: 0, Warning: 1, Info: 2, Verbose: 3, Trace: 4 } };
-  const auth = await import(`../src/providers/auth.ts?fresh=single-flight-${tag}`);
+  const auth = await import(`../src/base/providers/auth.ts?fresh=single-flight-${tag}`);
   auth.configureOneDriveAuth({ clientId: "test-client-id" });
   await auth.initAuth();
   globalThis.window.msal = prev;

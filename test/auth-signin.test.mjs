@@ -25,7 +25,7 @@ globalThis.window = globalThis.window || globalThis;
 globalThis.location ??= { origin: "https://weebpaint.test", pathname: "/dev/" };   // node 无 location；initAuth 拼 redirectUri 要用（2026-08-31 补：auth 测试自 0.10.0 起因此从未在套件里跑起来）
 globalThis.window.msal = { PublicClientApplication: FakePca };
 
-const auth = await import("../src/providers/auth.ts");
+const auth = await import("../src/base/providers/auth.ts");
 auth.configureOneDriveAuth({ clientId: "test-client-id" });
 
 describe("auth signIn popup/redirect 分流", () => {

@@ -1,6 +1,6 @@
 import { test, eq, assert } from "./runner.mjs";
-import { createLocalHead, BypassError } from "../src/local-head.ts";
-import { memKv } from "../src/cloud-sync.ts";
+import { createLocalHead, BypassError } from "../src/works/local-head.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 
 // 一个可变的"云端当前 etag"，getCloudEtag 闭包读它（seenBase 回退 + 多 tab 共享 etag 模拟）。
 function cloudEtagRef(initial: string | null = null) {

@@ -4,7 +4,7 @@
 //   这些测试锁住「传下去了」，防止下次重构又漏。
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 const rig = () => {

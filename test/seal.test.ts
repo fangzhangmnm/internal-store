@@ -1,6 +1,6 @@
 import { test, eq, assert } from "./runner.mjs";
-import { createSeal, LockedError } from "../src/seal.ts";
-import type { SealCfg } from "../src/seal.ts";
+import { createSeal, LockedError } from "../src/works/seal.ts";
+import type { SealCfg } from "../src/works/seal.ts";
 
 // ── stub crypto 原语（toy 容器：[0xE0, pwByte, ...data]）→ 测 seal 路由，不碰真 7z ──
 const MARK = 0xE0;
@@ -74,7 +74,7 @@ test("unsealForRead：明文 → 原样透传", async () => {
 });
 
 // ── 2026-09-09 meta.bin 的 ext 按逻辑名推导（同 store 里 .txt 稿 + .xxx.zip 工程并存，store 级单值 crypt.ext 必错一种）──
-import { cryptExtFor } from "../src/seal.ts";
+import { cryptExtFor } from "../src/works/seal.ts";
 test("cryptExtFor · 逻辑名有点 → 最后一个点之后；没点 / 隐藏名 / 尾点 → undefined（0.16.0 删了 crypt.ext 回退）；夹名里的点不算；故意不按 docKinds 的后缀取（meta.bin 字节不变）", () => {
   eq(cryptExtFor("a.txt"), "txt");
   eq(cryptExtFor("夏音.webxiaoheiwu.zip"), "zip", "工程 ext=zip：meta.bin 里记的和 0.15.2 一样，旁边的 name 才是完整身份");

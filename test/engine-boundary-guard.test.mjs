@@ -4,21 +4,15 @@
 //   · 两台都只准 import 底座（provider / graph / IDB / 身份语法 / 错误汇报 / 类型）；
 //   · 底座不准 import 任何一台引擎（反向箭头 = 边界漏了）。
 //   · 只有组合根（create-store.ts / index.ts）看得见两台。
-// 这就是「物理拆包」要保证的东西，先在包里机械守住；真拆（= 3.0.0）时这三张表就是搬家清单。
+// 这就是「物理拆包」要保证的东西，先在包里机械守住；真拆（= 3.0.0）时三个夹就是三个包。src/testing/ 是 mock 替身，不在图里。
 import { describe, it, assert } from "./runner.mjs";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, dirname, resolve, relative } from "node:path";
 
 const SRC = resolve("src");
-const SUBSTRATE = new Set(["providers/graph.ts", "providers/auth.ts", "providers/index.ts", "providers/folder.ts", "providers/range-body.ts", "onedrive-provider.ts",
-  "errors.ts", "error-handling.ts", "substrate.ts", "types.ts", "kv-namespace.ts", "idb-store.ts", "blob-partition.ts", "local-cache.ts",
-  "identifiers.ts", "is-hidden.ts", "persistence.ts", "ui-text.ts", "folder-delete.ts", "move-aside.ts"]);
-const WORKS = new Set(["cloud-sync.ts", "push.ts", "local-head.ts", "freshness.ts", "fresh-hints.ts", "safe-resolve.ts", "seal.ts", "identity.ts", "listing.ts",
-  "reconcile.ts", "pending-gone.ts", "delete.ts", "trash.ts", "trash-merge.ts", "folder-flow.ts", "folder-merge.ts", "offload.ts", "upload-queue.ts",
-  "collection.ts", "zip-peek.ts", "migration.ts", "maintenance.ts"]);
-const STREAM = new Set(["download-session.ts", "chunk-scheduler.ts", "mirror.ts", "sw/gateway.ts", "sw/bridge.ts", "sw/index.ts"]);
+// 归类 = 文件夹（2026-10-17 深夜 user「做」：物理挪进三个夹）。src/ 顶层只许组合根两个文件；新文件不进夹 → 红。
 const COMPOSITION = new Set(["create-store.ts", "index.ts"]);
-const groupOf = (f) => SUBSTRATE.has(f) ? "substrate" : WORKS.has(f) ? "works" : STREAM.has(f) ? "stream" : COMPOSITION.has(f) ? "composition" : null;
+const groupOf = (f) => f.startsWith("base/") ? "substrate" : f.startsWith("works/") ? "works" : f.startsWith("stream/") ? "stream" : COMPOSITION.has(f) ? "composition" : null;
 
 function* walk(d) { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) { if (f !== "testing") yield* walk(p); } else if (f.endsWith(".ts")) yield p; } }
 const edges = [];   // [from, to]（相对 src 的路径）
@@ -34,8 +28,8 @@ for (const abs of walk(SRC)) {
 }
 
 describe("engine-boundary-guard · 两台引擎互不 import、只共用底座", () => {
-  it("src 里每个文件都在三张表之一（新文件要先归类）", () => {
-    assert(unknown.length === 0, `没归类的文件：${unknown.join(", ")}（加进 SUBSTRATE / WORKS / STREAM / COMPOSITION 之一）`);
+  it("src 里每个文件都在 base/ works/ stream/ 之一（顶层只有组合根两个文件）", () => {
+    assert(unknown.length === 0, `没归类的文件：${unknown.join(", ")}（放进 src/base、src/works 或 src/stream；顶层只许 create-store.ts / index.ts）`);
   });
   it("作品引擎 ↔ 资源引擎 零 import", () => {
     const bad = edges.filter(([a, b]) => (groupOf(a) === "works" && groupOf(b) === "stream") || (groupOf(a) === "stream" && groupOf(b) === "works"));

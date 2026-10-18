@@ -28,8 +28,8 @@
 import { createFolderFlow, type FolderFlowResult } from "./folder-flow.ts";
 import { emptyFolder, parseFolderBlob, mergeFolders, normalizeFolder, FOLDER_ENVELOPE_VERSION } from "./folder-merge.ts";
 import type { FolderEnvelope, FolderItem } from "./folder-merge.ts";
-import type { CloudSync, LocalCache } from "./types.ts";
-import { reportStoreError } from "./error-handling.ts";
+import type { CloudSync, LocalCache } from "../base/types.ts";
+import { reportStoreError } from "../base/error-handling.ts";
 
 // collection 在本地缓存（IDB `blobs`）里的键名 = collections 分区（`collections/<name>`）。
 export function collectionLocalKey(name: string): string { return `collections/${name}`; }

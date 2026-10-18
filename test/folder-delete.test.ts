@@ -1,7 +1,7 @@
 // deleteEmptyFolderVia（provider 共享护栏）：四态 + If-Match 透传 + 递归删绝不发生（非空/list-fail 不 delete）。
 import { test, eq, assert } from "./runner.mjs";
-import { deleteEmptyFolderVia } from "../src/folder-delete.ts";
-import type { CloudItem } from "../src/types.ts";
+import { deleteEmptyFolderVia } from "../src/base/folder-delete.ts";
+import type { CloudItem } from "../src/base/types.ts";
 
 const folder = (path: string, eTag = "e1"): CloudItem => ({ ref: `id:${path}`, name: path, path, size: 0, eTag, lastModifiedDateTime: 0, isFolder: true });
 const fileItem = (path: string): CloudItem => ({ ref: `id:${path}`, name: path, path, size: 1, eTag: "e", lastModifiedDateTime: 0, isFolder: false });

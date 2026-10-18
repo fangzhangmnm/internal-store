@@ -3,7 +3,7 @@
 //   escalate 记录：ai-docs/20260920-request-head-peek.md。created 2026-09-20 by Claude Fable 5.1
 import { test, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { memKv } from "../src/cloud-sync.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createStore } from "../src/create-store.ts";

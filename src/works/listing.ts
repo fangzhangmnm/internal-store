@@ -9,10 +9,10 @@
 //   各自在 app 层重推过一次 union = 越狱，其一还漏了本地那半 = 登出/离线看不了本地文件的根因。收进库后不可能再漏。
 //
 // 纯分类器 classifySyncState 可穷举单测（对齐 reconcile.classifyCloudGone 的纪律）。
-import type { CloudSync, LocalCache } from "./types.ts";
+import type { CloudSync, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
-import { isHidden } from "./is-hidden.ts";   // 末段 dot = 隐藏（.trash/.backup/.<appId>/任意 dot 项不进列举）
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { isHidden } from "../base/is-hidden.ts";   // 末段 dot = 隐藏（.trash/.backup/.<appId>/任意 dot 项不进列举）
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 
 //   （单一 Residency 太薄——这是「sync state 更复杂」的落地。8 值对齐 PWAPatterns state-machine.md 的 badge。）
 /** syncState = residency(住哪) ⟂ sync-status(clean/dirty/conflict/gone) 两轴的 derived 投影（8-badge）。 */

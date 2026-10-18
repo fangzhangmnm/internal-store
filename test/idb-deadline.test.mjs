@@ -5,7 +5,7 @@
 //     ⑤ onversionchange → 老连接自己 close，下一 op 重开；⑥（0.12.1 改判 0.11.6）pagehide persisted=true：在飞读写全弃
 //     （IdbSuspendedError）、关连接、闸门落下（pageshow 前新 op 立即拒）、pageshow 后重开；persisted=false 什么都不做；close() 摘掉两个监听。
 import { test, assert, eq } from "./runner.mjs";
-import { createIdbCache, IdbTimeoutError, IdbSuspendedError, setIdbOpTimeoutForTests, idbOpTimeoutMs } from "../src/idb-store.ts";
+import { createIdbCache, IdbTimeoutError, IdbSuspendedError, setIdbOpTimeoutForTests, idbOpTimeoutMs } from "../src/base/idb-store.ts";
 
 function fakeIdb({ openHang = () => false, txHang = () => false } = {}) {
   let opens = 0; const dbs = [];

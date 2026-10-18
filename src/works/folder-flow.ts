@@ -11,11 +11,11 @@
 // │ contentType 一样，不是 merge 逻辑外泄。                                        │
 // └──────────────────────────────────────────────────────────────────────────┘
 
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import { mergeFolders, emptyFolder, normalizeFolder } from "./folder-merge.ts";
 import type { FolderConflictPolicy } from "./folder-merge.ts";
 import type { FolderEnvelope, ResolveFn } from "./folder-merge.ts";
-import type { Bytes, CloudSync } from "./types.ts";
+import type { Bytes, CloudSync } from "../base/types.ts";
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   if (!ms) return p;

@@ -1,7 +1,7 @@
 // upload-queue 深模块测试（ADR-0018）：离线新上传回线补推。policy(auto/ask/manual) + supersede + collision + offline + transient。
 // 红线：只补推 never-synced；per-name serialize + 锁内 supersede 复检；没确认成功绝不出队（中途关 app 重试）。
 import { test, eq } from "./runner.mjs";
-import { createUploadReplay, type UploadReplayPolicy } from "../src/upload-queue.ts";
+import { createUploadReplay, type UploadReplayPolicy } from "../src/works/upload-queue.ts";
 
 function memkv() { const m = new Map<string, string>(); return { get: (k: string) => m.get(k) ?? null, set: (k: string, v: string) => { m.set(k, v); }, remove: (k: string) => { m.delete(k); } }; }
 

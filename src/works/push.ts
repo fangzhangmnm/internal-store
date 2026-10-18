@@ -5,9 +5,9 @@
 //     local-head.ifMatchFor（If-Match + bypass 守卫）· seal.sealForWrite（明文→at-rest 包壳）·
 //     safe-resolve.tryHeal/resolveConflict（自愈/永不丢字节化解）· local-head.onPushed（落地谱系）。
 //   串行 = substrate.serialize（同 name 串行，B1）。
-import { toU8 } from "./substrate.ts";
-import type { BytesSource } from "./substrate.ts";
-import type { CloudSync } from "./types.ts";
+import { toU8 } from "../base/substrate.ts";
+import type { BytesSource } from "../base/substrate.ts";
+import type { CloudSync } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";

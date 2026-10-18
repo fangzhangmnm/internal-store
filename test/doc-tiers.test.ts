@@ -7,10 +7,10 @@
 //     云端没了 → 本地缓存直接丢、不进回收站（reconcile.drop）。
 //   · 每种文档自己的 validate：云端坏字节只拦那一种。
 import { test, eq, assert } from "./runner.mjs";
-import { createIdentifiers, validateDocKinds, type DocKind } from "../src/identifiers.ts";
+import { createIdentifiers, validateDocKinds, type DocKind } from "../src/base/identifiers.ts";
 import { createStore, ReadOnlyFilesError } from "../src/create-store.ts";
-import { createReconcile } from "../src/reconcile.ts";
-import { createPendingGone } from "../src/pending-gone.ts";
+import { createReconcile } from "../src/works/reconcile.ts";
+import { createPendingGone } from "../src/works/pending-gone.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";

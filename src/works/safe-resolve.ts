@@ -4,10 +4,10 @@
 //   备份先于覆盖(A4/A10) · 采纳前校验真容器(N2,挡 captive-portal HTML) · 采纳后置 etag(R1) ·
 //   lost-response 自愈(B5) · 冲突派发(keepMine/takeCloud/cancel)。
 // 吃：cloud(pull/weakOverride) + local(backup/save) + local-head(markSynced 落地谱系)。
-import { toU8, bytesEqual } from "./substrate.ts";
-import type { Bytes } from "./substrate.ts";
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import type { CloudSync, LocalCache } from "./types.ts";
+import { toU8, bytesEqual } from "../base/substrate.ts";
+import type { Bytes } from "../base/substrate.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import type { CloudSync, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 
 /** 冲突派发的选择串（keepMine / takeCloud / cancel）= **同步动词词汇表的全部**（2026-10-16 user「因为这个动词一开始就不合法，不在词汇表上」）。
@@ -19,7 +19,7 @@ export type SafePullResult =
   | { ok: true; backupName?: string }
   | { ok: false; reason: string; backupName?: string; error?: unknown };
 
-import type { AdoptFn } from "./types.ts";
+import type { AdoptFn } from "../base/types.ts";
 
 export interface SafeResolveCfg {
   cloud: Pick<CloudSync, "pull" | "weakOverride">;

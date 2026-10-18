@@ -5,7 +5,7 @@
 import { describe, it, assert, eq } from "./runner.mjs";
 import {
   mergeFolders, emptyFolder, isValidFolderEnvelope, parseFolderBlob, resolveRef,
-} from "../src/folder-merge.ts";
+} from "../src/works/folder-merge.ts";
 
 // 规范化：items 按 id 排序后 JSON，用于无视顺序的相等比较（无 trash/resetAt——tombstone 化）。
 const norm = (f) => JSON.stringify({

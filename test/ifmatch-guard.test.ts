@@ -35,6 +35,6 @@ test("全库无裸 replace：conflictBehavior:\"replace\" 的调用点必须同�
 });
 
 test("运行时护栏在位：graph.uploadFileToApproot 拒绝 blind replace", () => {
-  const graphSrc = readFileSync(fileURLToPath(new URL("../src/providers/graph.ts", import.meta.url)), "utf8");
+  const graphSrc = readFileSync(fileURLToPath(new URL("../src/base/providers/graph.ts", import.meta.url)), "utf8");
   assert(graphSrc.includes('blind overwrite forbidden'), "graph.ts 必须保有 replace-无-eTag 的运行时 throw（语法护栏的深模块兜底）");
 });

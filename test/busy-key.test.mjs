@@ -2,10 +2,10 @@
 // created 2026-09-03 by Claude Fable 5.1
 import { describe, it, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { createListing } from "../src/listing.ts";
-import { createReconcile } from "../src/reconcile.ts";
-import { createPendingGone } from "../src/pending-gone.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
+import { createListing } from "../src/works/listing.ts";
+import { createReconcile } from "../src/works/reconcile.ts";
+import { createPendingGone } from "../src/works/pending-gone.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";

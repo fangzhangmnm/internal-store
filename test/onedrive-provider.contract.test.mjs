@@ -2,7 +2,7 @@
 // （≈ 恒等还原）。真 graph.js 与 graphFromProvider 同表面，故这等价于验真适配正确。
 import { describe, it, assert, eq, throwsStatus } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
-import { graphToCloudProvider } from "../src/onedrive-provider.ts";
+import { graphToCloudProvider } from "../src/base/onedrive-provider.ts";
 import { graphFromProvider } from "./helpers.mjs";
 
 const bytes = (s) => new TextEncoder().encode(s);

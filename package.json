@@ -1,6 +1,6 @@
 {
   "name": "@internal/store",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "PWA 家族云同步 store 引擎（离线优先 / 处处 If-Match / 删除=.trash / 冲突必 surface / dirty 永不驱逐）",
   "type": "module",
   "license": "MIT",
@@ -19,8 +19,8 @@
       "default": "./dist/testing/index.js"
     },
     "./sw": {
-      "types": "./dist/sw/index.d.ts",
-      "default": "./dist/sw/index.js"
+      "types": "./dist/stream/sw/index.d.ts",
+      "default": "./dist/stream/sw/index.js"
     }
   },
   "scripts": {

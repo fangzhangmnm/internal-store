@@ -4,7 +4,7 @@
 //   · HTTP 镜像 read：206 → 字节、按流报进度；非 206 / 长度不对 → 抛；signal 中止 → 抛。
 //   · File 镜像：尺寸相等 → slice；不等 → null。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { createFileMirror, createHttpMirror } from "../src/mirror.ts";
+import { createFileMirror, createHttpMirror } from "../src/stream/mirror.ts";
 
 const bytes = (n) => Uint8Array.from({ length: n }, (_, i) => i % 251);
 const data = bytes(1000);

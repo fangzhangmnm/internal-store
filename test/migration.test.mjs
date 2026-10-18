@@ -6,7 +6,7 @@ import { describe, it, assert, eq } from "./runner.mjs";
 import {
   parseSchemaVersion, needsMigration,
   storeNamespace, runMigrations, MIGRATIONS,
-} from "../src/migration.ts";
+} from "../src/works/migration.ts";
 
 // 内存 MigrationKv（含 keys 枚举）。
 function memMkv(init = {}) {

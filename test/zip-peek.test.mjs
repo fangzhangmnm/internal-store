@@ -1,7 +1,7 @@
 // store `zip-peek` 深模块纯逻辑（v399 重写：格式盲、按文件名取 entry + 溢出尾片二次拉）。
 //   readCentralDirectory / readEntryBytes / readNamedEntry over a PeekSource（tail + range 回调）。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { readCentralDirectory, readEntryBytes, readNamedEntry } from "../src/zip-peek.ts";
+import { readCentralDirectory, readEntryBytes, readNamedEntry } from "../src/works/zip-peek.ts";
 
 const enc = new TextEncoder();
 const concat = (...arrs) => { const n = arrs.reduce((s, a) => s + a.length, 0); const o = new Uint8Array(n); let p = 0; for (const a of arrs) { o.set(a, p); p += a.length; } return o; };

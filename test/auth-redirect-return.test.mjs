@@ -5,7 +5,7 @@
 //   ③ cacheLocation 仍 localStorage、storeAuthStateInCookie 仍 false（零回归）。
 // 模块级 initPromise 只跑一次 → 用 query-string 拿一份**独立**模块实例（不与 auth-signin.test 共享 pca）。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { setStoreErrorReporter } from "../src/error-handling.ts";
+import { setStoreErrorReporter } from "../src/base/error-handling.ts";
 
 let cfgSeen = null;
 class ThrowingPca {
@@ -25,7 +25,7 @@ describe("auth initAuth · redirect 回程失败上报 + 临时缓存落 localSt
     const reported = [];
     setStoreErrorReporter((e, lvl) => reported.push([String(e), lvl]));
     try {
-      const auth = await import("../src/providers/auth.ts?fresh=redirect-return");
+      const auth = await import("../src/base/providers/auth.ts?fresh=redirect-return");
       auth.configureOneDriveAuth({ clientId: "test-client-id" });
       const st = await auth.initAuth();
       eq(st.signedIn, false, "回程失败 = 未登录（不假登录）");

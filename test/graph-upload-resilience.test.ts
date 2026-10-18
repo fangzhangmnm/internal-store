@@ -1,8 +1,8 @@
 // 0.17.1 分块上传：单块失败接着传（nextExpectedRanges）、提交前核 eTag、请求超时 —— created 2026-10-15 by Claude Fable 5.1
 //   起因：KudsRocket iPad 一次网络抖动整份重传；锁屏后 fetch 永远挂着；分块上传 If-Match 只在开会话时核（分析报告 §4 窗口）。
 import { test, assert, eq } from "./runner.mjs";
-import { createGraph } from "../src/providers/graph.ts";
-import { CloudNetworkError } from "../src/errors.ts";
+import { createGraph } from "../src/base/providers/graph.ts";
+import { CloudNetworkError } from "../src/base/errors.ts";
 
 const MiB = 1024 * 1024;
 const bytes = (n: number) => new Blob([new Uint8Array(n)]);

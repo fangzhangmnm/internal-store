@@ -11,10 +11,10 @@
 //   hardDelete(name)      → void         真删（仅用于「云端已进 trash、不留双份」的本地侧）
 //   restore(trashKey)     → name|null    从本地 trash 恢复
 
-import type { Bytes } from "../substrate.ts";
-import type { LocalCache, TrashEntry } from "../types.ts";
-import { restoreTargetName, snapshotStampOf } from "../move-aside.ts";
-import { createIdentifiers, type Identifiers } from "../identifiers.ts";
+import type { Bytes } from "../base/substrate.ts";
+import type { LocalCache, TrashEntry } from "../base/types.ts";
+import { restoreTargetName, snapshotStampOf } from "../base/move-aside.ts";
+import { createIdentifiers, type Identifiers } from "../base/identifiers.ts";
 const NO_KINDS = createIdentifiers([]);
 
 /** 本地 trash 条目内部形状。 */

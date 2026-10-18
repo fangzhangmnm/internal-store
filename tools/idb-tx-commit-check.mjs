@@ -8,7 +8,7 @@
 //   若在 req.onsuccess 就 resolve（v0.3.0 及之前就是），一次**根本没落盘**的写会被报成成功，
 //   一路向上让 app 清掉 dirty、停掉重试 —— 静默丢用户编辑，且零 unhandled rejection。
 //
-// 这个夹具跑的是**真实构建产物** dist/idb-store.js（不是逐字复刻，也不是源码）——
+// 这个夹具跑的是**真实构建产物** dist/base/idb-store.js（不是逐字复刻，也不是源码）——
 //   家规「人类审 exports = 真实 dist，不是提案文字」的同一条纪律。
 //   0.3.6 起同时验证：QuotaExceededError 必 funnel 进 reportStoreError（同一 dist 模块实例挂探针）。
 //
@@ -33,8 +33,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(ROOT, "dist");
 const PORT = 8941;
 
-if (!fs.existsSync(path.join(DIST, "idb-store.js"))) {
-  console.error("[check] 找不到 dist/idb-store.js —— 先跑 `bash scripts/build.sh`。");
+if (!fs.existsSync(path.join(DIST, "base/idb-store.js"))) {
+  console.error("[check] 找不到 dist/base/idb-store.js —— 先跑 `bash scripts/build.sh`。");
   process.exit(1);
 }
 

@@ -5,7 +5,7 @@
 //   Info 只进 tail；③ countRefreshTokens 只读扫 MSAL 键，按 homeAccountId 前缀过滤；localStorage 缺 → null。
 // 用 query-string 拿独立模块实例（模块级 pca/initPromise 只跑一次）。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { setStoreErrorReporter } from "../src/error-handling.ts";
+import { setStoreErrorReporter } from "../src/base/error-handling.ts";
 
 let cfgSeen = null;
 class SilentFailPca {
@@ -44,7 +44,7 @@ describe("auth · 静默续签失败诊断日志（0.11.2）", () => {
     const reported = [];
     setStoreErrorReporter((e, lvl) => reported.push([String(e && e.message || e), lvl]));
     try {
-      const auth = await import("../src/providers/auth.ts?fresh=silent-failure-log");
+      const auth = await import("../src/base/providers/auth.ts?fresh=silent-failure-log");
       auth.configureOneDriveAuth({ clientId: "test-client-id" });
       await auth.signIn({ mode: "popup" });
       assert(auth.isSignedIn(), "popup 登录后已登录");
@@ -93,7 +93,7 @@ describe("auth · 静默续签失败诊断日志（0.11.2）", () => {
     const prevLS = globalThis.localStorage;
     delete globalThis.localStorage;
     try {
-      const auth = await import("../src/providers/auth.ts?fresh=silent-failure-log");
+      const auth = await import("../src/base/providers/auth.ts?fresh=silent-failure-log");
       eq(auth.countRefreshTokens(), null);
     } finally { if (prevLS !== undefined) globalThis.localStorage = prevLS; }
   });

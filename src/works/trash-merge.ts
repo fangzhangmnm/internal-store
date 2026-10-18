@@ -10,7 +10,7 @@
 //   云端**还活着**（数据两存）。据传入的**权威** live 列表检出，标 conflictLive:true 供 UI surface（别丢）。
 
 import { defaultCloudToName } from "./cloud-sync.ts";
-import type { CloudItem, TrashEntry } from "./types.ts";
+import type { CloudItem, TrashEntry } from "../base/types.ts";
 
 /** 回收站/备份箱聚合视图的一行（本地↔云两端按原名归并）。 */
 export interface TrashItem {

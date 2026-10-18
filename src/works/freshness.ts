@@ -4,15 +4,15 @@
 //   freshness gate（ADR-0016）：比 seenBase vs 云端 etag；clean 且动过 → 静默无损快进；
 //   dirty 且动过 → 交 ui 选（绝不静默覆盖 dirty）。编排 local-head.seenBase/isDirty + safe-resolve.safePull。
 //   open = 开 session 的 gate（probe 可跳到离线）；refresh = 事件驱动(focus/visibility/online)的纯干净快进。
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import type { CloudSync, FetchMetaResult } from "./types.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import type { CloudSync, FetchMetaResult } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
 import type { FreshHints } from "./fresh-hints.ts";
 
-import type { Busy } from "./types.ts";
+import type { Busy } from "../base/types.ts";
 const passBusy: Busy = (_l, fn) => fn();
-import type { AdoptFn } from "./types.ts";
+import type { AdoptFn } from "../base/types.ts";
 
 export interface FreshnessCfg {
   cloud: Pick<CloudSync, "fetchMeta">;

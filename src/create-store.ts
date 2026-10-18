@@ -4,40 +4,40 @@
 //   暴露 README.md 的面（file / collection / list）。设置/状态**全走 collection**（synced 或 {local:true} 变体），
 //   localSettings/syncedSettings 已删（2026-07-13）——app 每类持久化建一个 collection，直接用其 KV 面。
 //   红线全在各深模块内 enforce；这里只接线 + 把 ui bundle 映射到各 flow 的回调。
-import { toU8, createSubstrate } from "./substrate.ts";
-import type { Bytes } from "./substrate.ts";
-import { createLocalHead } from "./local-head.ts";
-import { createSeal, cryptExtFor } from "./seal.ts";
-import { createIdentifiers, type DocKind, type DocTier, type Identifiers, type IdentifierCodec } from "./identifiers.ts";
-import { createSafeResolve, type ResolveChoice } from "./safe-resolve.ts";
-import { createPush } from "./push.ts";
-import { createFreshness, type RefreshOpts, type FreshResult } from "./freshness.ts";
-import { createFreshHints } from "./fresh-hints.ts";
-import { createDelete, type DelResult } from "./delete.ts";
-import { createIdentity } from "./identity.ts";
-import { createTrash } from "./trash.ts";
-import { createOffload } from "./offload.ts";
-import { createReconcile } from "./reconcile.ts";
-import { createPendingGone } from "./pending-gone.ts";
-import { assertValidFileName, assertValidCollectionName, isHidden } from "./is-hidden.ts";
-import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./collection.ts";
-import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./listing.ts";
-import { createUploadReplay, type UploadReplayPolicy } from "./upload-queue.ts";
-import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn } from "./types.ts";
-import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./cloud-sync.ts";
-import { mergeTrash, type TrashItem } from "./trash-merge.ts";
-import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
-import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage, type StreamingOptions, type StreamStatus } from "./download-session.ts";
-import { runStoreMigrations, storeNamespace } from "./migration.ts";
-import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
-import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
-import { reportStoreError, setStoreErrorReporter, type StoreErrorLevel } from "./error-handling.ts";
-import { queryStoragePersistence, type PersistenceState } from "./persistence.ts";
+import { toU8, createSubstrate } from "./base/substrate.ts";
+import type { Bytes } from "./base/substrate.ts";
+import { createLocalHead } from "./works/local-head.ts";
+import { createSeal, cryptExtFor } from "./works/seal.ts";
+import { createIdentifiers, type DocKind, type DocTier, type Identifiers, type IdentifierCodec } from "./base/identifiers.ts";
+import { createSafeResolve, type ResolveChoice } from "./works/safe-resolve.ts";
+import { createPush } from "./works/push.ts";
+import { createFreshness, type RefreshOpts, type FreshResult } from "./works/freshness.ts";
+import { createFreshHints } from "./works/fresh-hints.ts";
+import { createDelete, type DelResult } from "./works/delete.ts";
+import { createIdentity } from "./works/identity.ts";
+import { createTrash } from "./works/trash.ts";
+import { createOffload } from "./works/offload.ts";
+import { createReconcile } from "./works/reconcile.ts";
+import { createPendingGone } from "./works/pending-gone.ts";
+import { assertValidFileName, assertValidCollectionName, isHidden } from "./base/is-hidden.ts";
+import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./works/collection.ts";
+import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./works/listing.ts";
+import { createUploadReplay, type UploadReplayPolicy } from "./works/upload-queue.ts";
+import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn } from "./base/types.ts";
+import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./works/cloud-sync.ts";
+import { mergeTrash, type TrashItem } from "./works/trash-merge.ts";
+import { createLocalCache, createCollectionCache, createStagingStore } from "./base/local-cache.ts";
+import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage, type StreamingOptions, type StreamStatus } from "./stream/download-session.ts";
+import { runStoreMigrations, storeNamespace } from "./works/migration.ts";
+import { namespacedKv, type KeyedKv } from "./base/kv-namespace.ts";
+import { readCentralDirectory, readEntryBytes, type PeekSource } from "./works/zip-peek.ts";
+import { reportStoreError, setStoreErrorReporter, type StoreErrorLevel } from "./base/error-handling.ts";
+import { queryStoragePersistence, type PersistenceState } from "./base/persistence.ts";
 
 // ── ui bundle（Model B，README.md §7）──
 /** ui bundle：store 在决策点回调进来 + await。**全部必填，禁 placeholder/noop**
  *  （offlineEscape 例外：缺它优雅退回 isOnline 守卫，非隐藏失败）。 */
-import { resolveStoreText, type StoreTextFn, type StoreTextKey } from "./ui-text.ts";
+import { resolveStoreText, type StoreTextFn, type StoreTextKey } from "./base/ui-text.ts";
 
 export interface StoreUI {
   /** busy UI 锁：包住一段异步操作（label 供显示）。**key**（0.11.4）= 这段操作是什么（StoreTextKey），宿主据此决定
@@ -984,7 +984,7 @@ export function createStore(config: StoreConfig) {
         const sealed = await seal.sealForWrite(name, plain);
         // A4 双 tab 互覆护栏：用户内容保存 = guard="user-save"（本 tab seen rev 对表；撞版=另一 tab
         //   写过 → local 层已先备份对方字节再覆盖，这里只负责 surface——冲突必 surface，绝不静默）。
-        const receipt = await sub.serialize(name, () => local.save(name, sealed, opts?.hint, "user-save")) as import("./types.ts").LocalSaveReceipt | void;   // local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图
+        const receipt = await sub.serialize(name, () => local.save(name, sealed, opts?.hint, "user-save")) as import("./base/types.ts").LocalSaveReceipt | void;   // local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图
         if (receipt && typeof receipt === "object" && receipt.foreignOverwrite) {
           reportStoreError(new Error(`local overwrite conflict: "${name}" was written by another tab (rev ${receipt.foreignOverwrite.foreignRev}); their bytes were ${receipt.foreignOverwrite.backedUp ? "backed up before overwrite" : "overwritten (recent copy already in backup)"}`), "warning");
         }

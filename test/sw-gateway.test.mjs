@@ -1,6 +1,6 @@
 // SW 网关（A2b spike）——node 可测的纯函数部分。整条 206/流式路径浏览器专用 → 真机验（spike 批）。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { parseRange } from "../src/sw/gateway.ts";
+import { parseRange } from "../src/stream/sw/gateway.ts";
 
 describe("sw-gateway · parseRange", () => {
   it("bytes=0- → {0,null}；bytes=0-1 → {0,1}；bytes=500-999 → 精确", () => {

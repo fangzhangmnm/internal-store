@@ -3,8 +3,8 @@
 // fake FSA 刻意**大小写敏感**（Linux 口径）且**无 native move**——逼出 provider 的不敏感解析层与
 //   copy-先-验-后-删源退路；native move / 真 mtime 行为归真机矩阵（provider 头注释）。
 import { test, eq, assert } from "./runner.mjs";
-import { createFolderProvider, type FolderDirHandle, type FolderFileHandle, type FolderFile } from "../src/providers/folder.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
+import { createFolderProvider, type FolderDirHandle, type FolderFileHandle, type FolderFile } from "../src/base/providers/folder.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
 
 // ── 内存 fake FSA ───────────────────────────────────────────────────────────────
 type FileNode = { kind: "file"; bytes: Uint8Array; mtime: number };

@@ -1,10 +1,10 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
-import { createLocalHead } from "../src/local-head.ts";
-import { createSafeResolve } from "../src/safe-resolve.ts";
-import { createFreshness } from "../src/freshness.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
+import { createLocalHead } from "../src/works/local-head.ts";
+import { createSafeResolve } from "../src/works/safe-resolve.ts";
+import { createFreshness } from "../src/works/freshness.ts";
 
 const enc = (s: string) => new TextEncoder().encode(s);
 async function asStr(x: unknown): Promise<string | null> {
@@ -219,7 +219,7 @@ test("refresh 无 probe：行为不变（fast-forwarded）", async () => {
 });
 
 // ── 0.17.0 fresh-hints：刚列过的云端帧当新鲜度证据 ──
-import { createFreshHints } from "../src/fresh-hints.ts";
+import { createFreshHints } from "../src/works/fresh-hints.ts";
 
 function rigWithHints(ttlMs = 30_000, sharedEtag = true) {
   const provider = createMockProvider();

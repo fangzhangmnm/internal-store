@@ -2,8 +2,8 @@
 //   起因：WXHW 要接备份箱。取回备份时原名必然被占（活着的那一份就叫这个名字），库在名字里插戳；0.15.2 只认最后一个点，
 //   WXHW 的书 `X.webxiaoheiwu.zip` 被恢复成 `X.webxiaoheiwu [戳].zip`，云端腿更是 `X.webxiaoheiwu.zip [戳]`——宿主认不出那是一本书。
 import { test, eq, assert } from "./runner.mjs";
-import { restoreTargetName } from "../src/move-aside.ts";
-import { createIdentifiers } from "../src/identifiers.ts";
+import { restoreTargetName } from "../src/base/move-aside.ts";
+import { createIdentifiers } from "../src/base/identifiers.ts";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";

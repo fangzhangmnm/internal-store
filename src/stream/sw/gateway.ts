@@ -15,8 +15,8 @@
 //   · 只读：网关绝不写 files/collections/云端，唯一副作用 = staging tee / 陈分片清理。
 //   · 响应协议 = 窗口式有界 206 真字节体（2026-08-15 user grill 收敛，spike-4/5 战例：Chrome 媒体管线
 //     拒 SW 自定义 default-stream 响应）；本地/云端同一条路，唯一分叉点 = 字节源接缝。
-import { createPartitionedBlobStore, type PartitionView } from "../blob-partition.ts";
-import { createGraph } from "../providers/graph.ts";
+import { createPartitionedBlobStore, type PartitionView } from "../../base/blob-partition.ts";
+import { createGraph } from "../../base/providers/graph.ts";
 import { createBridgeTokenSource } from "./bridge.ts";
 
 const CHUNK_DEFAULT = 2 * 1024 * 1024;

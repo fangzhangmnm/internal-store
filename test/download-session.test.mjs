@@ -10,8 +10,8 @@
 //   · store 级：keepOffline 进度回调 + openStream 本地面/云端面/absent。
 import { describe, it, assert, eq } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
-import { createDownloadSessions, EtagChangedError } from "../src/download-session.ts";
-import { memKv } from "../src/cloud-sync.ts";
+import { createDownloadSessions, EtagChangedError } from "../src/stream/download-session.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";

@@ -27,11 +27,11 @@
 //   `meta:<name>`     → JSON { v:1, eTag, totalBytes, chunkBytes, chunks:[分片号…], touchedAt, mirrored?:[分片号…] }
 //                       （会话元信息 + 已持有分片账；mirrored = 2.0.0 加的可选字段：来自镜像、还没和云端比过的片）
 //   `chunk:<name>:<i>`→ 分片字节 blob（i 十进制；name 不含 ":"——Windows 非法字符已被文件名护栏挡在门外）
-import { reportStoreError } from "./error-handling.ts";
+import { reportStoreError } from "../base/error-handling.ts";
 import { createChunkScheduler, type ChunkSource, type RangeOpts, type SchedulerStatus } from "./chunk-scheduler.ts";
 export { StreamStallError } from "./chunk-scheduler.ts";
 export type { SchedulerStatus } from "./chunk-scheduler.ts";
-export type { RangeOpts } from "./types.ts";
+export type { RangeOpts } from "../base/types.ts";
 
 /** staging 分区的注入端口（prod = blob-partition 的 "staging" 分区；测试 = 内存 map）。 */
 export interface StagingStore {

@@ -6,7 +6,7 @@ import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
-import { memKv } from "../src/cloud-sync.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 
 const UI = { busy: (_l, fn) => fn(), resolveConflict: async () => ({ choice: "cancel" }), reportError: () => {} };
 const mk = (local = createMockLocal()) => ({ local, store: createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", persistence: "none",

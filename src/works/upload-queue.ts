@@ -8,8 +8,8 @@
 // **非 busy 后台 drain**（不锁屏，用户继续读）：代价是与用户操作 race → 靠 ① per-name serialize ② 锁内 supersede 复检。
 // **中途关 app / 大文件慢网**：靠持久队列（没确认成功绝不出队）+ push 的 W1 幂等（真上去了但丢响应 → 下次重试 adopt 不重复）。
 // **per-app policy**（ctor）：auto=静默补推 · ask=每次 reconnect/成功连接问一次整批 · manual=不做（等显式再存）。
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import type { Kv, LocalCache } from "./types.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import type { Kv, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */

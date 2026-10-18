@@ -24,7 +24,7 @@ function* walk(dir: string): Generator<string> {
 }
 
 const srcDir = fileURLToPath(new URL("../src", import.meta.url));   // 仓路径含空格：必须 fileURLToPath
-const idbPath = join(srcDir, "idb-store.ts");
+const idbPath = join(srcDir, "base", "idb-store.ts");   // 2.1.1 起住 src/base/
 const idbSrc = readFileSync(idbPath, "utf8");
 const idbLines = idbSrc.split("\n");
 

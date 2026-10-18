@@ -10,7 +10,7 @@
 //     · 有时效（默认 30 s）：过了就当没有。采信窗口内云端真动了 → 和今天 fetchMeta 之后再读本地的 TOCTOU 一样大：
 //       下次 push If-Match base → 412 → 冲突面，不静默。
 //     · 只看完整帧（complete:true）；掺了快照的 stale 帧绝不喂进来（它可能过时）。
-import type { FetchMetaResult } from "./types.ts";
+import type { FetchMetaResult } from "../base/types.ts";
 
 export interface FreshHints {
   /** 记一条（watchFolder 完整云端帧每个文件调一次）。 */

@@ -1,13 +1,13 @@
 import { test, eq, assert } from "./runner.mjs";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
-import { createCloudSync, memKv } from "../src/cloud-sync.ts";
-import { createLocalHead } from "../src/local-head.ts";
-import { createSafeResolve } from "../src/safe-resolve.ts";
-import { createSubstrate } from "../src/substrate.ts";
-import { createPush } from "../src/push.ts";
-import { createIdentity } from "../src/identity.ts";
-import { pushRetryDefaults } from "../src/push.ts";
+import { createCloudSync, memKv } from "../src/works/cloud-sync.ts";
+import { createLocalHead } from "../src/works/local-head.ts";
+import { createSafeResolve } from "../src/works/safe-resolve.ts";
+import { createSubstrate } from "../src/base/substrate.ts";
+import { createPush } from "../src/works/push.ts";
+import { createIdentity } from "../src/works/identity.ts";
+import { pushRetryDefaults } from "../src/works/push.ts";
 pushRetryDefaults.backoffMs = 1;   // 0.17.1：真退避 15 s 会撞 10 s 测试墙；这里只验重试耗尽后的账，不验等多久
 
 const enc = (s: string) => new TextEncoder().encode(s);

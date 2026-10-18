@@ -5,9 +5,9 @@
 //        近似内容指纹）。只在罕见 lost-response/409 窗口对单个在推文件拉一次小 byte-range（非图库遍历）。
 //        三态：match→认；differ→不认（无 base 抛 CloudNameCollisionError）；unknown（拉尾失败）→保持 dirty 重试。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { createCloudSync } from "../src/cloud-sync.ts";
+import { createCloudSync } from "../src/works/cloud-sync.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
-import { memKv } from "../src/cloud-sync.ts";
+import { memKv } from "../src/works/cloud-sync.ts";
 
 const bytes = (s) => new TextEncoder().encode(s);
 const u8txt = (u) => new TextDecoder().decode(new Uint8Array(u));

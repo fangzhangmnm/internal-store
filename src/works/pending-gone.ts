@@ -8,8 +8,8 @@
 // 持久：kv 相对键 `internal.pending_gone`（namespacedKv 补 `${appId}.${databaseId}.` 根前缀，与 pending_deletions/_uploads 同族）。
 //   **不新增 IDB object store**；pendingGone badge 是 listing 时从本模块派生的 syncState，不单独落库。
 
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import type { Kv } from "./types.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import type { Kv } from "../base/types.ts";
 
 const KEY = "internal.pending_gone";   // 相对键 → `${ns}.internal.pending_gone`
 

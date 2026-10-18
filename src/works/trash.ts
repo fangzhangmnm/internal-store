@@ -4,12 +4,12 @@
 //   restore：本地先恢复（撞名自动 (2)）→ 云端按同名恢复；采纳恢复出的云 item etag（move→新 etag）。
 //   purge：永久删（不可恢复）→ 强制 danger confirm。
 //   emptyTrash：批量彻底删，本地/云端一处清，逐项独立 try、失败汇总不静默；**强退=cancel，绝不自动续**。
-import { reportStoreError } from "./error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
-import { snapshotStampOf } from "./move-aside.ts";        // 恢复撞名的快照时刻抽取（案卷 §8）
-import type { CloudItem, CloudSync, LocalCache } from "./types.ts";
+import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
+import { snapshotStampOf } from "../base/move-aside.ts";        // 恢复撞名的快照时刻抽取（案卷 §8）
+import type { CloudItem, CloudSync, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 
-import type { Busy } from "./types.ts";
+import type { Busy } from "../base/types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 
 export interface TrashCfg {

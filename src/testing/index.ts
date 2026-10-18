@@ -9,10 +9,10 @@ export { createMockEncryption } from "./mock-encryption.ts";
 export type { MockProviderOpts } from "./mock-provider.ts";
 export type { TrashItem } from "./mock-local.ts";
 /** 供类型化测试直接取用的核心契约（与主门牌同源）。 */
-export type { CloudProvider, CloudItem, LocalCache } from "../types.ts";
-export type { Bytes } from "../substrate.ts";
+export type { CloudProvider, CloudItem, LocalCache } from "../base/types.ts";
+export type { Bytes } from "../base/substrate.ts";
 /** 故障注入配置（mock provider 的对抗测试面）+ 回收站契约条目 + 传输选项。 */
 export type { Fault } from "./mock-provider.ts";
-export type { TrashEntry, UploadOpts, MoveOpts, FolderDeleteResult } from "../types.ts";
-export type { LocalSaveReceipt } from "../types.ts";   // A4 守护写回执（LocalCache.save 返回面）
+export type { TrashEntry, UploadOpts, MoveOpts, FolderDeleteResult } from "../base/types.ts";
+export type { LocalSaveReceipt } from "../base/types.ts";   // A4 守护写回执（LocalCache.save 返回面）
 export type { EncryptionPort } from "../create-store.ts";   // mock-encryption 的契约形状（api 户口去 forgotten-export）

@@ -45,7 +45,7 @@
 
 ## 4. id 消费点审计（2026-08-25 回填，全库逐点核过）
 
-**结论：核心引擎对 id 稳定性的依赖 = 零。** `src/listing.ts:32` 本来就把「身份 = approot 相对路径，itemId/内容哈希均否决」写成红线，全库贯彻：所有 mutation 返回值只取 `.eTag` 从不复用 `.id`；同一性判定一律 `_find`（按 path）+ eTag。离线队列/trash 记录/staging 账本全部只存 name+eTag，**一个 id 都不持久**。
+**结论：核心引擎对 id 稳定性的依赖 = 零。** `src/works/listing.ts:32` 本来就把「身份 = approot 相对路径，itemId/内容哈希均否决」写成红线，全库贯彻：所有 mutation 返回值只取 `.eTag` 从不复用 `.id`；同一性判定一律 `_find`（按 path）+ eTag。离线队列/trash 记录/staging 账本全部只存 name+eTag，**一个 id 都不持久**。
 
 - **唯一持久化 id**：`create-store.ts:428` 把 `id` 写进 dir-index-cache，唯一读者 = SW 流式网关（`sw/gateway.ts:81-86,128`，按名免 Graph 往返拉分片）。
 - **id 跨操作关联窗口**最长的两处：回收站 list→用户点击（秒~分钟；当前只处理 412 未处理 404——这在 OneDrive 下同样不安全，属预存小洞）；download-session 会话期钉 item（promote 腿已有按名重验兜底，read/prefetch 腿硬失败）。
@@ -85,7 +85,7 @@
 
 ### folder provider 实现记录（2026-08-26，Claude Fable 5；→ **v0.5.0 已发**，exports 同日 user 过目批准）
 
-- `src/providers/folder.ts`：`createFolderProvider(root) → CloudProvider`，§2 契约逐条落地——eTag=`${mtime}-${size}`；
+- `src/base/providers/folder.ts`：`createFolderProvider(root) → CloudProvider`，§2 契约逐条落地——eTag=`${mtime}-${size}`；
   回采 mtime 在 `writable.close()` **之后**重读；If-Match=读-比-写（412），blind replace 运行时护栏与 graph 同款；
   ref=path（方案 A，move/rename 后换牌）；大小写解析统一不敏感口径（命中沿用磁盘真实大小写，**逐段**采真名）；
   move：native `handle.move()` 优先、缺则 copy-先-验-后-删源（字节数核对过才删源）；错误形状 `.status` 404/409/412
@@ -109,7 +109,7 @@
   Safari ITP 不理它；且 persist 是 §A 保命三件套里最弱的降概率层（真承重=dirty 窗口短+正本不进 IDB），
   库内静默强制=谎报承重。库能上代码保证的是「必表态、必感知」，保证不了「必成功」。persist 是 origin 级
   （同 origin 兄弟共享）→ 调用时机归宿主层。
-- 三件套落地（`src/persistence.ts`）：① **感知强制**——boot 纯查询 `persisted()`（零弹窗），未持久 funnel 一次
+- 三件套落地（`src/base/persistence.ts`）：① **感知强制**——boot 纯查询 `persisted()`（零弹窗），未持久 funnel 一次
   （log 级）+ 只读面 `files.persistence(): PersistenceState`；② **接线强制**——`StoreConfig.persistence`
   **必填**（`"app-managed" | "none"`，编译期+运行时双门，validateAdopt/appId 同手法）；③ **执行体**——
   `requestStoragePersistence()`（feature-detect→已持久不重复调→persist→三态），app 手势时刻调

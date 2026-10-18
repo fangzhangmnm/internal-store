@@ -2,7 +2,7 @@
 //   （网盘模型；app 刻意分不出变更来源，见 collection.ts 头部）。
 //   本地 setItem/deleteItem 同步 fire（不等 400ms IDB 防抖、不等云），远端 reconcile 照旧 fire。
 import { describe, it, assert, eq } from "./runner.mjs";
-import { createCollection } from "../src/collection.ts";
+import { createCollection } from "../src/works/collection.ts";
 
 const blobOf = (s) => ({ text: async () => s });
 
