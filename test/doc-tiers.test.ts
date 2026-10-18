@@ -105,7 +105,7 @@ test("[tier] 三等资源：写面全抛 ReadOnlyFilesError；open 过路不留�
   const { provider, local, store } = rig();
   provider._seed("asset.pack", "ASSET-BYTES");
   const f = store.file("asset.pack", { mode: "existing" });
-  for (const [op, fn] of [["save", () => f.save(enc("x"))], ["delete", () => f.delete()], ["tryMove", () => f.tryMove("a2.pack")]] as const) {
+  for (const [op, fn] of [["save", () => f.save(enc("x"))], ["trash", () => f.trash()], ["tryMove", () => f.tryMove("a2.pack")]] as const) {
     let err: unknown = null;
     try { await fn(); } catch (e) { err = e; }
     assert(err instanceof ReadOnlyFilesError && /三等资源/.test((err as Error).message), `${op} → ReadOnlyFilesError（实得 ${String((err as Error)?.message)}）`);
@@ -150,4 +150,22 @@ test("[tier] 每种文档自己的 validate：云端坏字节只拦那一种（�
   await m.pullIfClean();
   eq(await asStr(await n.open()), "ok-1", "★坏字节没覆盖本地");
   eq(await asStr(await m.open()), "new md", "别的种类正常快进");
+});
+
+test("[tier] 2.1.2 列举行带 kind / tier（user「带」）：自动格 auto-backup、大资源 resource、不是文档的名字只有 tier work", async () => {
+  const { provider, store } = rig();
+  provider._seed("k-a1.crumb", "A");
+  provider._seed("k-s1.crumb", "S");
+  provider._seed("asset.pack", "D");
+  provider._seed("misc.bin", "?");
+  const seen: Array<{ identifier: string; kind?: string; tier: string }> = [];
+  const off = store.files.watchFolder("", (snap: { items: Array<{ identifier: string; kind?: string; tier: string }>; complete?: boolean }) => { seen.splice(0, seen.length, ...snap.items); });
+  for (let i = 0; i < 100 && !seen.some((x) => x.identifier === "misc.bin"); i++) await new Promise((r) => setTimeout(r, 5));
+  off();
+  const by = (id: string) => seen.find((x) => x.identifier === id)!;
+  assert(by("misc.bin"), `云端帧到了（${seen.map((x) => x.identifier).join(",")}）`);
+  eq(by("k-a1.crumb").tier, "auto-backup"); eq(by("k-a1.crumb").kind, "snap");
+  eq(by("k-s1.crumb").tier, "work"); eq(by("k-s1.crumb").kind, "snap");
+  eq(by("asset.pack").tier, "resource"); eq(by("asset.pack").kind, "asset");
+  eq(by("misc.bin").tier, "work"); eq("kind" in by("misc.bin"), false, "不是文档：没有 kind 字段");
 });

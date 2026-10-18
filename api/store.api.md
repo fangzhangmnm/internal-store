@@ -284,19 +284,6 @@ export function createStore(config: StoreConfig): {
 export const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts;
 
 // @public
-export interface DelResult {
-    baseEtag?: string | null;
-    deferred?: number;
-    drained?: number;
-    queuedCloudDelete?: boolean;
-    reason?: string;
-    status: string;
-    trashed?: unknown;
-    trashKey?: string | null;
-    where?: string;
-}
-
-// @public
 export interface DocIdentifier {
     // (undocumented)
     container: "raw" | "zip";
@@ -528,9 +515,11 @@ export function isDirty(s: SyncState): boolean;
 // @public
 export interface Item {
     identifier: string;
+    kind?: string;
     lastModified?: number;
     size?: number;
     syncState: SyncState;
+    tier: DocTier;
 }
 
 // @public
@@ -697,7 +686,6 @@ export interface RawFile {
     }): Promise<{
         status: string;
     }>;
-    delete(): Promise<DelResult>;
     encrypt(opts?: {
         isOnline?: () => boolean;
     }): Promise<{
@@ -735,6 +723,7 @@ export interface RawFile {
         onProgress?: (done: number, total: number) => void;
     }): Promise<SaveResult>;
     stagingCoverage(): Promise<StagingCoverage | null>;
+    trash(): Promise<TrashOutcome>;
     tryMove(to: string): Promise<TryMoveResult>;
     verifyPassword(pw: string): Promise<boolean>;
 }
@@ -986,6 +975,19 @@ export interface TrashItem {
     localKey: string | null;
     side: "local" | "cloud" | "both";
     ts: string | null;
+}
+
+// @public
+export interface TrashOutcome {
+    baseEtag?: string | null;
+    deferred?: number;
+    drained?: number;
+    queuedCloudDelete?: boolean;
+    reason?: string;
+    status: string;
+    trashed?: unknown;
+    trashKey?: string | null;
+    where?: string;
 }
 
 // @public

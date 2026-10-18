@@ -319,7 +319,7 @@ export declare function createOneDriveProvider(config?: OneDriveConfig): {
  *  暴露 README.md 的面（file / collection / files / encryption）。设置/状态**全走 collection**。
  *  红线全在各深模块内 enforce；这里只接线 + 把 ui bundle 映射到各 flow 的回调。 */
 export declare function createStore(config: StoreConfig): {
-    /** 文件对象工厂（含 tryMove/pullIfClean/save/open/delete/reupload…）。 */
+    /** 文件对象工厂（含 tryMove/pullIfClean/save/open/trash/reupload…）。 */
     file: (identifier: string, opts: {
         mode: "new" | "existing";
     }) => RawFile;
@@ -423,28 +423,6 @@ export declare function createStore(config: StoreConfig): {
 
 /** 推荐值（KudsRocket 在用）：消费方显式传给 createOneDriveProvider({ transport: { timeouts } }) 才生效。 */
 export declare const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts;
-
-/** 删除操作的终态。 */
-export declare interface DelResult {
-    /** 终态串。 */
-    status: string;
-    /** 位置串。 */
-    where?: string;
-    /** 移入 trash 的结果（不透明）。 */
-    trashed?: unknown;
-    /** 本地 trashKey。 */
-    trashKey?: string | null;
-    /** 删除时的 base etag。 */
-    baseEtag?: string | null;
-    /** 云删已进离线队列。 */
-    queuedCloudDelete?: boolean;
-    /** 原因串。 */
-    reason?: string;
-    /** drain 重放的条数。 */
-    drained?: number;
-    /** 留队 defer 的条数。 */
-    deferred?: number;
-}
 
 /** 一条文档身份切开之后。 */
 export declare interface DocIdentifier {
@@ -744,6 +722,11 @@ export declare interface Item {
     size?: number;
     /** sort-by-date 用（epoch ms）。 */
     lastModified?: number;
+    /** 2.1.2：文档种类（docKinds 表的 kind）；不是本 app 文档的名字 → 没有这个字段。 */
+    kind?: string;
+    /** 2.1.2：公民等级（docKinds 表的 tier；不是文档 → "work"）。gallery 画「自动」「只读」徽章用（user 2026-10-17「Item 列举面没带 tier：带」）。
+     *  和 syncState 一样是库填好的事实，下游不要再从名字重推一份。 */
+    tier: DocTier;
 }
 
 /** localStorage / IDB / 内存 都能实现的极简 KV（store 不直碰 localStorage，红线 #7）。 */
@@ -999,10 +982,10 @@ export declare interface RawFile {
     }): Promise<ResolveOutcome>;
     /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
     tryMove(to: string): Promise<TryMoveResult>;
-    /** 返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
+    /** 返 TrashOutcome：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
      *  cancelled（用户在脏文件警告里选了取消）· noop（本地云端都没有）
      *  · queuedCloudDelete:false（离线且谱系不明 → 本地 move-aside 了，但云端那份还在）。 */
-    delete(): Promise<DelResult>;
+    trash(): Promise<TrashOutcome>;
     /** 重新上传（candidate-gone 的「保留重传」动作）：本地 clean 字节推云到空 path。撞名(乌龙云端已有)→抛
      *  CloudNameCollisionError（app surface conflict）；成功→采纳新 etag 变 synced + 清 candidate。 */
     reupload(): Promise<{
@@ -1338,7 +1321,7 @@ export declare interface StoreConfig {
      *  ⚠ 只影响列举与收敛；files.occupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。0.16.0 起叫 hidden（原 hiddenName）。 */
     hidden?: (identifier: string) => boolean;
     /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
-     *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
+     *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/trash/reupload/
      *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
      *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
     readOnlyFiles?: boolean;
@@ -1450,6 +1433,28 @@ export declare interface TrashItem {
     localKey: string | null;
     /** 云端 item id（云端腿 restore/purge）。 */
     cloudRef: string | null;
+}
+
+/** `file.trash()` 的终态（2.1.2 起叫 TrashOutcome，原 DelResult；动词和它的语义对齐——删除 = 移进回收站，user 2026-10-17「让词对准了它应该有的语义罢了」）。 */
+export declare interface TrashOutcome {
+    /** 终态串。 */
+    status: string;
+    /** 位置串。 */
+    where?: string;
+    /** 移入 trash 的结果（不透明）。 */
+    trashed?: unknown;
+    /** 本地 trashKey。 */
+    trashKey?: string | null;
+    /** 删除时的 base etag。 */
+    baseEtag?: string | null;
+    /** 云删已进离线队列。 */
+    queuedCloudDelete?: boolean;
+    /** 原因串。 */
+    reason?: string;
+    /** drain 重放的条数。 */
+    drained?: number;
+    /** 留队 defer 的条数。 */
+    deferred?: number;
 }
 
 /** restore / purge / emptyTrash 的终态。 */

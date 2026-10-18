@@ -86,7 +86,7 @@ const store = createStore({
 
 | 拿到的 | 方法 | 章节 |
 |---|---|---|
-| `store.file(identifier, {mode})` → `RawFile`；`store.zip(identifier, {mode})` → `ZipFile`（只准 docKinds 里 container:"zip" 的种类，否则抛） | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · getHead({bytesLength,source}) · pullIfClean · tryMove(to) · delete · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry,source})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
+| `store.file(identifier, {mode})` → `RawFile`；`store.zip(identifier, {mode})` → `ZipFile`（只准 docKinds 里 container:"zip" 的种类，否则抛） | **`mode:"new"\|"existing"` 必填**（new=新建文档，撞名抛 `CloudNameCollisionError` 不覆盖；existing=打开已有）。`save · open · getHead({bytesLength,source}) · pullIfClean · tryMove(to) · trash · reupload · keepOffline · offload · isKeptOffline · isEncrypted · encrypt · decrypt · verifyPassword`（ZipFile 多 `getPeek({bytesLength,zipEntry,source})` + `decryptPeek(blob)`）。无 `rename`/`isDirty`——改身份走 `file.tryMove(to)`（结果式，含占用检查），dirty 经 syncState 读。`reupload()` = candidate-gone 的「重传」（本地 clean 字节 no-base 推回空 path） | §2 |
 | `store.collection(name, {manual?, local?, getInitData?})` | **单例**（同名返同一对象）。`setItem · deleteItem · getItem(id,def) · getEntry · entries · keys · onChange · init · reconcileWithRemote · flushLocal · isDirty`（`{local:true}` = **不推云**的设备本地变体；`getInitData` = 新库 seed，uat=1；删除=value:null 墓碑） | §3 |
 | `store.files.watchFolder(folder, cb)` | **唯一列举面**：订阅一个夹 → 立即本地帧、云端到了同一 cb 再闪（无 list/listAll/localKeys）。Item.syncState 含 `pendingGone`（cloud-gone clean 孤儿、防抖 grace 内） | §2 |
 | `store.identifiers.parse(identifier)` / `.join({folder, stem, suffix})` | 身份的语法（0.16.0，§2.1）：切开 / 拼回去。gallery 和宿主都用它，别自己切名字 | §2.1 |
@@ -109,7 +109,7 @@ await f.save(bytes);          // 落盘 + 按节律推云（If-Match 守冲突�
 const blob = await f.open();  // 本地有则秒开；无则拉云 + 缓存本地（下次离线可读）
 await f.tryMove("papers/new.pdf");   // 改身份/移动**唯一入口**（含 occupied 占用检查，结果式 {ok:false,where} 不抛）
 await f.reupload();           // candidate-gone「重新上传」：本地 clean 字节 no-base 推回空 path（撞名→collision surface；成功→synced）
-await f.delete();             // 销毁：本地副本→本地 .trash / 云端副本→云端 .trash（各自 move-aside，可恢复）
+await f.trash();              // 移进回收站：本地副本→本地 .trash / 云端副本→云端 .trash（各自 move-aside，可恢复）。2.1.2 起叫 trash（原 delete）
 ```
 - **新建文件 = 对一个新 name `file(name,{mode:"new"}).save`**（没有单独的 create）。云端已有同名但内容不同 → 抛 collision，绝不覆盖。
 - **delete vs offload**：offload 只丢「可重取的 shadow」、云端不动；delete 是**销毁**。delete 内部按原子态分流——本地若是 offloadable shadow → 硬删本地（云端 .trash 已救着，不留双份）；本地若是唯一副本（dirty/local-only）→ 先变 local-only 再进**本地** .trash（未推字节可恢复，绝不硬删）。云端副本进**云端** .trash。两套 trash 各管各、不跨网（ADR-0015）。
@@ -143,7 +143,7 @@ store.files.purgeTrash({ trashKey, cloudItemId, confirm });         // 彻底删
 store.files.emptyTrash({ scope: "both" });                          // 清空回收站（"local" | "cloud" | "both"）
 store.files.emptyBackup({ scope: "both" });                         // 清空备份箱（同 scope；暂无 gallery UI，控制台/以后面板调）
 ```
-- `delete()` 把文件移入回收站（可恢复）；版本冲突时被替下的旧副本进备份（不丢）。`TrashItem.conflictLive`=离线删被回线 edit-wins 撤销→本地 trash 有、云端还活着（两存，UI surface）。
+- `trash()`（2.1.2 前叫 `delete()`）把文件移入回收站（可恢复）；版本冲突时被替下的旧副本进备份（不丢）。`TrashItem.conflictLive`=离线删被回线 edit-wins 撤销→本地 trash 有、云端还活着（两存，UI surface）。
 
 ### 2.1 身份的语法：`docKinds` 表 + `store.identifiers`（0.16.0）
 

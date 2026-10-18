@@ -10,6 +10,7 @@
 //
 // 纯分类器 classifySyncState 可穷举单测（对齐 reconcile.classifyCloudGone 的纪律）。
 import type { CloudSync, LocalCache } from "../base/types.ts";
+import type { DocTier } from "../base/identifiers.ts";
 import type { LocalHead } from "./local-head.ts";
 import { isHidden } from "../base/is-hidden.ts";   // 末段 dot = 隐藏（.trash/.backup/.<appId>/任意 dot 项不进列举）
 import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
@@ -38,6 +39,11 @@ export interface Item {
   size?: number;
   /** sort-by-date 用（epoch ms）。 */
   lastModified?: number;
+  /** 2.1.2：文档种类（docKinds 表的 kind）；不是本 app 文档的名字 → 没有这个字段。 */
+  kind?: string;
+  /** 2.1.2：公民等级（docKinds 表的 tier；不是文档 → "work"）。gallery 画「自动」「只读」徽章用（user 2026-10-17「Item 列举面没带 tier：带」）。
+   *  和 syncState 一样是库填好的事实，下游不要再从名字重推一份。 */
+  tier: DocTier;
 }
 
 /** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
@@ -102,6 +108,7 @@ export interface ListingCfg {
   isPendingGone?: (path: string) => boolean;   // clean cloud-gone 孤儿在防抖 grace 内（pending-gone 深模块）→ 显 pendingGone badge
   pendingFolderDeletions?: () => string[];   // 离线排队待删的已上云空夹（全路径）→ **从 folders 减去**（回线 drain 前先隐藏，不再 list）
   hidden?: (name: string) => boolean;   // 0.14.0：宿主额外隐藏名（config.hiddenName），叠在 is-hidden 的 dot 规则之上
+  describe?: (identifier: string) => { kind?: string; tier: DocTier };   // 2.1.2：身份 → 种类 / 等级（create-store 用 docKinds 表填；没给 → tier "work"）
 }
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
@@ -138,6 +145,8 @@ export const toMs = (v: string | number | undefined): number | undefined => {
 export function createListing(cfg: ListingCfg) {
   const isHiddenAny = (n: string): boolean => isHidden(n) || !!cfg.hidden?.(n);
   const { cloud, local, head, pendingFolders, isPendingGone, pendingFolderDeletions } = cfg;
+  // 2.1.2：种类 / 等级（kind 没有就不放字段，免得 undefined 污染 deq）
+  const describe = (n: string): { kind?: string; tier: DocTier } => { const d = cfg.describe?.(n); return d ? (d.kind !== undefined ? { kind: d.kind, tier: d.tier } : { tier: d.tier }) : { tier: "work" }; };
 
   // 一个 path 的原始事实 → Item（cloud/local 两轴 + head → classifier）。listAllItems 与 listFolder 共用。
   function classifyPath(
@@ -166,7 +175,7 @@ export function createListing(cfg: ListingCfg) {
     //   判据与 badge 同源（dirty）：badge 说「未推」时间就是你本地最后一存；badge 说「已同步」时间就是云端那份；
     //   跨设备 B 机不 dirty → 云端时间正确。仅影响显示，不进任何同步/冲突判断（no-timestamps 红线不动）。
     const lastModified = dirty ? (localStat?.updatedAt ?? cf?.lastModified) : (cf?.lastModified ?? localStat?.updatedAt);
-    return { identifier: path, syncState, size: cf?.size ?? localStat?.size, lastModified };
+    return { identifier: path, ...describe(path), syncState, size: cf?.size ?? localStat?.size, lastModified };
   }
 
   // 本地项的轻量元信息（size+updatedAt），批量取 → classifyPath 给本地项填尺寸/时间。stat 缺（老 mock）→ 跳过。
@@ -229,7 +238,7 @@ export function createListing(cfg: ListingCfg) {
         if (paths.has(f.name) || isHiddenAny(f.name)) continue;
         const rest = folder ? (f.name.startsWith(prefix) ? f.name.slice(prefix.length) : "") : f.name;
         if (!rest || rest.includes("/")) continue;   // 越界/非直属 → 丢
-        items.push({ identifier: f.name, syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
+        items.push({ identifier: f.name, ...describe(f.name), syncState: "cloud-only", size: f.size, lastModified: f.lastModified });
       }
       for (const sf of opts.staleCloud.folders) if (!isHiddenAny(sf)) subfolders.add(sf);
     }

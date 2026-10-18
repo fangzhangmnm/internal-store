@@ -13,7 +13,7 @@ import { createSafeResolve, type ResolveChoice } from "./works/safe-resolve.ts";
 import { createPush } from "./works/push.ts";
 import { createFreshness, type RefreshOpts, type FreshResult } from "./works/freshness.ts";
 import { createFreshHints } from "./works/fresh-hints.ts";
-import { createDelete, type DelResult } from "./works/delete.ts";
+import { createDelete, type TrashOutcome } from "./works/delete.ts";
 import { createIdentity } from "./works/identity.ts";
 import { createTrash } from "./works/trash.ts";
 import { createOffload } from "./works/offload.ts";
@@ -184,7 +184,7 @@ export interface StoreConfig {
    *  ⚠ 只影响列举与收敛；files.occupied / open / save 照常看得见它们（一个 `.part` 名仍算占用）。0.16.0 起叫 hidden（原 hiddenName）。 */
   hidden?: (identifier: string) => boolean;
   /** A4（ADR-0022 预排的 readOnlyMirror，2026-08-15 落地）：**files 面只读镜像**。BR 类消费者——内容由用户经
-   *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/delete/reupload/
+   *  OneDrive 客户端投放进 appfolder，app 永不写。true → 一切 files 写路径（save/tryMove/trash/reupload/
    *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
    *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
   readOnlyFiles?: boolean;
@@ -293,11 +293,11 @@ export interface RawFile {
   resolve(opts?: { adopt?: AdoptFn }): Promise<ResolveOutcome>;
   /** 改身份/移动的**唯一入口**（含 nameOccupied 占用检查，结果式不抛；ok:false→UI surface where）。无独立 rename。 */
   tryMove(to: string): Promise<TryMoveResult>;
-  /** 返 DelResult：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
+  /** 返 TrashOutcome：**别只 await 就报「已删除」**（v436）。status 至少三种不是成功：
    *  cancelled（用户在脏文件警告里选了取消）· noop（本地云端都没有）
    *  · queuedCloudDelete:false（离线且谱系不明 → 本地 move-aside 了，但云端那份还在）。 */
-  delete(): Promise<DelResult>;
-  // ⚠ 滥用警示：delete 是「两边都进回收站」，**不是**「放弃这台的改动」。把它摆在没同步好的行上当「删本地」= 用户会把云端那份一起删掉
+  trash(): Promise<TrashOutcome>;
+  // ⚠ 滥用警示：trash 是「两边都进回收站」，**不是**「放弃这台的改动」。把它摆在没同步好的行上当「删本地」= 用户会把云端那份一起删掉
   //   （KudsRocket 2026-10-14 00:54 丢手动存档的根因）。「放弃这台的改动」= `resolve()` 里选云端覆盖本地。
   // gallery 层没开文件 → 必须 store 内解决，不靠编辑器 save。
   /** 重新上传（candidate-gone 的「保留重传」动作）：本地 clean 字节推云到空 path。撞名(乌龙云端已有)→抛
@@ -538,7 +538,8 @@ export function createStore(config: StoreConfig) {
   }
 
   // ── 统一列举（README §2）：整个虚拟 FS 一次列举 = local ∪ cloud，每项带 syncState。mergeLocalCloud 收进库内。──
-  const listing = createListing({ cloud, local, head, pendingFolders: readPending, isPendingGone: (p) => pendingGone.isPending(p), pendingFolderDeletions: readFolderDel, hidden: config.hidden });
+  const listing = createListing({ cloud, local, head, pendingFolders: readPending, isPendingGone: (p) => pendingGone.isPending(p), pendingFolderDeletions: readFolderDel, hidden: config.hidden,
+    describe: (n) => { const d = ids.parse(n); return { kind: d?.kind, tier: d?.tier ?? "work" }; } });   // 2.1.2：列举行带 kind / tier（user「带」）
 
   // ── watchFolder（网盘模型）：订阅**一个**文件夹。app 只知「这一夹更新了」，分不出也不需分 local/remote。──────
   //   连接态 store 自持（config.signedIn/isOnline）——app 不再传 ctx。每次回调同 shape（FolderSnapshot，仅该夹直属子项）。
@@ -765,7 +766,7 @@ export function createStore(config: StoreConfig) {
   // 0.18.6：resolve() 面里「云端覆盖本地」在 absent / never 场合专用——只在云端此刻确实没有时才把本地这份移进回收站；云端回来了 / 验不了 → cancelled，两边不动。
   const delIfCloudAbsentSF = singleFlight("删除", async (n: string) => { const d = await del.del(n, { isOnline, expectCloudAbsent: true }); if (d.status === "trashed") uploadReplay.remove(n); return d; });
   /** cancelled 的两种原因翻成 resolve() 的终态；trashed 照返。 */
-  const trashedOrWhy = (d: DelResult): ResolveOutcome => d.status === "trashed" ? { status: "trashed" }
+  const trashedOrWhy = (d: TrashOutcome): ResolveOutcome => d.status === "trashed" ? { status: "trashed" }
     : d.status === "cancelled" ? { status: "unresolved", reason: d.reason === "cloud-present" ? "cloud-reappeared" : "offline" }
     : { status: "unresolved", reason: d.status };   // 删=supersede：从补推队列摘掉（ADR-0018）   // 接 isOnline：离线删走 move-aside + base-etag 守卫的删队列（重连 drainDeleteQueue 重放）
   // file.tryMove(to)：改身份/移动的**唯一结果式入口**（file() 无 rename，editor-session 也走这里）——**本操作含目标占用检查**（第一行 nameOccupied，占用则不动字节直接返错）。
@@ -1106,7 +1107,7 @@ export function createStore(config: StoreConfig) {
         return pushed ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
       },
       tryMove(to) { tierGuard("tryMove", name); return tryMoveSF(name, to); },
-      async delete() { tierGuard("delete", name); const r = await delSF(name); notifyFolderOf(name); return r; },   // 返 DelResult（v436）：cancelled/noop/queuedCloudDelete 都不是「已删除」
+      async trash() { tierGuard("trash", name); const r = await delSF(name); notifyFolderOf(name); return r; },   // 2.1.2 起叫 trash（原 delete；动词 = 语义：移进回收站）。返 TrashOutcome（v436）：cancelled/noop/queuedCloudDelete 都不是「已进回收站」
       reupload() {
         tierGuard("reupload", name);
         return busyK("file.reuploading", undefined, async () => {
@@ -1296,7 +1297,7 @@ export function createStore(config: StoreConfig) {
 
   return {
     // ── file + collection。改身份走 file.tryMove(to)。──
-    /** 文件对象工厂（含 tryMove/pullIfClean/save/open/delete/reupload…）。 */
+    /** 文件对象工厂（含 tryMove/pullIfClean/save/open/trash/reupload…）。 */
     file,
     /** zip 容器文档（多 getPeek / decryptPeek）；种类不是 zip 容器 → 抛。 */
     zip,

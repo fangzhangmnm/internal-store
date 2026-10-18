@@ -59,7 +59,7 @@ export type { ChangeCb } from "./works/collection.ts";
 export type { TryMoveResult, SaveResult, ResolveOutcome, CloudState } from "./create-store.ts";
 export type { TrashResult, RestoreOpts, PurgeOpts, EmptyTrashOpts } from "./works/trash.ts";
 export type { RefreshOpts, FreshResult } from "./works/freshness.ts";
-export type { DelResult } from "./works/delete.ts";
+export type { TrashOutcome } from "./works/delete.ts";
 export type { FolderSnapshot, WatchFolderErrorPhase } from "./works/listing.ts";   // 0.11.1：watchFolder opts.onError 的 phase
 export type { FolderDeleteResult, UploadOpts, MoveOpts, Kv } from "./base/types.ts";
 export type { UploadReplayPolicy } from "./works/upload-queue.ts";

@@ -29,8 +29,8 @@ export interface DelOpts {
   onDirtyWarn?: (ctx: { name: string }) => boolean | Promise<boolean>;
   busy?: Busy;
 }
-/** 删除操作的终态。 */
-export interface DelResult {
+/** `file.trash()` 的终态（2.1.2 起叫 TrashOutcome，原 DelResult；动词和它的语义对齐——删除 = 移进回收站，user 2026-10-17「让词对准了它应该有的语义罢了」）。 */
+export interface TrashOutcome {
   /** 终态串。 */
   status: string;
   /** 位置串。 */
@@ -73,7 +73,7 @@ export function createDelete(cfg: DeleteCfg) {
     writeQueue(q);
   }
 
-  async function del(name: string, opts: DelOpts = {}): Promise<DelResult> {
+  async function del(name: string, opts: DelOpts = {}): Promise<TrashOutcome> {
     const { isOnline = () => true, confirm, onDirtyWarn, busy = _busy, expectCloudAbsent = false } = opts;
     if (confirm && !(await confirm({ title: "删除", body: name, danger: true }))) return { status: "cancelled" };
     if (head.isDirtyAnywhere(name) && onDirtyWarn && !(await onDirtyWarn({ name }))) return { status: "cancelled" };
@@ -123,7 +123,7 @@ export function createDelete(cfg: DeleteCfg) {
   }
 
   // 离线删除重放：按 base-etag 收敛；被别处改过 → delete-vs-edit 默认 edit-wins（不删）。
-  async function replayDelete(name: string, opts: { baseEtag?: string | null; deleteEventId?: string } = {}): Promise<DelResult> {
+  async function replayDelete(name: string, opts: { baseEtag?: string | null; deleteEventId?: string } = {}): Promise<TrashOutcome> {
     const { baseEtag } = opts;
     // 旧队列条目没存 id → 现生成（那几条注定和本地腿配不上，裂成两行；不丢数据）。
     const deleteEventId = opts.deleteEventId ?? asideStamp(Date.now());
@@ -145,13 +145,13 @@ export function createDelete(cfg: DeleteCfg) {
     }
   }
 
-  async function drainDeleteQueue(): Promise<DelResult> {
+  async function drainDeleteQueue(): Promise<TrashOutcome> {
     const q = readQueue();
     if (!q.length) return { status: "drained", drained: 0, deferred: 0 };
     const remain: typeof q = [];
     let drained = 0;
     for (const e of q) {
-      let r: DelResult;
+      let r: TrashOutcome;
       try { r = await replayDelete(e.name, { baseEtag: e.baseEtag, deleteEventId: e.deleteEventId }); } catch (err) { reportStoreError(err, "log"); remain.push(e); continue; }
       if (r.status === "deferred-offline") remain.push(e); else drained++;   // 终态出队
     }
