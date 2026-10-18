@@ -67,7 +67,7 @@ export interface CloudProvider {
     delete(ref: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     download(ref: string): Promise<Blob>;
-    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    downloadRange(ref: string, offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array | ArrayBuffer | Blob>;
     ensureFolder(path: string): Promise<string>;
     getApprootRef(): Promise<string>;
     getItemByPath(path: string): Promise<CloudItem | null>;
@@ -196,7 +196,13 @@ export interface CollectionInitItem {
 }
 
 // @public
+export function createFileMirror(label: string, lookup: (name: string) => File | Blob | null | Promise<File | Blob | null>): MirrorSource;
+
+// @public
 export function createFolderProvider(root: FolderDirHandle): CloudProvider;
+
+// @public
+export function createHttpMirror(label: string, urlFor: (name: string) => string | null, opts?: HttpMirrorOptions): MirrorSource;
 
 // Warning: (ae-forgotten-export) The symbol "IdentifierCodec" needs to be exported by the entry point index.d.ts
 //
@@ -365,6 +371,7 @@ export interface FileStream {
     }): Promise<void>;
     prefetch(offset: number, length: number): Promise<void>;
     read(offset: number, length: number): Promise<Uint8Array>;
+    status(): StreamStatus;
     totalSize: number;
 }
 
@@ -455,7 +462,7 @@ export interface GraphTransport {
     copyItemToFolder(itemId: string, targetFolderId: string, newName: string): Promise<RawGraphItem>;
     deleteItem(itemId: string, eTag?: string | null): Promise<void>;
     downloadItemBlob(itemId: string): Promise<Blob>;
-    downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+    downloadItemRange(itemId: string, offset: number | null, length: number, opts?: RangeOpts): Promise<ArrayBuffer>;
     ensureSubfolder(name: string): Promise<string>;
     getApprootId(): Promise<string>;
     getItemByPath(path: string): Promise<RawGraphItem | null>;
@@ -484,6 +491,12 @@ export interface GraphTransportOptions {
     sleep?: (ms: number) => Promise<void>;
     timeouts?: Partial<GraphTimeouts>;
     verifyChunkedCommit?: boolean;
+}
+
+// @public (undocumented)
+export interface HttpMirrorOptions {
+    fetch?: typeof fetch;
+    timeoutMs?: number;
 }
 
 // @public (undocumented)
@@ -559,6 +572,21 @@ export interface LocalSaveReceipt {
     };
     rev: number;
 }
+
+// @public
+export interface MirrorHandle {
+    // (undocumented)
+    read(offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array>;
+}
+
+// @public
+export interface MirrorSource {
+    label: string;
+    open(name: string, size: number): Promise<MirrorHandle | null>;
+}
+
+// @public (undocumented)
+export type MirrorState = "none" | "ok" | "down" | "rejected";
 
 // @public
 export interface MoveOpts {
@@ -644,6 +672,14 @@ export interface PushResult {
 
 // @public
 export function queryStoragePersistence(sm?: StorageManagerLike | null): Promise<PersistenceState>;
+
+// @public
+export interface RangeOpts {
+    // (undocumented)
+    onProgress?: (bytesSoFar: number) => void;
+    // (undocumented)
+    signal?: AbortSignal;
+}
 
 // @public
 export interface RawFile {
@@ -780,6 +816,15 @@ export type SaveResult = {
 // @public
 export function scanAppNamespace(appId: string): Promise<NamespaceScanReport>;
 
+// @public (undocumented)
+export interface SchedulerStatus {
+    demand: number;
+    oldestMs: number;
+    queued: number;
+    speculative: number;
+    stalled: number;
+}
+
 // @public
 export interface StagingCoverage {
     bytes: number;
@@ -847,6 +892,7 @@ export interface StoreConfig {
     staging?: StagingStore;
     stagingCapBytes?: number;
     stagingChunkBytes?: number;
+    streaming?: StreamingOptions;
     ui: StoreUI;
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }
@@ -891,6 +937,26 @@ export interface StoreUI {
         cloudState?: CloudState;
     }) => Promise<ResolveChoice>;
     text?: StoreTextFn;
+}
+
+// @public
+export interface StreamingOptions {
+    lanes?: number;
+    mirrors?: () => MirrorSource[];
+    stallMs?: number;
+}
+
+// @public
+export class StreamStallError extends Error {
+    constructor(key: string);
+}
+
+// @public
+export interface StreamStatus extends SchedulerStatus {
+    cloudless: boolean;
+    mirror: MirrorState;
+    // (undocumented)
+    mirrorLabel?: string;
 }
 
 // @public

@@ -16,6 +16,9 @@ import "./store-folder-listing.test.mjs";
 import "./busy-key.test.mjs";
 import "./dir-index-cache.test.mjs";
 import "./download-session.test.mjs";
+import "./chunk-scheduler.test.mjs";   // 2026-10-17 0.19：分片调度（互等修了 / 车道 / 卡住对冲 / 让道 / 来源回落）
+import "./mirror.test.mjs";            // 2026-10-17 0.19：替代来源（本机文件 / HTTP 镜像）
+import "./graph-range-progress.test.ts";   // 2026-10-17 0.19：range 按流报进度 + 中止不重试
 import "./read-only-files.test.mjs";
 import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";

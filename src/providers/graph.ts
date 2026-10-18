@@ -21,6 +21,7 @@
 //   第二个 provider 会覆盖第一个的 token 源，且**跨账号缓存互相投毒**（A 账号的 approot id 配 B 账号
 //   token = 打错盘）。createGraph(tokenSource) 起，token 源与全部缓存 per-instance，双库双账号并联安全。
 import { CloudNetworkError } from "../errors.ts";
+import { anySignal, readBody } from "./range-body.ts";
 
 // ---- 实际读到的 Graph JSON 形状（只声明本文件真正访问的字段，其余 Graph 字段忽略）。----
 // driveItem 的 file/folder facet 二选一区分文件/文件夹；@ 前缀字段是 Graph 注解。
@@ -109,18 +110,24 @@ function _rangeHeader(offset: number | null, length: number): string {
     : `bytes=${offset}-${offset + length - 1}`;
 }
 
+/** 0.19：一片 byte-range 的旁路——signal = 调度层中止（对冲输了 / 投机卡住让道），onProgress = 累计到了多少字节（卡住判定靠它）。
+ *  形状同 chunk-scheduler.ts 的 RangeOpts（graph 不 import 上层类型）。 */
+export interface RangeFetchOpts { signal?: AbortSignal; onProgress?: (bytesSoFar: number) => void }
+
 // 直接打已知 CDN URL 的 byte-range（省掉每个 peek 的 metadata RTT）
 // caller 处理 401/403 = downloadUrl 过期，重申请 getDownloadUrl 重试一次
-export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number): Promise<ArrayBuffer> {
+export async function downloadRangeFromUrl(downloadUrl: string, offset: number | null, length: number, opts: RangeFetchOpts = {}): Promise<ArrayBuffer> {
   let r: Response;
-  try { r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) }, signal: timed("range") }); }
+  try { r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) }, signal: anySignal([timed("range"), opts.signal]) }); }
   catch (e) { throw new CloudNetworkError(`range download: network fetch failed (${String(e)})`, e); }
   if (!r.ok && r.status !== 206) {
     const err: GraphError = new Error(`range download failed ${r.status}`);
     err.status = r.status;
     throw err;
   }
-  return await r.arrayBuffer();
+  // 按流读 + 报进度（只在 caller 要进度时；否则一口 arrayBuffer，= 0.18）。读体中途断 / 被中止 → 网络错（和 fetch 自身 throw 同一类）。
+  try { return await readBody(r, opts.onProgress); }
+  catch (e) { throw new CloudNetworkError(`range download: body failed (${String(e)})`, e); }
 }
 
 //   "replace" 默认覆盖；"fail" 同名拒收（用于 sibling-copy）。
@@ -241,15 +248,16 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
 // 不该每片重走一次 getDownloadUrl 往返；过期/失效（401/403/404 或 fetch throw——iOS 切网后遗症
 // 会以 throw 现形）→ 清缓存重申请一次。
 const _dlUrlCache = new Map<string, string>();
-async function downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer> {
+async function downloadItemRange(itemId: string, offset: number | null, length: number, opts: RangeFetchOpts = {}): Promise<ArrayBuffer> {
   let url = _dlUrlCache.get(itemId) ?? await getDownloadUrl(itemId);
   if (url) {
     _dlUrlCache.set(itemId, url);
-    try { return await downloadRangeFromUrl(url, offset, length); }
-    catch (_e) {
+    try { return await downloadRangeFromUrl(url, offset, length, opts); }
+    catch (e) {
+      if (opts.signal?.aborted) throw e;                 // 0.19：是调度层中止的（对冲输了 / 卡住让道）→ 不重申请、不重试
       _dlUrlCache.delete(itemId);
       url = await getDownloadUrl(itemId);
-      if (url) { _dlUrlCache.set(itemId, url); return await downloadRangeFromUrl(url, offset, length); }
+      if (url) { _dlUrlCache.set(itemId, url); return await downloadRangeFromUrl(url, offset, length, opts); }
     }
   }
   const r = await graphFetch("GET", `/me/drive/items/${itemId}/content`, { headers: { Range: _rangeHeader(offset, length) } });

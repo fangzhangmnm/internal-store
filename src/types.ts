@@ -3,6 +3,8 @@
 // 设计原则：把「字节边界」写死——谁吃 Bytes、谁吃/出 Blob，一眼可辨、错配即编译错。
 
 import type { Bytes } from "./substrate.ts";
+import type { RangeOpts } from "./chunk-scheduler.ts";
+export type { RangeOpts } from "./chunk-scheduler.ts";
 /** 落盘/上传的字节正规形态（= Uint8Array）；toU8 把任意来源收敛到它。 */
 export type { Bytes } from "./substrate.ts";
 
@@ -93,8 +95,8 @@ export interface CloudProvider {
   getApprootRef(): Promise<string>;
   /** 下载文件内容。 */
   download(ref: string): Promise<Blob>;
-  /** byte-range 下载。 */
-  downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+  /** byte-range 下载。opts（0.19，可选，provider 可忽略）：signal = 调度层中止；onProgress = 累计到了多少字节（卡住判定）。 */
+  downloadRange(ref: string, offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array | ArrayBuffer | Blob>;
   /** 上传文件字节。 */
   upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
   /** 0.17.0 可选：流式上传——按 source.read 逐块取、逐块传，整份永不进内存。只准 conflictBehavior:"fail"（新建）或带 eTag 的 replace。

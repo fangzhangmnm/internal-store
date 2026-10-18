@@ -298,3 +298,184 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
     h.close();
   });
 });
+
+// ── 0.19（2026-10-17 Claude Fable 5.1）：streaming 显式开关 ───────────────────────────────────────
+//   不传 = 0.18 行为（prefetch 失败只 log、pin 严格串行、不判卡住、无镜像）；传了：reject / 多车道 / 卡住判定 / 镜像。
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 0.19 夹具：range 带 opts（signal / onProgress）；可挂镜像；fetchMeta 可控。 */
+function mkSessions2({ files, chunkSize = 4, streaming, gate = null, mirrors = [], cloudDown = () => false } = {}) {
+  const calls = [];
+  let inflightNow = 0, inflightMax = 0;
+  const staging = memStaging();
+  const sessions = createDownloadSessions({
+    staging,
+    fetchMeta: async (name) => { if (cloudDown()) throw new Error("cloud unreachable"); const f = files.get(name); return f ? { etag: f.etag, size: f.data.length, item: { name } } : null; },
+    range: async (item, off, len, opts = {}) => {
+      const f = files.get(item.name);
+      calls.push({ name: item.name, off, len, opts });
+      inflightNow++; inflightMax = Math.max(inflightMax, inflightNow);
+      try { if (gate) await gate(item.name, off, opts); return f.data.slice(off, off + len); }
+      finally { inflightNow--; }
+    },
+    adoptLocal: async () => true,
+    chunkSize, streaming: streaming === undefined ? undefined : { ...streaming, mirrors: () => mirrors },
+  });
+  return { sessions, staging, calls, stats: () => ({ inflightMax }) };
+}
+/** 内存镜像：按名字给一份数据；reads 记每次读；fail 让 read 抛。 */
+function memMirror(label, table, { fail = () => false } = {}) {
+  const reads = [];
+  return {
+    reads,
+    src: {
+      label,
+      async open(name, size) { const d = table.get(name); return d && d.length === size ? { async read(off, len) { reads.push(off); if (fail(off)) throw new Error(`${label} broke`); return d.slice(off, off + len); } } : null; },
+    },
+  };
+}
+
+describe("download-session · 0.19 streaming 开关", () => {
+  it("不传 streaming = 0.18：prefetch 失败只 log 不 reject；传了 → 如实 reject", async () => {
+    const files = new Map([["f", { etag: "e", data: bytes(8) }]]);
+    const boom = (n, off) => { if (off === 4) throw new Error("range 503"); };
+    const legacy = mkSessions2({ files, gate: boom });
+    const s1 = await legacy.sessions.open("f");
+    await s1.prefetch(4, 4);                                  // 不抛
+    s1.close();
+    const modern = mkSessions2({ files, gate: boom, streaming: {} });
+    const s2 = await modern.sessions.open("f");
+    let err = null;
+    try { await s2.prefetch(4, 4); } catch (e) { err = e; }
+    eq(err?.message, "range 503", "★streaming 模式 prefetch 如实 reject（预取方靠它学）");
+    s2.close();
+  });
+
+  it("lanes=3：promote 补缺口同刻 ≤ 3 路；lanes 不传仍 1", async () => {
+    const files = new Map([["a", { etag: "e", data: bytes(24) }]]);
+    const three = mkSessions2({ files, gate: () => sleep(8), streaming: { lanes: 3 } });
+    const sa = await three.sessions.open("a");
+    await sa.promote();
+    eq(three.stats().inflightMax, 3, "★3 路并行补缺口");
+    sa.close();
+    const one = mkSessions2({ files, gate: () => sleep(8), streaming: {} });
+    const sb = await one.sessions.open("a");
+    await sb.promote();
+    eq(one.stats().inflightMax, 1, "streaming 但没给 lanes → 仍 1");
+    sb.close();
+  });
+
+  it("status()：挂住的播放读 → demand 1、oldestMs 在涨、过 stallMs 判卡住；对冲后读完成", async () => {
+    const files = new Map([["f", { etag: "e", data: bytes(8) }]]);
+    let n = 0;
+    const { sessions, calls } = mkSessions2({ files, streaming: { stallMs: 30 }, gate: (name, off, opts) => (++n === 1 ? new Promise((_, rej) => opts.signal.addEventListener("abort", () => rej(new Error("aborted")))) : null) });
+    const s = await sessions.open("f");
+    const reading = s.read(0, 4);
+    await sleep(10);
+    let st = s.status();
+    eq(st.demand, 1); eq(st.stalled, 0); assert(st.oldestMs >= 5, "等了一会");
+    await sleep(40);
+    st = s.status();
+    eq(st.stalled, 0, "对冲那路已发出、它还没卡 → 这片不算卡住");
+    eq([...await reading].join(","), [...bytes(4)].join(","), "读完成");
+    eq(calls.filter((c) => c.off === 0).length, 2, "★两路（原路 + 对冲）");
+    assert(calls[0].opts.signal.aborted, "输的原路被中止");
+    eq(s.status().demand, 0);
+    s.close();
+  });
+
+  it("镜像：开会话按名字 + 尺寸问；片从镜像来；第一片先和云端比过；meta.mirrored 记没验过的片", async () => {
+    const data = bytes(12);
+    const files = new Map([["f", { etag: "e", data }]]);
+    const m = memMirror("pc", new Map([["f", data], ["other", bytes(5)]]));
+    const { sessions, staging, calls } = mkSessions2({ files, streaming: {}, mirrors: [m.src] });
+    const s = await sessions.open("f");
+    eq(s.status().mirror, "ok"); eq(s.status().mirrorLabel, "pc"); eq(s.status().cloudless, false);
+    const got = await s.read(0, 12);
+    eq([...got].join(","), [...data].join(","), "字节对");
+    eq(m.reads.length, 3, "三片都从镜像来");
+    eq(calls.length, 1, "★云端只打了一次 = 第一片的核对");
+    await sleep(10);
+    const meta = JSON.parse(await staging._map.get("meta:f").text());
+    eq(meta.chunks.length, 3, "三片都在账");
+    eq((meta.mirrored ?? []).length, 2, "★两片来自镜像、没验过；核对过的那片不算");
+    s.close();
+    const s2 = await sessions.open("f");
+    eq((await s2.read(0, 12)).length, 12);
+    eq(m.reads.length, 3, "staging 命中：镜像不再被打");
+    s2.close();
+  });
+
+  it("镜像字节和云端不一样 → 第一片不交出去、拒掉镜像、回落云端；重开会话不再用它", async () => {
+    const data = bytes(12);
+    const files = new Map([["f", { etag: "e", data }]]);
+    const wrong = Uint8Array.from(data, (x) => (x + 1) % 251);
+    const m = memMirror("stale", new Map([["f", wrong]]));
+    const { sessions, staging, calls } = mkSessions2({ files, streaming: {}, mirrors: [m.src] });
+    const s = await sessions.open("f");
+    eq(s.status().mirror, "ok");
+    const got = await s.read(0, 4);
+    eq([...got].join(","), [...data.slice(0, 4)].join(","), "★交出去的是云端的字节（错盘一个字节都不交）");
+    eq(s.status().mirror, "rejected");
+    eq(calls.length, 2, "核对一次 + 回落云端拉一次");
+    assert(!staging._map.has("chunk:f:0") || [...new Uint8Array(await staging._map.get("chunk:f:0").arrayBuffer())].join(",") === [...data.slice(0, 4)].join(","), "staging 里没有错字节");
+    await s.read(4, 4);
+    eq(m.reads.length, 1, "拒掉后镜像不再被打");
+    s.close();
+    const s2 = await sessions.open("f");
+    eq(s2.status().mirror, "rejected", "★这一版记住了：重开也不用");
+    s2.close();
+  });
+
+  it("镜像抽样核对（事后）：中段不同 → 拒掉 + 清掉它没验过的片，后续走云端", async () => {
+    const data = bytes(80);                                   // 20 片；第 1 片核对、第 16 片抽样
+    const files = new Map([["f", { etag: "e", data }]]);
+    const bad = Uint8Array.from(data); bad[70] = 7;            // 第 17 片（off 68）不同
+    const m = memMirror("half", new Map([["f", bad]]));
+    const { sessions, staging } = mkSessions2({ files, streaming: {}, mirrors: [m.src] });
+    const s = await sessions.open("f");
+    for (let i = 0; i < 20; i++) await s.read(i * 4, 4);     // 顺序读全盘；第 16 片（off 60）抽样和云端比——那里是一样的
+    await sleep(10);
+    eq(s.status().mirror, "ok", "抽到的片一样 → 还在用");
+    // 换一个抽样会撞到不同处的布局：直接再开一会话、读第 17 片两次（mirrorChunks 节拍从 0 起：第 1 片核对 = off 68 → 不同）
+    s.close();
+    const s2 = await sessions.open("f");
+    await staging.del("chunk:f:17");                          // 让它必须去镜像拿
+    const got = await s2.read(68, 4);
+    eq([...got].join(","), [...data.slice(68, 72)].join(","), "核对发现不同 → 这片交的是云端的");
+    eq(s2.status().mirror, "rejected");
+    const meta = JSON.parse(await staging._map.get("meta:f").text());
+    eq((meta.mirrored ?? []).length, 0, "★没验过的镜像片全清");
+    assert(!staging._map.has("chunk:f:5"), "没验过的片不在 staging 了");
+    assert(staging._map.has("chunk:f:0"), "验过的片留着");
+    s2.close();
+  });
+
+  it("镜像出错 → 回落云端 + 进冷却（status down）；云端够不着而账上有这份 → 只用镜像开会话（cloudless）", async () => {
+    const data = bytes(12);
+    const files = new Map([["f", { etag: "e", data }]]);
+    let breakIt = false;
+    const m = memMirror("lan", new Map([["f", data]]), { fail: () => breakIt });
+    let down = false;
+    const { sessions, calls } = mkSessions2({ files, streaming: {}, mirrors: [m.src], cloudDown: () => down });
+    const s = await sessions.open("f");
+    await s.read(0, 4);                                       // 第一片：镜像 + 云端核对
+    breakIt = true;
+    const got = await s.read(4, 4);
+    eq([...got].join(","), [...data.slice(4, 8)].join(","), "镜像坏了 → 云端拿到");
+    eq(s.status().mirror, "down", "★进冷却");
+    const before = m.reads.length;
+    await s.read(8, 4);
+    eq(m.reads.length, before, "冷却期内不再打镜像");
+    s.close();
+    breakIt = false; down = true;                             // 云端够不着
+    const s2 = await sessions.open("f");
+    assert(s2, "账上有这份 + 镜像有 → 能开");
+    eq(s2.status().cloudless, true);
+    s2.close();
+    const empty = mkSessions2({ files, streaming: {}, mirrors: [m.src], cloudDown: () => true });
+    let err = null;
+    try { await empty.sessions.open("f"); } catch (e) { err = e; }
+    eq(err?.message, "cloud unreachable", "账上没有这份 → 诚实抛云端的错");
+    void calls;
+  });
+});

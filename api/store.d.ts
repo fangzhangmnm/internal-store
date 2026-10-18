@@ -77,8 +77,8 @@ export declare interface CloudProvider {
     getApprootRef(): Promise<string>;
     /** 下载文件内容。 */
     download(ref: string): Promise<Blob>;
-    /** byte-range 下载。 */
-    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    /** byte-range 下载。opts（0.19，可选，provider 可忽略）：signal = 调度层中止；onProgress = 累计到了多少字节（卡住判定）。 */
+    downloadRange(ref: string, offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array | ArrayBuffer | Blob>;
     /** 上传文件字节。 */
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
     /** 0.17.0 可选：流式上传——按 source.read 逐块取、逐块传，整份永不进内存。只准 conflictBehavior:"fail"（新建）或带 eTag 的 replace。
@@ -275,9 +275,18 @@ export declare interface CollectionInitItem {
     value: unknown;
 }
 
+/** 这台设备上的文件当镜像（File API：`<input type=file>` / showOpenFilePicker 拿到的 File，slice 白送、零网络）。
+ *  lookup 按云端文件名给 File；没有 → null。尺寸不等 = 不是同一份 → 不用。 */
+export declare function createFileMirror(label: string, lookup: (name: string) => File | Blob | null | Promise<File | Blob | null>): MirrorSource;
+
 /** 本地文件夹 → CloudProvider（「folder 就是另一朵云」）。root = 用户 picker 授权的目录句柄（approot）。
  *  浏览器专用；auth/权限生命周期（句柄持久化、re-request 手势）归 app 层。 */
 export declare function createFolderProvider(root: FolderDirHandle): CloudProvider;
+
+/** 任何支持 Range 的 HTTP 主机当镜像。urlFor 把云端文件名映射成这个主机上的地址（没有 → null）。
+ *  open：打一个 `Range: bytes=0-0` 探针——必须回 206 且 Content-Range 的总长 == 云端尺寸，否则这个主机没有这份（同名不同尺寸也算没有）。
+ *  read：Range GET → 必须 206、长度必须正好；按流读、报进度（卡住判定）；signal 中止。 */
+export declare function createHttpMirror(label: string, urlFor: (name: string) => string | null, opts?: HttpMirrorOptions): MirrorSource;
 
 export declare function createIdentifiers(docKinds: readonly DocKind[]): IdentifierCodec;
 
@@ -517,12 +526,16 @@ export declare interface FileStream {
     totalSize: number;
     /** 读一段（播放优先级；staging/本地命中则不打网络）。越界自动钳。 */
     read(offset: number, length: number): Promise<Uint8Array>;
-    /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。 */
+    /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。
+     *  不开 `streaming`：失败只 log、永不 reject（0.18）。开了：没拉到如实 reject（含 StreamStallError）——预取方靠它学。 */
     prefetch(offset: number, length: number): Promise<void>;
     /** 升格正式本地副本（= keepOffline：只补缺口 + 进度）。本地面 no-op。升格后请重开 openStream。 */
     keep(opts?: {
         onProgress?: (doneBytes: number, totalBytes: number) => void;
     }): Promise<void>;
+    /** 0.19：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
+     *  本地面恒为零。 */
+    status(): StreamStatus;
     /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
     close(): void;
 }
@@ -616,8 +629,8 @@ export declare interface GraphTransport {
     getItemByPath(path: string): Promise<RawGraphItem | null>;
     /** 下载文件内容。 */
     downloadItemBlob(itemId: string): Promise<Blob>;
-    /** byte-range 下载；offset=null 取末尾 length 字节。 */
-    downloadItemRange(itemId: string, offset: number | null, length: number): Promise<ArrayBuffer>;
+    /** byte-range 下载；offset=null 取末尾 length 字节。opts（0.19，可选）：中止 + 进度——transport 可忽略。 */
+    downloadItemRange(itemId: string, offset: number | null, length: number, opts?: RangeOpts): Promise<ArrayBuffer>;
     /** 上传到 approot 相对路径。 */
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
@@ -658,6 +671,13 @@ export declare interface GraphTransportOptions {
     verifyChunkedCommit?: boolean;
     /** 测试用：退避的 sleep。 */
     sleep?: (ms: number) => Promise<void>;
+}
+
+export declare interface HttpMirrorOptions {
+    /** 每种请求的超时（ms）；不传 = 不设超时（调度层的 stallMs 另算）。 */
+    timeoutMs?: number;
+    /** 测试注入。 */
+    fetch?: typeof fetch;
 }
 
 /** 库内用的超集（不出门牌）：身份 ↔ 云端真实文件名。 */
@@ -783,6 +803,21 @@ export declare interface LocalSaveReceipt {
     };
 }
 
+/** 镜像给某份文件的句柄（mirror.ts 的 createFileMirror / createHttpMirror 造；宿主也可以自己实现）。 */
+export declare interface MirrorHandle {
+    read(offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array>;
+}
+
+/** 替代来源：按云端文件名 + 尺寸问「你有没有这份」。 */
+export declare interface MirrorSource {
+    /** 给人看的名字（状态 / 日志）。 */
+    label: string;
+    /** 有 → 句柄；没有 / 尺寸不符 / 够不着 → null（不抛）。 */
+    open(name: string, size: number): Promise<MirrorHandle | null>;
+}
+
+export declare type MirrorState = "none" | "ok" | "down" | "rejected";
+
 /** provider.move 的选项。 */
 export declare interface MoveOpts {
     /** 移动同时改名。 */
@@ -892,6 +927,12 @@ export declare interface PushResult {
 
 /** 纯查询（零 consent、零弹窗、任何时刻可调）。异常/缺环境 → supported:false（诚实降级，不谎报已持久）。 */
 export declare function queryStoragePersistence(sm?: StorageManagerLike | null): Promise<PersistenceState>;
+
+/** 一路拉取的旁路：signal = 中止（对冲输了 / 卡住让道）；onProgress = 到了多少字节（卡住判定靠它重置）。 */
+export declare interface RangeOpts {
+    signal?: AbortSignal;
+    onProgress?: (bytesSoFar: number) => void;
+}
 
 /** 文件对象（非 zip）。isZip 在编译期分出两种：RawFile 无 getPeek/setPeek。 */
 export declare interface RawFile {
@@ -1136,6 +1177,19 @@ export declare type SaveResult = {
 /** 无痕扫：枚举本 appId 命名空间残留（还原出厂后验证归零用）。只读，零副作用。 */
 export declare function scanAppNamespace(appId: string): Promise<NamespaceScanReport>;
 
+export declare interface SchedulerStatus {
+    /** 在飞的播放片数（有读在等）。 */
+    demand: number;
+    /** 上了网的投机片数（prefetch / keep 补缺口）。 */
+    speculative: number;
+    /** 还没上网的投机片数（在排车道 / 等播放让路）。 */
+    queued: number;
+    /** 最老那片上网多久了（ms）；没有在飞的 → 0。 */
+    oldestMs: number;
+    /** 判定卡住的片数（每一路都 stallMs 没到字节）；没开 stallMs → 恒 0。 */
+    stalled: number;
+}
+
 /** staging 覆盖快照（A5 透明面，2026-08-18 user 批「关键是透明清晰」）——只读 staging 账本，
  *  **零网络、离线可用**。app 拿它画徽章三态（已钉走 isKeptOffline / 完整缓存 / 部分缓存）+ 离线起播
  *  护栏（complete 才起播——防「头部在缓存先响了、播到洞静默卡死」）+ 离线边界接曲决策（headBytes）。
@@ -1225,6 +1279,10 @@ export declare interface StoreConfig {
     stagingChunkBytes?: number;
     /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
     stagingCapBytes?: number;
+    /** 0.19：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
+     *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
+     *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
+    streaming?: StreamingOptions;
     /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
     getPassword?: (name: string) => string | null;
     /** 采纳云端字节前的有效性闸（N2：clean 快进/pull 覆盖本地前调）——**所有 consumer 必传，禁 placeholder/noop**。
@@ -1314,6 +1372,31 @@ export declare interface StoreUI {
     }) => void;
     /** 'ask' 模式：回线/成功连接问一次「N 篇离线上传现在同步到云端？」。 */
     confirmReplay?: (count: number) => Promise<boolean>;
+}
+
+/** 0.19 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
+export declare interface StreamingOptions {
+    /** 投机（prefetch / keep 补缺口）同时在飞的分片数，全 store 一个调度域。不传 = 1（= 0.18 的 pin 严格串行）。播放不限、不占车道。 */
+    lanes?: number;
+    /** 卡住判定：一路连续 stallMs 没到一个字节。播放的读 → 再开一路对冲（先到的赢、输的中止）；投机 → 中止让道（这次 prefetch 以 StreamStallError 失败）。
+     *  不传 = 不判（只靠传输层超时）。 */
+    stallMs?: number;
+    /** 替代来源（本机文件 / 局域网 / Tailscale 镜像），按偏好排序；每次开会话取一次。 */
+    mirrors?: () => MirrorSource[];
+}
+
+/** 投机的一片卡住、又没有别的来源可换 → 这片以它失败（prefetch 以它 reject，让预取方学到「这片没拉到」）。 */
+export declare class StreamStallError extends Error {
+    constructor(key: string);
+}
+
+/** 流式句柄的零网络快照（状态条：「有请求卡着」比实时 KB 更要紧——user 10-17）。 */
+export declare interface StreamStatus extends SchedulerStatus {
+    /** 这会话的镜像：none 没有 / ok 在用 / down 出过错在冷却（走云端）/ rejected 字节和云端不一样、这一版不再用。 */
+    mirror: MirrorState;
+    mirrorLabel?: string;
+    /** 云端够不着、只靠镜像 + staging 开的会话（没法和云端比字节）。 */
+    cloudless: boolean;
 }
 
 /** syncState = residency(住哪) ⟂ sync-status(clean/dirty/conflict/gone) 两轴的 derived 投影（8-badge）。 */

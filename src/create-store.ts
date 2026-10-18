@@ -27,7 +27,7 @@ import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn } fr
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./local-cache.ts";
-import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage } from "./download-session.ts";
+import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage, type StreamingOptions, type StreamStatus } from "./download-session.ts";
 import { runStoreMigrations, storeNamespace } from "./migration.ts";
 import { namespacedKv, type KeyedKv } from "./kv-namespace.ts";
 import { readCentralDirectory, readEntryBytes, type PeekSource } from "./zip-peek.ts";
@@ -142,6 +142,10 @@ export interface StoreConfig {
   stagingChunkBytes?: number;
   /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
   stagingCapBytes?: number;
+  /** 0.19：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
+   *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
+   *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
+  streaming?: StreamingOptions;
   /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
   getPassword?: (name: string) => string | null;
   // （否则损坏/captive-portal HTML 拿着合法 etag 能覆盖唯一好的本地副本 = 丢内容——论文/画作都怕；
@@ -232,10 +236,14 @@ export interface FileStream {
   totalSize: number;
   /** 读一段（播放优先级；staging/本地命中则不打网络）。越界自动钳。 */
   read(offset: number, length: number): Promise<Uint8Array>;
-  /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。 */
+  /** 低优先预拉一段进 staging（下一曲头部预拉等）。本地面 no-op。
+   *  不开 `streaming`：失败只 log、永不 reject（0.18）。开了：没拉到如实 reject（含 StreamStallError）——预取方靠它学。 */
   prefetch(offset: number, length: number): Promise<void>;
   /** 升格正式本地副本（= keepOffline：只补缺口 + 进度）。本地面 no-op。升格后请重开 openStream。 */
   keep(opts?: { onProgress?: (doneBytes: number, totalBytes: number) => void }): Promise<void>;
+  /** 0.19：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
+   *  本地面恒为零。 */
+  status(): StreamStatus;
   /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
   close(): void;
 }
@@ -457,7 +465,7 @@ export function createStore(config: StoreConfig) {
     staging: stagingStore,
     fetchMeta: async (name) => { const m = await cloud.fetchMeta(name); return m ? { etag: m.etag, size: m.size, item: m.item } : null; },
     // 分片直连 provider.downloadRange（item.ref 已在开会话时解析——不每分片重走 metadata 往返）。
-    range: async (item, offset, length) => toU8Raw(await provider.downloadRange((item as { ref: string }).ref, offset, length)),
+    range: async (item, offset, length, opts) => toU8Raw(await provider.downloadRange((item as { ref: string }).ref, offset, length, opts)),
     // promote 落地：对齐 identity.acquire 语义（serialize 锁 + markSynced）；已有副本/dirty 绝不覆盖（§A）。
     adoptLocal: (name, blob, etag) => sub.serialize(name, async () => {
       if (await local.exists(name)) return false;     // 用户其间正常 open 过 → 已有副本，收摊不覆盖
@@ -469,6 +477,7 @@ export function createStore(config: StoreConfig) {
     }),
     chunkSize: config.stagingChunkBytes,
     capBytes: config.stagingCapBytes,
+    streaming: config.streaming,   // 0.19 行为开关（不传 = 0.18）
   });
 
   // ── folder 本地登记（离线建空夹）：pending = 建了但还没确认上云的空文件夹。──────────────
@@ -1137,6 +1146,7 @@ export function createStore(config: StoreConfig) {
             totalSize: b.size,
             read: async (off: number, len: number) => new Uint8Array(await b.slice(Math.max(0, off), Math.min(b.size, Math.max(0, off) + Math.max(0, len))).arrayBuffer()),
             prefetch: async () => {}, keep: async () => {}, close: () => {},
+            status: () => ({ demand: 0, speculative: 0, queued: 0, oldestMs: 0, stalled: 0, mirror: "none", cloudless: false }),
           };
         }
         const sess = await sessions.open(name).catch((e) => { ui.reportError(e, "log"); return null; });   // 离线/云端没有 → null（诚实，不假装）
@@ -1146,6 +1156,7 @@ export function createStore(config: StoreConfig) {
           read: (off: number, len: number) => sess.read(off, len),
           prefetch: (off: number, len: number) => sess.prefetch(off, len),
           keep: (o?: { onProgress?: (d: number, t: number) => void }) => sess.promote({ onProgress: o?.onProgress }),
+          status: () => sess.status(),
           close: () => sess.close(),
         };
       },

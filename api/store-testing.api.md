@@ -27,7 +27,8 @@ export interface CloudProvider {
     delete(ref: string, eTag?: string): Promise<void>;
     deleteEmptyFolder(path: string): Promise<FolderDeleteResult>;
     download(ref: string): Promise<Blob>;
-    downloadRange(ref: string, offset: number, length: number): Promise<Uint8Array | ArrayBuffer | Blob>;
+    // Warning: (ae-forgotten-export) The symbol "RangeOpts" needs to be exported by the entry point index.d.ts
+    downloadRange(ref: string, offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array | ArrayBuffer | Blob>;
     ensureFolder(path: string): Promise<string>;
     getApprootRef(): Promise<string>;
     getItemByPath(path: string): Promise<CloudItem | null>;
