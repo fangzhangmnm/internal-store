@@ -299,10 +299,10 @@ describe("download-session · store 级（keepOffline / openStream）", () => {
   });
 });
 
-// ── 0.19（2026-10-17 Claude Fable 5.1）：streaming 显式开关 ───────────────────────────────────────
+// ── 2.0.0（2026-10-17 Claude Fable 5.1）：streaming 显式开关 ───────────────────────────────────────
 //   不传 = 0.18 行为（prefetch 失败只 log、pin 严格串行、不判卡住、无镜像）；传了：reject / 多车道 / 卡住判定 / 镜像。
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/** 0.19 夹具：range 带 opts（signal / onProgress）；可挂镜像；fetchMeta 可控。 */
+/** 2.0.0 夹具：range 带 opts（signal / onProgress）；可挂镜像；fetchMeta 可控。 */
 function mkSessions2({ files, chunkSize = 4, streaming, gate = null, mirrors = [], cloudDown = () => false } = {}) {
   const calls = [];
   let inflightNow = 0, inflightMax = 0;
@@ -334,7 +334,7 @@ function memMirror(label, table, { fail = () => false } = {}) {
   };
 }
 
-describe("download-session · 0.19 streaming 开关", () => {
+describe("download-session · 2.0.0 streaming 开关", () => {
   it("不传 streaming = 0.18：prefetch 失败只 log 不 reject；传了 → 如实 reject", async () => {
     const files = new Map([["f", { etag: "e", data: bytes(8) }]]);
     const boom = (n, off) => { if (off === 4) throw new Error("range 503"); };

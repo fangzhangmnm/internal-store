@@ -9,12 +9,12 @@
 //   · staging **只装云端拉来的字节**（re-fetchable by construction），永远不装 dirty/用户唯一副本
 //     → staging 的任何清理都绝不丢用户数据（与「无 LRU」教义不冲突：这是 scratch，不是缓存治理复辟）。
 //   · promote 绝不覆盖既有本地副本：本地已有（用户其间正常 open 过）→ 直接收摊；dirty 更是碰都不碰。
-//   · 调度（0.19 起住 chunk-scheduler.ts）：读取（播放）优先；投机（prefetch / 补缺口）同时在飞 ≤ lanes（不传 = 1 = 严格串行，
+//   · 调度（2.0.0 起住 chunk-scheduler.ts）：读取（播放）优先；投机（prefetch / 补缺口）同时在飞 ≤ lanes（不传 = 1 = 严格串行，
 //     user 显式钉死），且播放有分片在飞/在等时投机不开新分片（分片粒度让路，不杀请求）。
 //   · eTag 钉版：会话开在某一版上；promote 前重验 fetchMeta，版变 → 清本 name staging + 抛 EtagChangedError。
 //   · 时间戳（meta.touched）只用于 scratch 清理排序，绝不参与任何内容/版本决策（no-timestamps 红线）。
 //
-// 0.19（2026-10-17 Claude Fable 5.1；user「你现在是fable了，开始做涉及库的改动」）——`streaming` 显式开关（不传 = 0.18 行为）：
+// 2.0.0（2026-10-17 Claude Fable 5.1；user「你现在是fable了，开始做涉及库的改动」）——`streaming` 显式开关（不传 = 0.18 行为）：
 //   · lanes：投机车道数；stallMs：卡住判定（播放对冲 / 投机让道）——政策全在 chunk-scheduler.ts。
 //   · prefetch() 在 streaming 模式下失败如实 reject（预取方要靠它学「这片没拉到」）；0.18 模式照旧只 log。
 //   · mirrors：替代来源（本机文件 / 局域网 / Tailscale），身份仍归云端 item：开会话时按名字 + 尺寸问镜像有没有 →
@@ -25,7 +25,7 @@
 //
 // staging 分区 key 形（schema v1，2026-08-15 user 过目改名定稿：陌生人开 DevTools 一眼可懂）：
 //   `meta:<name>`     → JSON { v:1, eTag, totalBytes, chunkBytes, chunks:[分片号…], touchedAt, mirrored?:[分片号…] }
-//                       （会话元信息 + 已持有分片账；mirrored = 0.19 加的可选字段：来自镜像、还没和云端比过的片）
+//                       （会话元信息 + 已持有分片账；mirrored = 2.0.0 加的可选字段：来自镜像、还没和云端比过的片）
 //   `chunk:<name>:<i>`→ 分片字节 blob（i 十进制；name 不含 ":"——Windows 非法字符已被文件名护栏挡在门外）
 import { reportStoreError } from "./error-handling.ts";
 import { createChunkScheduler, type ChunkSource, type RangeOpts, type SchedulerStatus } from "./chunk-scheduler.ts";
@@ -53,7 +53,7 @@ export interface MirrorSource {
   open(name: string, size: number): Promise<MirrorHandle | null>;
 }
 
-/** 0.19 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
+/** 2.0.0 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
 export interface StreamingOptions {
   /** 投机（prefetch / keep 补缺口）同时在飞的分片数，全 store 一个调度域。不传 = 1（= 0.18 的 pin 严格串行）。播放不限、不占车道。 */
   lanes?: number;
@@ -77,7 +77,7 @@ export interface DownloadSessionsCfg {
   staging: StagingStore;
   /** 云端元信息（开会话钉版 + promote 前重验）。 */
   fetchMeta: (name: string) => Promise<SessionMeta | null>;
-  /** 按 item 句柄 byte-range 拉（**不**每分片重走 metadata 往返——JRP 抱怨过的 per-open 冗余 GET）。opts 可选：中止 + 进度（0.19）。 */
+  /** 按 item 句柄 byte-range 拉（**不**每分片重走 metadata 往返——JRP 抱怨过的 per-open 冗余 GET）。opts 可选：中止 + 进度（2.0.0）。 */
   range: (item: unknown, offset: number, length: number, opts?: RangeOpts) => Promise<Uint8Array>;
   /** promote 落地（create-store 注入：serialize 锁内 local.save + head.markSynced，对齐 acquire 语义）。
    *  返 false = 本地已有副本/不可落（session 直接收摊，不覆盖）。 */
@@ -85,7 +85,7 @@ export interface DownloadSessionsCfg {
   chunkSize?: number;          // 默认 2MiB（分片粒度 = pin 给播放让路的粒度）
   capBytes?: number;           // staging 全局字节上限（默认 256MiB）；超限 FIFO 清最旧 touched 的整组
   now?: () => number;          // 测试注入
-  /** 0.19 行为开关；不传 = 0.18 行为。 */
+  /** 2.0.0 行为开关；不传 = 0.18 行为。 */
   streaming?: StreamingOptions;
 }
 
@@ -254,7 +254,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
 
   // ── 会话 ────────────────────────────────────────────────────────────────────────
   async function open(name: string): Promise<DownloadSession | null> {
-    // 云端元信息：钉版事实。够不着时（0.19 streaming 模式）看 staging 账 + 镜像能不能撑起一个「无云」会话。
+    // 云端元信息：钉版事实。够不着时（2.0.0 streaming 模式）看 staging 账 + 镜像能不能撑起一个「无云」会话。
     let cm0: SessionMeta | null = null, cloudErr: unknown = null;
     try { cm0 = await fetchMeta(name); } catch (e) { cloudErr = e; }
     const prev = await readMeta(name);
@@ -410,7 +410,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
         if (closed) return;
         const { i0, i1 } = clampRange(offset, length);
         for (let i = i0; i <= i1; i++) {
-          if (streaming) await pinChunk(i);                                                   // 0.19：没拉到如实 reject
+          if (streaming) await pinChunk(i);                                                   // 2.0.0：没拉到如实 reject
           else { try { await pinChunk(i); } catch (e) { reportStoreError(e, "log"); } }      // 0.18：best-effort，失败只 log
         }
       },

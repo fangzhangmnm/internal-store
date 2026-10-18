@@ -110,7 +110,7 @@ function _rangeHeader(offset: number | null, length: number): string {
     : `bytes=${offset}-${offset + length - 1}`;
 }
 
-/** 0.19：一片 byte-range 的旁路——signal = 调度层中止（对冲输了 / 投机卡住让道），onProgress = 累计到了多少字节（卡住判定靠它）。
+/** 2.0.0：一片 byte-range 的旁路——signal = 调度层中止（对冲输了 / 投机卡住让道），onProgress = 累计到了多少字节（卡住判定靠它）。
  *  形状同 chunk-scheduler.ts 的 RangeOpts（graph 不 import 上层类型）。 */
 export interface RangeFetchOpts { signal?: AbortSignal; onProgress?: (bytesSoFar: number) => void }
 
@@ -254,7 +254,7 @@ async function downloadItemRange(itemId: string, offset: number | null, length: 
     _dlUrlCache.set(itemId, url);
     try { return await downloadRangeFromUrl(url, offset, length, opts); }
     catch (e) {
-      if (opts.signal?.aborted) throw e;                 // 0.19：是调度层中止的（对冲输了 / 卡住让道）→ 不重申请、不重试
+      if (opts.signal?.aborted) throw e;                 // 2.0.0：是调度层中止的（对冲输了 / 卡住让道）→ 不重申请、不重试
       _dlUrlCache.delete(itemId);
       url = await getDownloadUrl(itemId);
       if (url) { _dlUrlCache.set(itemId, url); return await downloadRangeFromUrl(url, offset, length, opts); }

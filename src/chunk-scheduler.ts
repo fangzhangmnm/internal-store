@@ -1,6 +1,6 @@
 // ⚠ store 内部深模块。app 不直接 import——经 createStore 的 file().openStream()。
 //
-// chunk-scheduler（0.19，2026-10-17 Claude Fable 5.1；user 10-17「你现在是fable了，开始做涉及库的改动」）
+// chunk-scheduler（2.0.0，2026-10-17 Claude Fable 5.1；user 10-17「你现在是fable了，开始做涉及库的改动」）
 //   「一个 key（某文件某分片）拿一次字节」的全部调度政策。download-session 把 staging（preflight）、云端、镜像装进来；
 //   这里不认识文件、不碰存储、不知道字节是什么。
 //

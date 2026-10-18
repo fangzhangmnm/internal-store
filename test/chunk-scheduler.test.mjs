@@ -1,4 +1,4 @@
-// chunk-scheduler（0.19，2026-10-17 Claude Fable 5.1）—— 「一个 key 拿一次字节」的调度政策。
+// chunk-scheduler（2.0.0，2026-10-17 Claude Fable 5.1）—— 「一个 key 拿一次字节」的调度政策。
 // 验：
 //   · 互等修了：pin 在等让路、播放加入它的 job、先前的播放完成 → 这片照样发出去、读完成（0.18 永远不醒，10-17 探针坐实）。
 //   · 车道：lanes=1 同刻投机 ≤ 1（= 0.18）；lanes=3 ≤ 3；播放不占车道、不限。
@@ -24,7 +24,7 @@ function source(origin, data, gate = async () => {}) {
   };
 }
 
-describe("chunk-scheduler · 0.19 互等 / 让路 / 车道", () => {
+describe("chunk-scheduler · 2.0.0 互等 / 让路 / 车道", () => {
   it("★互等修了：pin 等让路时播放加入它的 job，先前的播放完成 → 这片发出、读完成", async () => {
     const s = createChunkScheduler();
     let releaseA;
@@ -74,7 +74,7 @@ describe("chunk-scheduler · 0.19 互等 / 让路 / 车道", () => {
   });
 });
 
-describe("chunk-scheduler · 0.19 卡住判定", () => {
+describe("chunk-scheduler · 2.0.0 卡住判定", () => {
   it("投机卡住 → 中止让道 → StreamStallError；车道还回来（下一片能开）", async () => {
     const s = createChunkScheduler({ lanes: 1, stallMs: 30 });
     const stuck = { origin: "cloud", fetch: hang };
@@ -134,7 +134,7 @@ describe("chunk-scheduler · 0.19 卡住判定", () => {
   });
 });
 
-describe("chunk-scheduler · 0.19 来源回落 / arrived / status", () => {
+describe("chunk-scheduler · 2.0.0 来源回落 / arrived / status", () => {
   it("[0] 出错 → 换 [1]；都错 → 以最后的错失败", async () => {
     const s = createChunkScheduler();
     const bad = { origin: "mirror", fetch: async () => { throw new Error("mirror 500"); } };

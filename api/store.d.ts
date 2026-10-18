@@ -77,7 +77,7 @@ export declare interface CloudProvider {
     getApprootRef(): Promise<string>;
     /** 下载文件内容。 */
     download(ref: string): Promise<Blob>;
-    /** byte-range 下载。opts（0.19，可选，provider 可忽略）：signal = 调度层中止；onProgress = 累计到了多少字节（卡住判定）。 */
+    /** byte-range 下载。opts（2.0.0，可选，provider 可忽略）：signal = 调度层中止；onProgress = 累计到了多少字节（卡住判定）。 */
     downloadRange(ref: string, offset: number, length: number, opts?: RangeOpts): Promise<Uint8Array | ArrayBuffer | Blob>;
     /** 上传文件字节。 */
     upload(path: string, blob: Bytes | Blob, opts?: UploadOpts): Promise<CloudItem>;
@@ -533,7 +533,7 @@ export declare interface FileStream {
     keep(opts?: {
         onProgress?: (doneBytes: number, totalBytes: number) => void;
     }): Promise<void>;
-    /** 0.19：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
+    /** 2.0.0：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
      *  本地面恒为零。 */
     status(): StreamStatus;
     /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
@@ -629,7 +629,7 @@ export declare interface GraphTransport {
     getItemByPath(path: string): Promise<RawGraphItem | null>;
     /** 下载文件内容。 */
     downloadItemBlob(itemId: string): Promise<Blob>;
-    /** byte-range 下载；offset=null 取末尾 length 字节。opts（0.19，可选）：中止 + 进度——transport 可忽略。 */
+    /** byte-range 下载；offset=null 取末尾 length 字节。opts（2.0.0，可选）：中止 + 进度——transport 可忽略。 */
     downloadItemRange(itemId: string, offset: number | null, length: number, opts?: RangeOpts): Promise<ArrayBuffer>;
     /** 上传到 approot 相对路径。 */
     uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: {
@@ -1279,7 +1279,7 @@ export declare interface StoreConfig {
     stagingChunkBytes?: number;
     /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
     stagingCapBytes?: number;
-    /** 0.19：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
+    /** 2.0.0：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
      *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
      *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
     streaming?: StreamingOptions;
@@ -1374,7 +1374,7 @@ export declare interface StoreUI {
     confirmReplay?: (count: number) => Promise<boolean>;
 }
 
-/** 0.19 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
+/** 2.0.0 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
 export declare interface StreamingOptions {
     /** 投机（prefetch / keep 补缺口）同时在飞的分片数，全 store 一个调度域。不传 = 1（= 0.18 的 pin 严格串行）。播放不限、不占车道。 */
     lanes?: number;

@@ -142,7 +142,7 @@ export interface StoreConfig {
   stagingChunkBytes?: number;
   /** staging 暂存区全局字节上限（默认 256MiB；超限 FIFO 清最旧整组——scratch 兜底，非缓存治理）。 */
   stagingCapBytes?: number;
-  /** 0.19：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
+  /** 2.0.0：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
    *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
    *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
   streaming?: StreamingOptions;
@@ -241,7 +241,7 @@ export interface FileStream {
   prefetch(offset: number, length: number): Promise<void>;
   /** 升格正式本地副本（= keepOffline：只补缺口 + 进度）。本地面 no-op。升格后请重开 openStream。 */
   keep(opts?: { onProgress?: (doneBytes: number, totalBytes: number) => void }): Promise<void>;
-  /** 0.19：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
+  /** 2.0.0：零网络快照——在飞几片（播放 / 投机）、最老的等了多久、几片判定卡住、镜像状态。状态条用（user 10-17「有pending卡着」比实时 KB 要紧）。
    *  本地面恒为零。 */
   status(): StreamStatus;
   /** 关会话（staging 分片留着，受全局 cap 兜底——先播后 pin 不重下）。 */
@@ -477,7 +477,7 @@ export function createStore(config: StoreConfig) {
     }),
     chunkSize: config.stagingChunkBytes,
     capBytes: config.stagingCapBytes,
-    streaming: config.streaming,   // 0.19 行为开关（不传 = 0.18）
+    streaming: config.streaming,   // 2.0.0 行为开关（不传 = 0.18）
   });
 
   // ── folder 本地登记（离线建空夹）：pending = 建了但还没确认上云的空文件夹。──────────────

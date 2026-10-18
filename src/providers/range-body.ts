@@ -1,4 +1,4 @@
-// byte-range 请求的两件小工具（0.19，2026-10-17 Claude Fable 5.1）：graph.ts 和 mirror.ts 共用，不 import 上层。
+// byte-range 请求的两件小工具（2.0.0，2026-10-17 Claude Fable 5.1）：graph.ts 和 mirror.ts 共用，不 import 上层。
 //   readBody：按流读响应体、每到一段报一次累计字节（卡住判定靠它）；没给 onProgress / 环境没有流 → 一口 arrayBuffer()。
 //   anySignal：把「传输层超时」和「调度层中止」两个信号合成一个（AbortSignal.any 老浏览器没有，手拼）。
 

@@ -67,7 +67,7 @@ export type { UploadReplayPolicy } from "./upload-queue.ts";
 export type { StagingCoverage } from "./download-session.ts";
 /** staging 分区注入契约（StoreConfig.staging；prod 默认 blob-partition 的 staging 分区，测试注内存替身）。 */
 export type { StagingStore } from "./download-session.ts";
-// 0.19 流式面开关（createStore({ streaming })，默认关 = 0.18）：车道 / 卡住判定 / 镜像；FileStream.status() 的形状；镜像契约。
+// 2.0.0 流式面开关（createStore({ streaming })，默认关 = 0.18）：车道 / 卡住判定 / 镜像；FileStream.status() 的形状；镜像契约。
 export type { StreamingOptions, StreamStatus, SchedulerStatus, MirrorSource, MirrorHandle, MirrorState, RangeOpts } from "./download-session.ts";
 export { StreamStallError } from "./download-session.ts";   // 投机的一片卡住又没别的来源 → prefetch 以它 reject（预取方按 name 辨认）
 /** 镜像（替代来源）两个现成实现：这台设备上的文件（File API）/ 任何支持 Range 的 HTTP 主机（局域网 / Tailscale）。身份仍归云端 item，字节抽样和云端比。 */

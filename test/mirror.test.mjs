@@ -1,4 +1,4 @@
-// mirror（0.19，2026-10-17 Claude Fable 5.1）—— 替代来源的两个现成实现。
+// mirror（2.0.0，2026-10-17 Claude Fable 5.1）—— 替代来源的两个现成实现。
 // 验：
 //   · HTTP 镜像 open：Range 0-0 探针 206 且 Content-Range 总长 == 尺寸 → 句柄；200（不支持 Range）/ 404 / 总长不等 / 够不着 → null（不抛）。
 //   · HTTP 镜像 read：206 → 字节、按流报进度；非 206 / 长度不对 → 抛；signal 中止 → 抛。
@@ -26,7 +26,7 @@ function fakeFetch({ total = 1000, mode = "ok", onCall = () => {} } = {}) {
   };
 }
 
-describe("mirror · 0.19 HTTP 镜像", () => {
+describe("mirror · 2.0.0 HTTP 镜像", () => {
   it("open：探针 206 + 总长相等 → 句柄；200 / 404 / 总长不等 / 网络错 → null", async () => {
     const url = (name) => `https://pc.tailnet.ts.net/assets/${encodeURIComponent(name)}`;
     assert(await createHttpMirror("pc", url, { fetch: fakeFetch() }).open("a.pack", 1000), "有这份");
@@ -67,7 +67,7 @@ describe("mirror · 0.19 HTTP 镜像", () => {
   });
 });
 
-describe("mirror · 0.19 File 镜像", () => {
+describe("mirror · 2.0.0 File 镜像", () => {
   it("尺寸相等 → slice 字节对；不等 / 没有 → null", async () => {
     const file = new Blob([data]);
     const m = createFileMirror("本机", (name) => (name === "a.pack" ? file : null));

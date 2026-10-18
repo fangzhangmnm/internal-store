@@ -16,7 +16,7 @@ export interface GraphTransport {
   getItemByPath(path: string): Promise<RawGraphItem | null>;
   /** 下载文件内容。 */
   downloadItemBlob(itemId: string): Promise<Blob>;
-  /** byte-range 下载；offset=null 取末尾 length 字节。opts（0.19，可选）：中止 + 进度——transport 可忽略。 */
+  /** byte-range 下载；offset=null 取末尾 length 字节。opts（2.0.0，可选）：中止 + 进度——transport 可忽略。 */
   downloadItemRange(itemId: string, offset: number | null, length: number, opts?: RangeOpts): Promise<ArrayBuffer>;
   /** 上传到 approot 相对路径。 */
   uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null; onProgress?: (done: number, total: number) => void }): Promise<RawGraphItem | null>;
