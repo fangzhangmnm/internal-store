@@ -144,7 +144,8 @@ export interface StoreConfig {
   stagingCapBytes?: number;
   /** 2.0.0：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
    *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
-   *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
+   *  只影响资源那台引擎（openStream / keepOffline）：作品那台（save / push / 冲突面）按构造不受它影响（两台互不 import，test/engine-boundary-guard 守着）。
+   *  任何 app 流三等资源（电台的音乐、参考窗的视频、KudsRocket 的大文件）都可以传。详 download-session.ts 头注释。 */
   streaming?: StreamingOptions;
   /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
   getPassword?: (name: string) => string | null;

@@ -19,6 +19,7 @@ import "./download-session.test.mjs";
 import "./chunk-scheduler.test.mjs";   // 2026-10-17 2.0.0：分片调度（互等修了 / 车道 / 卡住对冲 / 让道 / 来源回落）
 import "./mirror.test.mjs";            // 2026-10-17 2.0.0：替代来源（本机文件 / HTTP 镜像）
 import "./graph-range-progress.test.ts";   // 2026-10-17 2.0.0：range 按流报进度 + 中止不重试
+import "./engine-boundary-guard.test.mjs";   // 2026-10-17 2.0.0：两台引擎互不 import、只共用底座（结构守卫）
 import "./read-only-files.test.mjs";
 import "./sw-gateway.test.mjs";
 import "./store-cloud-naming.test.ts";

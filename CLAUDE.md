@@ -13,3 +13,5 @@
   ① 传输层 / 重试这类**行为**变更一律做成 `createOneDriveProvider({ transport })` / `createStore({ pushRetry })` 这样的显式开关，默认 = 变更前的行为；
   ② KudsRocket 这种大文件高频消费方专属的东西（流式上传、暂存区、将来的 delta 列举 / 索引文件）做独立模块或独立包，艺术类 app 永不 import；
   ③ 每个版本的发版说明（ai-docs/<日期>-<版本>-*.md）单列「行为差异」，艺术类 app 升级时逐条过、不默认接受。钉版本是现有的隔离墙（WeebPaint 钉 0.13.0）。edited by Claude Fable 5.1 2026-10-15
+  ②′（2026-10-17 深夜，user「艺术类 app 不传 streaming 也许需要视频参考呢」；edited by Claude Fable 5.1）：② 说的是**作品那台引擎不为大文件消费方改行为**，不是艺术类 app 不许用流式面——流式面是三等资源的通用面（电台的音乐、参考窗的视频、KudsRocket 的大文件），任何 app 都可以开 `createStore({ streaming })`。
+  两台引擎（作品：cloud-sync / push / local-head / safe-resolve…；资源：download-session / chunk-scheduler / mirror / sw）**互不 import、只共用底座**，`test/engine-boundary-guard.test.mjs` 机械执法；是否物理拆成 cloud / store / stream 三包（= 3.0.0）未定，见 `ai-docs/20261017-2.0.0-streaming-lanes-stall-mirrors.md`「为什么是 major」。

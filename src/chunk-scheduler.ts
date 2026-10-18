@@ -16,8 +16,8 @@
 //   · 字节到了就交 arrived()（落 staging）——包括输了的那路和放弃后晚到的：拉回来的字节不浪费。job 留在表里直到 arrived 做完，
 //     其间同片的读加入它直接拿字节，不会扑空 staging 再拉一次。
 
-/** 一路拉取的旁路：signal = 中止（对冲输了 / 卡住让道）；onProgress = 到了多少字节（卡住判定靠它重置）。 */
-export interface RangeOpts { signal?: AbortSignal; onProgress?: (bytesSoFar: number) => void }
+import type { RangeOpts } from "./types.ts";
+export type { RangeOpts } from "./types.ts";
 export type ChunkPriority = "playback" | "pin";
 /** 一个来源拉这一片的一路。origin 只是记账用的名字（"cloud" / "mirror"）。 */
 export interface ChunkSource { origin: string; fetch: (opts: RangeOpts) => Promise<Uint8Array> }

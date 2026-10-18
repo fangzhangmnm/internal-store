@@ -3,8 +3,9 @@
 // 设计原则：把「字节边界」写死——谁吃 Bytes、谁吃/出 Blob，一眼可辨、错配即编译错。
 
 import type { Bytes } from "./substrate.ts";
-import type { RangeOpts } from "./chunk-scheduler.ts";
-export type { RangeOpts } from "./chunk-scheduler.ts";
+/** 一片 byte-range 的旁路（2.0.0）：signal = 调度层中止（对冲输了 / 投机卡住让道）；onProgress = 累计到了多少字节（卡住判定靠它重置）。
+ *  住在底座：传输层（graph / folder / mirror）和调度层都认它，谁也不 import 谁。 */
+export interface RangeOpts { signal?: AbortSignal; onProgress?: (bytesSoFar: number) => void }
 /** 落盘/上传的字节正规形态（= Uint8Array）；toU8 把任意来源收敛到它。 */
 export type { Bytes } from "./substrate.ts";
 

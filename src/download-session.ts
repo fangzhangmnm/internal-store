@@ -30,7 +30,8 @@
 import { reportStoreError } from "./error-handling.ts";
 import { createChunkScheduler, type ChunkSource, type RangeOpts, type SchedulerStatus } from "./chunk-scheduler.ts";
 export { StreamStallError } from "./chunk-scheduler.ts";
-export type { RangeOpts, SchedulerStatus } from "./chunk-scheduler.ts";
+export type { SchedulerStatus } from "./chunk-scheduler.ts";
+export type { RangeOpts } from "./types.ts";
 
 /** staging 分区的注入端口（prod = blob-partition 的 "staging" 分区；测试 = 内存 map）。 */
 export interface StagingStore {

@@ -928,7 +928,8 @@ export declare interface PushResult {
 /** 纯查询（零 consent、零弹窗、任何时刻可调）。异常/缺环境 → supported:false（诚实降级，不谎报已持久）。 */
 export declare function queryStoragePersistence(sm?: StorageManagerLike | null): Promise<PersistenceState>;
 
-/** 一路拉取的旁路：signal = 中止（对冲输了 / 卡住让道）；onProgress = 到了多少字节（卡住判定靠它重置）。 */
+/** 一片 byte-range 的旁路（2.0.0）：signal = 调度层中止（对冲输了 / 投机卡住让道）；onProgress = 累计到了多少字节（卡住判定靠它重置）。
+ *  住在底座：传输层（graph / folder / mirror）和调度层都认它，谁也不 import 谁。 */
 export declare interface RangeOpts {
     signal?: AbortSignal;
     onProgress?: (bytesSoFar: number) => void;
@@ -1281,7 +1282,8 @@ export declare interface StoreConfig {
     stagingCapBytes?: number;
     /** 2.0.0：流式面（openStream / keepOffline）的行为开关——投机车道数、卡住判定（播放对冲 / 投机让道）、替代来源（镜像）；
      *  传了 prefetch() 失败也如实 reject。**不传 = 0.18 行为**（pin 严格串行、不判卡住、prefetch 失败只 log）。
-     *  大文件高频消费方（KudsRocket）专属；艺术类 app 不传。详 download-session.ts 头注释。 */
+     *  只影响资源那台引擎（openStream / keepOffline）：作品那台（save / push / 冲突面）按构造不受它影响（两台互不 import，test/engine-boundary-guard 守着）。
+     *  任何 app 流三等资源（电台的音乐、参考窗的视频、KudsRocket 的大文件）都可以传。详 download-session.ts 头注释。 */
     streaming?: StreamingOptions;
     /** 旧顶层密码源（向后兼容；优先用 crypt.getPassword）。 */
     getPassword?: (name: string) => string | null;
