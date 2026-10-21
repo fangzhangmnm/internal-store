@@ -122,6 +122,7 @@ export declare interface CloudSync {
         baseEtag?: string | null;
         encrypted?: boolean;
         onProgress?: (done: number, total: number) => void;
+        session?: UploadSessionPort;
     }): Promise<PushResult>;
     /** 0.17.0：流式新建（只新建：云端已有同名 → CloudNameCollisionError，一个字节不传）。不经 seal、不碰本地缓存 / 谱系：
      *  成功后它是一个纯云端文件（下次 open 走 acquire）。provider 没有 uploadStream → 抛。 */
@@ -633,6 +634,7 @@ export declare interface GraphTransport {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
         onProgress?: (done: number, total: number) => void;
+        session?: UploadSessionPort;
     }): Promise<RawGraphItem | null>;
     /** 0.17.0 可选：流式上传（上传会话逐块传；整份不进内存）。 */
     uploadStreamToApproot?(path: string, source: ByteSource, contentType?: string, opts?: {
@@ -1492,6 +1494,8 @@ export declare type TryMoveResult = {
 
 /** provider.upload 的选项。 */
 export declare interface UploadOpts {
+    /** F-54：上传会话落盘（只对分块上传有意义；不给 = 2.1.3 行为）。 */
+    session?: UploadSessionPort;
     /** 内容 MIME 类型。 */
     contentType?: string;
     /** If-Match etag。 */
@@ -1504,6 +1508,27 @@ export declare interface UploadOpts {
 
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export declare type UploadReplayPolicy = "auto" | "ask" | "manual";
+
+declare interface UploadSessionPort {
+    /** 这次要传的字节的指纹（provider 拿它和记录比，不等 = 不是同一份 → 不续）。 */
+    readonly token: string;
+    load(): Promise<UploadSessionRecord | null>;
+    save(rec: UploadSessionRecord): Promise<void>;
+    clear(): Promise<void>;
+}
+
+/** F-54（2026-10-21）：上传会话落盘的记忆面（store 用 kv 实现、按文件绑定后递给 provider）。Graph 分块上传的会话 URL 以前只在内存——
+ *  刷新 / iOS 杀页 = 整份从头再传。有了它：开会话时记一条，下次推同一份字节（token 相等）先问会话传到哪、从那里接着传。
+ *  token = 正在上传的这份字节的 sha256（只用来认「还是不是同一份字节」，不是文件身份——身份永远是路径）；
+ *  会话完成 / 412 / 不可重试错 → clear。provider 对 kv 零感知。 */
+declare interface UploadSessionRecord {
+    uploadUrl: string;
+    total: number;
+    eTag: string | null;
+    token: string;
+    createdAt: number;
+    expiresAt: number | null;
+}
 
 /** 检查表：格式、重复、和加密后缀的歧义。有问题 → 抛（createStore 当场失败，绝不带着一张会认错文件的表跑起来）。 */
 export declare function validateDocKinds(docKinds: readonly DocKind[]): void;

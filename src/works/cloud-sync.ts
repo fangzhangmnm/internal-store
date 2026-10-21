@@ -15,7 +15,7 @@ import { withStemTail, type Identifiers } from "../base/identifiers.ts";   // �
 import { isHidden } from "../base/is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import { CloudStaleRefError } from "../base/errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
-import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult } from "../base/types.ts";
+import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult, UploadSessionPort } from "../base/types.ts";
 
 export class CloudConflictError extends Error {
   sessionName: string;
@@ -182,7 +182,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     } catch (e) { reportStoreError(e, "log"); return "unknown"; }        // 拉尾失败 → 未知，保持 dirty 下次重试（不静默认领、也不误报 collision）
   }
 
-  async function push(name: string, bytes: Bytes | Blob, opts: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void } = {}): Promise<PushResult> {
+  async function push(name: string, bytes: Bytes | Blob, opts: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void; session?: UploadSessionPort } = {}): Promise<PushResult> {
     // 目标扩展名按**字节内容**走（caller——store——按尾部探测传 encrypted；加密=容器=.zip 名实相符）。
     const enc = !!(encFileName && opts.encrypted);
     const path = enc ? encFileName!(name) : fileName(name);
@@ -209,7 +209,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     //   → 绝不无条件覆盖云端已存在的同名文件（否则静默吃掉别人/旧版的同名作品 = 数据丢失，path-身份红线）。
     let item: CloudItem | null = null;
     try {
-      item = await provider.upload(path, bytes, { contentType, eTag: baseEtag, conflictBehavior: baseEtag ? "replace" : "fail", onProgress: opts.onProgress });
+      item = await provider.upload(path, bytes, { contentType, eTag: baseEtag, conflictBehavior: baseEtag ? "replace" : "fail", onProgress: opts.onProgress, session: opts.session });   // F-54：上传会话落盘
     } catch (e) {
       const status = (e as { status?: number })?.status;
       if (status === 412) throw new CloudConflictError(`云端已有更新版本 "${name}"`, name);

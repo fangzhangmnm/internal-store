@@ -200,6 +200,8 @@ export interface UploadOpts {
     contentType?: string;
     eTag?: string | null;
     onProgress?: (done: number, total: number) => void;
+    // Warning: (ae-forgotten-export) The symbol "UploadSessionPort" needs to be exported by the entry point index.d.ts
+    session?: UploadSessionPort;
 }
 
 // Warnings were encountered during analysis:

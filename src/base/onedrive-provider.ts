@@ -4,7 +4,7 @@
 //   graphToCloudProvider ∘ graphFromProvider ≈ 恒等 → 完整 Mock 验适配正确性。
 // 完整的「config 驱动 OneDriveProvider」在 providers/index.js（wire auth+graph+本适配器）。
 
-import type { CloudItem, CloudProvider, UploadOpts, MoveOpts, Bytes, ByteSource, RangeOpts } from "./types.ts";
+import type { CloudItem, CloudProvider, UploadOpts, MoveOpts, Bytes, ByteSource, RangeOpts , UploadSessionPort } from "./types.ts";
 import { deleteEmptyFolderVia } from "./folder-delete.ts";
 
 /** OneDrive Graph transport 契约（graphToCloudProvider 消费的最小面）。
@@ -19,7 +19,7 @@ export interface GraphTransport {
   /** byte-range 下载；offset=null 取末尾 length 字节。opts（2.0.0，可选）：中止 + 进度——transport 可忽略。 */
   downloadItemRange(itemId: string, offset: number | null, length: number, opts?: RangeOpts): Promise<ArrayBuffer>;
   /** 上传到 approot 相对路径。 */
-  uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null; onProgress?: (done: number, total: number) => void }): Promise<RawGraphItem | null>;
+  uploadFileToApproot(path: string, blob: Blob, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null; onProgress?: (done: number, total: number) => void; session?: UploadSessionPort }): Promise<RawGraphItem | null>;
   /** 0.17.0 可选：流式上传（上传会话逐块传；整份不进内存）。 */
   uploadStreamToApproot?(path: string, source: ByteSource, contentType?: string, opts?: { conflictBehavior?: "replace" | "fail" | "rename"; eTag?: string | null; onProgress?: (done: number, total: number) => void }): Promise<RawGraphItem | null>;
   /** 硬删 item。 */
@@ -89,9 +89,9 @@ export function graphToCloudProvider(graph: GraphTransport): CloudProvider {
     // graph.js 是 Blob 原生（按 .size 选简单/分块路径、用 .slice 切块）；lib 把字节归一成 Uint8Array。
     // 必须在这道接缝转回 Blob——Uint8Array.size===undefined → undefined<=4MB 为 false → 永远走分块、
     // while(0<undefined) 一个 chunk 都不传 → 上传 0 字节占位还回 etag（postmortem 2026-06-05 根因）。
-    upload: (path: string, blob: Bytes | Blob, { contentType = "application/octet-stream", eTag = null, conflictBehavior = "replace", onProgress }: UploadOpts = {}) => {
+    upload: (path: string, blob: Bytes | Blob, { contentType = "application/octet-stream", eTag = null, conflictBehavior = "replace", onProgress, session }: UploadOpts = {}) => {
       const body = blob instanceof Blob ? blob : new Blob([blob], { type: contentType });
-      return graph.uploadFileToApproot(path, body, contentType, { conflictBehavior, eTag, onProgress }).then(toItem) as Promise<CloudItem>;
+      return graph.uploadFileToApproot(path, body, contentType, { conflictBehavior, eTag, onProgress, session }).then(toItem) as Promise<CloudItem>;
     },
     ...(graph.uploadStreamToApproot ? {
       uploadStream: (path: string, source: ByteSource, { contentType = "application/octet-stream", eTag = null, conflictBehavior = "fail", onProgress }: UploadOpts = {}) =>

@@ -47,6 +47,7 @@ interface GraphListResponse {
 interface GraphUploadSession {
   uploadUrl: string;
   nextExpectedRanges?: string[];
+  expirationDateTime?: string;
 }
 
 // ── 请求超时（0.17.1，2026-10-15 Claude Fable 5.1）──
@@ -136,9 +137,14 @@ interface UploadFileOpts {
   eTag?: string | null;
   /** 0.17.0：上传进度（done / total 字节）。 */
   onProgress?: (done: number, total: number) => void;
+  /** F-54：上传会话落盘（分块路径用）。 */
+  session?: UploadSessionPort;
 }
 /** 0.17.0：流式上传的字节来源（types.ts ByteSource 同形；graph 不 import 上层类型）。 */
 interface ChunkSource { readonly size: number; read(offset: number, length: number): Promise<Uint8Array> }
+/** F-54：上传会话记忆面（types.ts UploadSessionPort 同形；graph 不 import 上层类型）。 */
+type UploadSessionRec = { uploadUrl: string; total: number; eTag: string | null; token: string; createdAt: number; expiresAt: number | null };
+interface UploadSessionPort { readonly token: string; load(): Promise<UploadSessionRec | null>; save(rec: UploadSessionRec): Promise<void>; clear(): Promise<void> }
 //   trash / restore 用 "fail" 保护数据，caller 自己 fallback 改名
 interface MoveItemOpts {
   eTag?: string | null;
@@ -276,7 +282,7 @@ async function getDownloadUrl(itemId: string): Promise<string | null> {
 
 // ----- 上传 -----
 // path 相对 approot。eTag 给 If-Match（拿冲突检测）。conflictBehavior:
-async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null, onProgress }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
+async function uploadFileToApproot(path: string, blob: Blob, contentType = "application/octet-stream", { conflictBehavior = "replace", eTag = null, onProgress, session }: UploadFileOpts = {}): Promise<GraphDriveItem | null> {
   // 【运行时护栏，user 2026-08-25 拍板「全库以后只能用 If-Match」】盲覆盖在最深处不可表示：
   //   replace 必须带 If-Match eTag（CAS 覆盖）；新建走 conflictBehavior:"fail"（不存在才准建，CAS 等价物）。
   //   配套语法检测 = test/ifmatch-guard.test.ts（扫源码裸 replace）。深模块强制，UI/调用方守不守都拦得住。
@@ -294,7 +300,7 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
     return r.json() as Promise<GraphDriveItem>;
   }
   // 大文件分块：Blob 当「按 slice 取块」的来源（分块路径和流式上传共用一条）
-  return uploadChunked(path, { size: blob.size, read: async (o, n) => new Uint8Array(await blob.slice(o, o + n).arrayBuffer()) }, conflictBehavior, eTag, onProgress);
+  return uploadChunked(path, { size: blob.size, read: async (o, n) => new Uint8Array(await blob.slice(o, o + n).arrayBuffer()) }, conflictBehavior, eTag, onProgress, session);
 }
 
 /** 0.17.0：流式上传——永远走上传会话（哪怕很小），按 source.read 逐块取、逐块传；整份永不进内存。护栏同 uploadFileToApproot。 */
@@ -309,25 +315,53 @@ async function uploadStreamToApproot(path: string, source: ChunkSource, _content
 //     一次网络抖动不再整份重传（KudsRocket iPad 10-14：6.8 MB 快照第二块 Load failed 就从头来）。会话没了（404）→ 抛网络错，上层整份重试。
 //   · If-Match 只在 createUploadSession 时核；最后一块落地是无条件的 → 两台设备同时覆盖同一格时有一个「上传那几十秒」的窗口。
 //     现在提交最后一块前再 GET 一次 item 比 eTag：动了就撤会话、抛 412（上层翻成冲突面）。窗口缩到最后一块那几秒。
-async function uploadChunked(path: string, source: ChunkSource, conflictBehavior: string, eTag: string | null, onProgress?: (done: number, total: number) => void): Promise<GraphDriveItem | null> {
-  const sessR = await graphFetch(
-    "POST",
-    `/me/drive/special/approot:/${encodeApprootPath(path)}:/createUploadSession`,
-    {
-      body: {
-        item: {
-          "@microsoft.graph.conflictBehavior": conflictBehavior,
-          name: path.split("/").pop(),
-        },
-      },
-      headers: eTag ? { "If-Match": eTag } : undefined,
-    },
-  );
-  const { uploadUrl } = await sessR.json() as GraphUploadSession;
+// F-54（2026-10-21 Claude Fable 5.1，user「weebpaint 需要的后台传大文件优先」）：上传会话落盘。
+//   session（可选，store 按文件绑好递进来）记着「这份字节（token）的会话 URL」：开会话时 save；下次推同一份字节先 GET 会话问
+//   nextExpectedRanges、从那里接着传（刷新 / iOS 杀页 / 关机都不从零）；完成 / 412 / 不可重试错 → clear；会话没了（404 / 过期）→ clear + 重开。
+//   续上的会话**一律**提交前核 eTag（不看 verifyChunkedCommit 开关）：中间隔了多久不知道，云端可能被别的设备动过。
+async function uploadChunked(path: string, source: ChunkSource, conflictBehavior: string, eTag: string | null, onProgress?: (done: number, total: number) => void, session?: UploadSessionPort): Promise<GraphDriveItem | null> {
   const CHUNK = 5 * 1024 * 1024;
   const total = source.size;
   let offset = 0;
   let last: GraphDriveItem | null = null;
+  let uploadUrl: string | null = null;
+  let resumed = false;
+  if (session) {
+    const rec = await session.load().catch(() => null);
+    if (rec && rec.token === session.token && rec.total === total && rec.eTag === eTag && (rec.expiresAt == null || rec.expiresAt > Date.now())) {
+      try {
+        const st = await fetch(rec.uploadUrl, { signal: timed("meta") });
+        const j = st.ok ? (await st.json().catch(() => null) as GraphUploadSession | null) : null;
+        const next = j?.nextExpectedRanges?.[0]?.split("-")[0];
+        const at = next != null ? Number(next) : NaN;
+        if (st.ok && Number.isFinite(at) && at >= 0 && at <= total) { uploadUrl = rec.uploadUrl; offset = at; resumed = true; }
+      } catch (_) { /* 问不到：当没会话，下面重开 */ }
+    }
+    if (!uploadUrl && rec) await session.clear().catch(() => {});
+  }
+  if (!uploadUrl) {
+    const sessR = await graphFetch(
+      "POST",
+      `/me/drive/special/approot:/${encodeApprootPath(path)}:/createUploadSession`,
+      {
+        body: {
+          item: {
+            "@microsoft.graph.conflictBehavior": conflictBehavior,
+            name: path.split("/").pop(),
+          },
+        },
+        headers: eTag ? { "If-Match": eTag } : undefined,
+      },
+    );
+    const sess = await sessR.json() as GraphUploadSession;
+    uploadUrl = sess.uploadUrl;
+    if (session) {
+      const exp = sess.expirationDateTime ? Date.parse(sess.expirationDateTime) : NaN;
+      await session.save({ uploadUrl, total, eTag, token: session.token, createdAt: Date.now(), expiresAt: Number.isFinite(exp) ? exp : null }).catch(() => {});
+    }
+  }
+  const sessionUrl: string = uploadUrl;
+  const forget = (): Promise<void> => (session ? session.clear().catch(() => {}) : Promise.resolve());
   let failures = 0;   // 连续失败次数（成功一块就归零）
   // 问会话传到哪了；退避后返回下一块该从哪开始。会话没了 / 问不到 → 抛（上层按网络错整份重试）。
   const resumeFrom = async (why: string): Promise<number> => {
@@ -335,7 +369,7 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     if (failures > CHUNK_RETRY_MAX) throw new CloudNetworkError(`Graph chunked upload ${path}: gave up after ${CHUNK_RETRY_MAX} retries at ${offset}/${total} (${why})`);
     await graphSleep(chunkBackoffMs(failures));
     let st: Response;
-    try { st = await fetch(uploadUrl, { signal: timed("meta") }); }
+    try { st = await fetch(sessionUrl, { signal: timed("meta") }); }
     catch (e) { throw new CloudNetworkError(`Graph upload session status: network fetch failed (${String(e)})`, e); }
     if (!st.ok) throw new CloudNetworkError(`Graph upload session ${path}: gone (${st.status}) after ${why}`);
     const j = await st.json().catch(() => null) as GraphUploadSession | null;
@@ -344,14 +378,15 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     if (!Number.isFinite(at) || at < 0 || at > total) throw new CloudNetworkError(`Graph upload session ${path}: no usable nextExpectedRanges after ${why}`);
     return at;
   };
-  const cancelSession = async (): Promise<void> => { try { await fetch(uploadUrl, { method: "DELETE", signal: timed("meta") }); } catch (_) { /* best effort */ } };
-  onProgress?.(0, total);
+  const cancelSession = async (): Promise<void> => { try { await fetch(sessionUrl, { method: "DELETE", signal: timed("meta") }); } catch (_) { /* best effort */ } };
+  onProgress?.(offset, total);
   while (offset < total) {
     const end = Math.min(offset + CHUNK, total) - 1;
-    if (graphVerifyCommit && end === total - 1 && eTag) {   // 提交前核 eTag（显式开；见头注释）；查不到（网络）→ 抛，上层整份重试
+    if ((graphVerifyCommit || resumed) && end === total - 1 && eTag) {   // 提交前核 eTag（显式开；续上的会话一律核；见头注释）；查不到（网络）→ 抛，上层整份重试
       const cur = await getItemByPath(path);
       if (cur && cur.eTag && cur.eTag !== eTag) {
         await cancelSession();
+        await forget();
         const err: GraphError = new Error(`chunked upload ${path}: item changed during upload (If-Match ${eTag} ≠ ${cur.eTag})`);
         err.status = 412;
         throw err;
@@ -361,7 +396,7 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     if (chunk.length !== end - offset + 1) throw new Error(`[graph] chunk source short read at ${offset}: wanted ${end - offset + 1}, got ${chunk.length}`);
     let r: Response;
     try {
-      r = await fetch(uploadUrl, {
+      r = await fetch(sessionUrl, {
         method: "PUT",
         headers: {
           "Content-Length": String(chunk.length),
@@ -377,6 +412,7 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     }
     if (!r.ok && r.status !== 202) {
       if (graphChunkResume && (r.status === 429 || r.status === 416 || (r.status >= 500 && r.status <= 599))) { offset = await resumeFrom(`http ${r.status}`); continue; }
+      await forget();   // 4xx（412 / 409 / 404…）= 这条会话到头了，记忆不留
       const err: GraphError = new Error(`chunked upload failed ${r.status}`);
       err.status = r.status;
       throw err;
@@ -386,6 +422,7 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     offset = end + 1;
     onProgress?.(offset, total);
   }
+  await forget();   // 传完 = 会话用完
   return last;
 }
 

@@ -128,6 +128,7 @@ export interface CloudSync {
         baseEtag?: string | null;
         encrypted?: boolean;
         onProgress?: (done: number, total: number) => void;
+        session?: UploadSessionPort;
     }): Promise<PushResult>;
     pushStream(name: string, source: ByteSource, opts?: {
         onProgress?: (done: number, total: number) => void;
@@ -472,6 +473,7 @@ export interface GraphTransport {
         conflictBehavior?: "replace" | "fail" | "rename";
         eTag?: string | null;
         onProgress?: (done: number, total: number) => void;
+        session?: UploadSessionPort;
     }): Promise<RawGraphItem | null>;
     uploadStreamToApproot?(path: string, source: ByteSource, contentType?: string, opts?: {
         conflictBehavior?: "replace" | "fail" | "rename";
@@ -1021,6 +1023,7 @@ export interface UploadOpts {
     contentType?: string;
     eTag?: string | null;
     onProgress?: (done: number, total: number) => void;
+    session?: UploadSessionPort;
 }
 
 // @public
@@ -1076,6 +1079,10 @@ export interface ZipFile extends RawFile {
         source: "local" | "cloud";
     }): Promise<Blob | null>;
 }
+
+// Warnings were encountered during analysis:
+//
+// dist/base/types.d.ts:237:9 - (ae-forgotten-export) The symbol "UploadSessionPort" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

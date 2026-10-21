@@ -7,6 +7,7 @@ import { run } from "./runner.mjs";
 import "./onedrive-provider.contract.test.mjs";
 import "./enc-at-rest.test.mjs";
 import "./enc-rekey.test.mjs";        // 0.12.0 换密码不经明文（rekey）
+import "./enc-lost-response-heal.test.mjs";   // 2026-10-21 F-19：加密稿丢回执 → 本机密文重推自愈（save 推的 = 落本机那份）
 import "./substrate.test.mjs";
 import "./folder-merge.test.mjs";
 import "./folder-flow.test.mjs";
@@ -18,6 +19,8 @@ import "./dir-index-cache.test.mjs";
 import "./download-session.test.mjs";
 import "./chunk-scheduler.test.mjs";   // 2026-10-17 2.0.0：分片调度（互等修了 / 车道 / 卡住对冲 / 让道 / 来源回落）
 import "./mirror.test.mjs";            // 2026-10-17 2.0.0：替代来源（本机文件 / HTTP 镜像）
+import "./store-upload-session.test.mjs";   // 2026-10-21 F-54：createStore uploads.resumable → 记忆面（sha256 token）递给 provider
+import "./graph-upload-session-resume.test.ts";   // 2026-10-21 F-54：上传会话落盘（记忆面 → 续传 / 重开 / 412 清）
 import "./graph-range-progress.test.ts";   // 2026-10-17 2.0.0：range 按流报进度 + 中止不重试
 import "./engine-boundary-guard.test.mjs";   // 2026-10-17 2.0.0：两台引擎互不 import、只共用底座（结构守卫）
 import "./doc-tiers.test.ts";   // 2026-10-17 2.1.0：docKinds[].tier（一等作品 / 二等自动备份 / 三等资源在 API 层表达；stem 形分行；每种自己的 validate）

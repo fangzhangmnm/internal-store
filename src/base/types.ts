@@ -51,8 +51,22 @@ export interface CloudItem {
   "@microsoft.graph.downloadUrl"?: string;
 }
 
+/** F-54（2026-10-21）：上传会话落盘的记忆面（store 用 kv 实现、按文件绑定后递给 provider）。Graph 分块上传的会话 URL 以前只在内存——
+ *  刷新 / iOS 杀页 = 整份从头再传。有了它：开会话时记一条，下次推同一份字节（token 相等）先问会话传到哪、从那里接着传。
+ *  token = 正在上传的这份字节的 sha256（只用来认「还是不是同一份字节」，不是文件身份——身份永远是路径）；
+ *  会话完成 / 412 / 不可重试错 → clear。provider 对 kv 零感知。 */
+export interface UploadSessionRecord { uploadUrl: string; total: number; eTag: string | null; token: string; createdAt: number; expiresAt: number | null }
+export interface UploadSessionPort {
+  /** 这次要传的字节的指纹（provider 拿它和记录比，不等 = 不是同一份 → 不续）。 */
+  readonly token: string;
+  load(): Promise<UploadSessionRecord | null>;
+  save(rec: UploadSessionRecord): Promise<void>;
+  clear(): Promise<void>;
+}
 /** provider.upload 的选项。 */
 export interface UploadOpts {
+  /** F-54：上传会话落盘（只对分块上传有意义；不给 = 2.1.3 行为）。 */
+  session?: UploadSessionPort;
   /** 内容 MIME 类型。 */
   contentType?: string;
   /** If-Match etag。 */
@@ -225,7 +239,7 @@ export interface WeakOverrideResult {
 /** cloud-sync 暴露给 store/app 的面（dirty/etag 状态 + push/pull/list/trash 等）。 */
 export interface CloudSync {
   /** 推字节上云。opts.encrypted：字节是加密容器（ADR-0012）→ 落 encFileName（.zip）路径；未配 encFileName 时忽略。 */
-  push(name: string, bytes: Bytes | Blob, opts?: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void }): Promise<PushResult>;
+  push(name: string, bytes: Bytes | Blob, opts?: { baseEtag?: string | null; encrypted?: boolean; onProgress?: (done: number, total: number) => void; session?: UploadSessionPort }): Promise<PushResult>;
   /** 0.17.0：流式新建（只新建：云端已有同名 → CloudNameCollisionError，一个字节不传）。不经 seal、不碰本地缓存 / 谱系：
    *  成功后它是一个纯云端文件（下次 open 走 acquire）。provider 没有 uploadStream → 抛。 */
   pushStream(name: string, source: ByteSource, opts?: { onProgress?: (done: number, total: number) => void }): Promise<PushResult>;

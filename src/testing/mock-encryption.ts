@@ -16,17 +16,22 @@ function startsWithMagic(u8: Uint8Array): boolean {
   return true;
 }
 
+const NONCE_LEN = 8;
 export function createMockEncryption(): EncryptionPort {
   return {
     looksEncryptedContainer: async (b) => startsWithMagic(await toBytes(b)),
     async packContainer({ dataBytes, password }) {
       if (!password) throw new Error("cannot encrypt without a password");
       const pw = new TextEncoder().encode(password);
-      const out = new Uint8Array(MAGIC.length + 1 + pw.length + dataBytes.length);
+      // 2026-10-21（F-19）：真容器每次封包都带随机 salt / IV——同一明文两次封出来的字节不同。替身也要有这个性质，
+      //   不然「本机封一次、推云再封一次 → 两份不同密文 → 自愈比不出」这类 bug 在测试里永远复现不了。NONCE 字节在口令之后、数据之前。
+      const nonce = new Uint8Array(NONCE_LEN); for (let i = 0; i < NONCE_LEN; i++) nonce[i] = Math.floor(Math.random() * 256);
+      const out = new Uint8Array(MAGIC.length + 1 + pw.length + NONCE_LEN + dataBytes.length);
       out.set(MAGIC, 0);
       out[MAGIC.length] = pw.length;
       out.set(pw, MAGIC.length + 1);
-      out.set(dataBytes, MAGIC.length + 1 + pw.length);
+      out.set(nonce, MAGIC.length + 1 + pw.length);
+      out.set(dataBytes, MAGIC.length + 1 + pw.length + NONCE_LEN);
       return new Blob([out as unknown as BlobPart]);
     },
     async unpackContainer(b, password) {
@@ -39,7 +44,7 @@ export function createMockEncryption(): EncryptionPort {
         err.code = "WRONG_PASSWORD";
         throw err;
       }
-      return { dataBlob: new Blob([u8.slice(MAGIC.length + 1 + pwLen) as unknown as BlobPart], { type: "application/zip" }) };
+      return { dataBlob: new Blob([u8.slice(MAGIC.length + 1 + pwLen + NONCE_LEN) as unknown as BlobPart], { type: "application/zip" }) };
     },
     scanEncPeekFromEnd: () => null,                       // mock 无 peek：byte-range 缩略图路径不进本替身
     decryptPeek: async () => { throw new Error("mock encryption has no peek"); },

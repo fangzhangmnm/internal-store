@@ -7,7 +7,7 @@
 //   串行 = substrate.serialize（同 name 串行，B1）。
 import { toU8 } from "../base/substrate.ts";
 import type { BytesSource } from "../base/substrate.ts";
-import type { CloudSync } from "../base/types.ts";
+import type { CloudSync, UploadSessionPort } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
@@ -34,6 +34,8 @@ export interface PushCfg {
   seal: Pick<Seal, "sealForWrite" | "isContainer">;
   safeResolve: Pick<SafeResolve, "tryHeal" | "resolveConflict">;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+  /** F-54：给这次推的字节一个「上传会话记忆面」（createStore 开了 uploads.resumable 才有）。不给 = 2.1.3 行为。 */
+  sessionFor?: (name: string, bytes: Uint8Array) => Promise<UploadSessionPort | undefined>;
   editVersion: () => number;                  // 编辑游标（B2）；opts 可冻结覆盖
   busy?: Busy;
   maxAttempts?: number;
@@ -79,12 +81,13 @@ export function createPush(cfg: PushCfg) {
     // encode 出明文 → seal 按 at-rest 态包壳（调用方对加密零感知）。只编码+包壳一次，重试复用（B5 逐字节比对要相等）。
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);
+    const session = cfg.sessionFor ? await cfg.sessionFor(name, bytes) : undefined;   // F-54：同一份字节重试 / 下次开页都认得这条会话
     return busy("sync.pushing", async () => {
       let attempt = 0, lastErr: unknown;
       while (attempt < maxAttempts) {
         attempt++;
         try {
-          const { item } = await cloud.push(name, bytes, { baseEtag: ifMatch, encrypted: isEnc, onProgress });
+          const { item } = await cloud.push(name, bytes, { baseEtag: ifMatch, encrypted: isEnc, onProgress, session });
           // F0 红线：provider 没回 item/eTag = **落地未确认**（分块响应 / 代理吞 body / provider 违约）。
           //   绝不能当成功——onPushed(null,false) 会清 dirty 且 base 停在旧值，未推字节随后被 offload
           //   合法驱逐（MASTER §A「dirty 永不驱逐」直接失守），UI 还显示「已同步」。

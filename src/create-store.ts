@@ -995,7 +995,11 @@ export function createStore(config: StoreConfig) {
         //   mode:"new" 的首存不给 —— 那里撞名是「别的设备建了同名不同物」，抛错两份都留是 §A 身份行的保证。
         let pushed = false, reason: string | undefined, resolution: SaveResult["resolution"];
         try {
-          const r = await pushMod.push(name, { encode: () => plain, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress, loserBackup: tierOf(name) !== "auto-backup" });
+          // F-19（2026-10-21 Claude Fable 5.1）：推云的字节 = 刚落本机的那份 at-rest 字节（sealed），不再把 plain 交给 push 再封一次。
+          //   以前本机封一次、推云时 doPush 又封一次（两次随机 salt / IV）→ 同一篇加密稿本机和云端是两份不同密文 →
+          //   回执丢了之后重推（pushLocalBytes 推本机那份）撞 412、tryHeal 逐字节比不出 → 多弹一张面（安全模型 A3「库待修」）。
+          //   现在本机 == 云端逐字节，自愈能认领。明文文件 sealed === plain，零变化；seal 对已是容器的输入原样透传。
+          const r = await pushMod.push(name, { encode: () => sealed, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress, loserBackup: tierOf(name) !== "auto-backup" });
           // 只有拿到新 etag 的落地才算推上去了。deferred(落地未确认)/unresolved/cancelled 一律不算——
           //   把它们当成功正是 F0 红线要拦的那类「落地未确认当落地成功」。
           pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";

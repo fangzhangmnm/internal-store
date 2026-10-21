@@ -7,6 +7,8 @@
 
 ---
 
+> 2.1.4：`createStore({ uploads: { resumable: true } })` = 上传会话落盘（> 4 MB 的分块上传刷新 / 被杀后接着传；默认关；详 `ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md`）。
+
 ## 包与消费（@internal/store）
 
 - 消费：库仓 `npm run release` 出 `internal-store-<ver>.tgz` → 拷进消费方仓 `vendor-pkgs/` **并 commit** → `"@internal/store": "file:./vendor-pkgs/internal-store-<ver>.tgz"`。升级=显式换 tgz。永不 workspace:* 跨仓、永不 git 依赖（自包含不变量：克隆任一 app 仓断网能构建）。
