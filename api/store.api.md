@@ -894,6 +894,9 @@ export interface StoreConfig {
     stagingChunkBytes?: number;
     streaming?: StreamingOptions;
     ui: StoreUI;
+    uploads?: {
+        resumable?: boolean;
+    };
     validateAdopt: (plain: Blob) => boolean | Promise<boolean>;
 }
 
@@ -1029,6 +1032,33 @@ export interface UploadOpts {
 // @public
 export type UploadReplayPolicy = "auto" | "ask" | "manual";
 
+// @public (undocumented)
+export interface UploadSessionPort {
+    // (undocumented)
+    clear(): Promise<void>;
+    // (undocumented)
+    load(): Promise<UploadSessionRecord | null>;
+    // (undocumented)
+    save(rec: UploadSessionRecord): Promise<void>;
+    readonly token: string;
+}
+
+// @public
+export interface UploadSessionRecord {
+    // (undocumented)
+    createdAt: number;
+    // (undocumented)
+    eTag: string | null;
+    // (undocumented)
+    expiresAt: number | null;
+    // (undocumented)
+    token: string;
+    // (undocumented)
+    total: number;
+    // (undocumented)
+    uploadUrl: string;
+}
+
 // @public
 export function validateDocKinds(docKinds: readonly DocKind[]): void;
 
@@ -1079,10 +1109,6 @@ export interface ZipFile extends RawFile {
         source: "local" | "cloud";
     }): Promise<Blob | null>;
 }
-
-// Warnings were encountered during analysis:
-//
-// dist/base/types.d.ts:237:9 - (ae-forgotten-export) The symbol "UploadSessionPort" needs to be exported by the entry point index.d.ts
 
 // (No @packageDocumentation comment for this package)
 

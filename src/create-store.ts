@@ -23,7 +23,7 @@ import { assertValidFileName, assertValidCollectionName, isHidden } from "./base
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./works/collection.ts";
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./works/listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./works/upload-queue.ts";
-import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn } from "./base/types.ts";
+import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn, UploadSessionPort, UploadSessionRecord } from "./base/types.ts";
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./works/cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./works/trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./base/local-cache.ts";
@@ -118,6 +118,11 @@ export interface StoreConfig {
   reconcilePolicy: "app-driven" | "none";
   /** 0.17.2：push 重试政策（默认 4 次 × 200·n ms = 0.17.0 行为）。大文件 / 移动网络的消费方（KudsRocket）显式拉长：{ maxAttempts: 5, backoffMs: 1000, exponential: true }。 */
   pushRetry?: { maxAttempts?: number; backoffMs?: number; exponential?: boolean };
+  /** F-54（2026-10-21，user「weebpaint 需要的后台传大文件优先」）：**上传会话落盘**——分块上传（> 4 MB）开会话时把会话 URL 记进本 store 的 kv
+   *  （键 `internal.upload-session:<名>`，值只有 URL / 大小 / If-Match / 这份字节的 sha256 / 时间，没有内容）；刷新、iOS 杀页之后再推同一份字节
+   *  （pushAll / 回线补推 / 再次 save 同样字节）先问 Graph 会话传到哪、从那里接着传，不从零。续上的会话一律提交前核 eTag。
+   *  默认关（库政策：行为变更默认关、消费方显式开）。这是新持久化（kv 里多一类键），开它 = app 的表态。详 ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md。 */
+  uploads?: { resumable?: boolean };
   /** 0.18.0（默认 true）：open 时云端核对没跑成（离线 / 未登录 / 云端出错 / 用户跳过），本地副本干净且磁盘上有上次同步的 etag → 记为本 tab 的 base。
    *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
    *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
@@ -685,7 +690,21 @@ export function createStore(config: StoreConfig) {
   const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn, label as StoreTextKey);
   /** 带插值参数的直调版（key 同样透传给宿主）。 */
   const busyK = <T>(key: StoreTextKey, params: Record<string, string> | undefined, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, key, params), fn, key);
-  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, ...config.pushRetry });
+  // F-54：上传会话记忆面（开了 uploads.resumable 才有）。token = 这份字节的 sha256（只认「同一份字节」，不是身份——身份永远是路径）；记录住 kv `internal.upload-session:<名>`。
+  const sessionFor = config.uploads?.resumable ? async (name: string, bytes: Uint8Array): Promise<UploadSessionPort | undefined> => {
+    const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle;
+    if (!subtle || bytes.byteLength <= 4 * 1024 * 1024) return undefined;   // ≤ 4 MB 走简单上传、没有会话；没 WebCrypto 就不记
+    const digest = new Uint8Array(await subtle.digest("SHA-256", bytes as BufferSource));
+    const token = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
+    const key = `internal.upload-session:${name}`;
+    return {
+      token,
+      async load() { try { const v = kv.get(key); return v ? JSON.parse(v) as UploadSessionRecord : null; } catch { return null; } },
+      async save(rec) { kv.set(key, JSON.stringify(rec)); },
+      async clear() { kv.remove(key); },
+    };
+  } : undefined;
+  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, sessionFor, ...config.pushRetry });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
   const uploadReplayPolicy: UploadReplayPolicy = config.offlineUploadReplay ?? "manual";
@@ -694,7 +713,7 @@ export function createStore(config: StoreConfig) {
     if (uploadReplayPolicy === "ask" && !ui.confirmReplay) throw new Error("createStore: offlineUploadReplay='ask' 需 ui.confirmReplay（回线询问用户）");
   }
   // 后台 push 实例：与 pushMod 同深模块编排，唯 busy 换透传——drain 不锁屏（ADR-0018 §4：非 busy 后台）。
-  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), ...config.pushRetry });
+  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), sessionFor, ...config.pushRetry });
   // 0.15.1（2026-09-26，WXHW user「为什么推加密件需要密码。不就是二进制吗」→「修」）：**本地 at-rest 字节直推，不解壳不重封**。
   //   以前先 unsealForRead 得明文再交 doPush 重新 sealForWrite —— 等于要密码才能把已经封好的容器搬上云；锁着（无密码）= status "locked" 留 dirty，
   //   pushAll / 离线补推在锁屏 / reload 后全推不动。sealForWrite 本就对「已是容器」原样透传（搬运路径），明文文件也原样（prev 非容器），

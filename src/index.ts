@@ -87,3 +87,4 @@ export type { GraphTransport, RawGraphItem } from "./base/onedrive-provider.ts";
 export type { Busy, CloudSync, FetchMetaResult, PullResult, PushResult, WeakOverrideResult } from "./base/types.ts";
 export type { AdoptFn } from "./base/types.ts";
 export type { CollectionInitItem } from "./works/collection.ts";
+export type { UploadSessionPort, UploadSessionRecord } from "./base/types.ts";   // F-54（2026-10-21）：上传会话落盘的记忆面（createStore({ uploads: { resumable: true } })）

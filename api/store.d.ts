@@ -1264,6 +1264,13 @@ export declare interface StoreConfig {
         backoffMs?: number;
         exponential?: boolean;
     };
+    /** F-54（2026-10-21，user「weebpaint 需要的后台传大文件优先」）：**上传会话落盘**——分块上传（> 4 MB）开会话时把会话 URL 记进本 store 的 kv
+     *  （键 `internal.upload-session:<名>`，值只有 URL / 大小 / If-Match / 这份字节的 sha256 / 时间，没有内容）；刷新、iOS 杀页之后再推同一份字节
+     *  （pushAll / 回线补推 / 再次 save 同样字节）先问 Graph 会话传到哪、从那里接着传，不从零。续上的会话一律提交前核 eTag。
+     *  默认关（库政策：行为变更默认关、消费方显式开）。这是新持久化（kv 里多一类键），开它 = app 的表态。详 ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md。 */
+    uploads?: {
+        resumable?: boolean;
+    };
     /** 0.18.0（默认 true）：open 时云端核对没跑成（离线 / 未登录 / 云端出错 / 用户跳过），本地副本干净且磁盘上有上次同步的 etag → 记为本 tab 的 base。
      *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
      *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
@@ -1509,7 +1516,7 @@ export declare interface UploadOpts {
 /** per-app 补推策略：auto=静默补推；ask=每次 reconnect/成功连接问一次整批；manual=不做（等显式再存）。 */
 export declare type UploadReplayPolicy = "auto" | "ask" | "manual";
 
-declare interface UploadSessionPort {
+export declare interface UploadSessionPort {
     /** 这次要传的字节的指纹（provider 拿它和记录比，不等 = 不是同一份 → 不续）。 */
     readonly token: string;
     load(): Promise<UploadSessionRecord | null>;
@@ -1521,7 +1528,7 @@ declare interface UploadSessionPort {
  *  刷新 / iOS 杀页 = 整份从头再传。有了它：开会话时记一条，下次推同一份字节（token 相等）先问会话传到哪、从那里接着传。
  *  token = 正在上传的这份字节的 sha256（只用来认「还是不是同一份字节」，不是文件身份——身份永远是路径）；
  *  会话完成 / 412 / 不可重试错 → clear。provider 对 kv 零感知。 */
-declare interface UploadSessionRecord {
+export declare interface UploadSessionRecord {
     uploadUrl: string;
     total: number;
     eTag: string | null;
