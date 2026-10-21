@@ -84,7 +84,9 @@ export interface DownloadSessionsCfg {
    *  返 false = 本地已有副本/不可落（session 直接收摊，不覆盖）。 */
   adoptLocal: (name: string, blob: Blob, etag: string) => Promise<boolean>;
   chunkSize?: number;          // 默认 2MiB（分片粒度 = pin 给播放让路的粒度）
-  capBytes?: number;           // staging 全局字节上限（默认 256MiB）；超限 FIFO 清最旧 touched 的整组
+  capBytes?: number;           // staging 全局字节上限（默认 256MiB）；超限：streaming 模式按块淘汰（2.1.5），0.18 模式 FIFO 清最旧 touched 的整组
+  /** 2.1.5 按块淘汰：在用会话里这么久以内碰过的块钉住不淘汰（默认 60 s）。 */
+  hotMs?: number;
   now?: () => number;          // 测试注入
   /** 2.0.0 行为开关；不传 = 0.18 行为。 */
   streaming?: StreamingOptions;
@@ -110,7 +112,11 @@ export class EtagChangedError extends Error {
   constructor(name: string) { super(`云端文件已更新，下载会话失效：${name}`); this.name = "EtagChangedError"; }
 }
 
-interface StagingMeta { v: 1; eTag: string; totalBytes: number; chunkBytes: number; chunks: number[]; touchedAt: number; mirrored?: number[] }
+interface StagingMeta {
+  v: 1; eTag: string; totalBytes: number; chunkBytes: number; chunks: number[]; touchedAt: number; mirrored?: number[];
+  /** 2.1.5 按块淘汰：每块最近一次被碰的时刻 / 从 staging 命中的次数（键 = 块号字符串）。老账没有这两项 = 当作冷块、0 命中。 */
+  hot?: Record<string, number>; hits?: Record<string, number>;
+}
 
 const CHUNK_DEFAULT = 2 * 1024 * 1024;
 const CAP_DEFAULT = 256 * 1024 * 1024;
@@ -150,11 +156,15 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
   const now = cfg.now ?? ((): number => Date.now());
   const streaming = cfg.streaming;                         // undefined = 0.18 行为
   const lanes = Math.max(1, Math.floor(streaming?.lanes ?? 1));
+  const hotMs = cfg.hotMs ?? 60_000;
+  const blockEviction = !!streaming;                       // 2.1.5：按块淘汰只在 2.0 流式模式（显式开关的伞下）；0.18 模式照旧整组 FIFO
 
   // ── 调度（模块级 = 全 store 一个调度域）─────────────────────────────────────────
   const scheduler = createChunkScheduler({ lanes, stallMs: streaming?.stallMs, now });
-  const activeSessions = new Set<string>();               // cap 清理绝不动在用会话的组
+  const activeSessions = new Set<string>();               // cap 清理绝不动在用会话的组（0.18 模式）；按块淘汰只动它冷掉的块
   const liveMeta = new Map<string, StagingMeta>();        // 在用会话的内存账（coverage 看它：字节一到账就对，不等落盘）
+  const evictHooks = new Map<string, (i: number) => void>();   // 2.1.5：按块淘汰时通知在用会话把内存账（got / mirrored）同步划掉
+  let estTotal: number | null = null;                     // 2.1.5：staging 占用估计（到账 += / 淘汰 -=；null = 下次 enforceCap 重算），不超限不扫 keys
   const mirrorHealth = new Map<MirrorSource, MirrorHealth>();   // 每个镜像一份（store 实例级、内存）
   const mirrorRejected = new Set<string>();               // `${name}@${eTag}@${label}`：字节和云端不一样，这一版不再用
 
@@ -176,30 +186,76 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
   }
   /** 清某 name 的整组 staging（meta + 全部分片）。 */
   async function purgeName(name: string): Promise<void> {
+    estTotal = null;
+    const lm = liveMeta.get(name);                            // 在用会话的内存账也清空（promote 升格 / 换版）：got 划掉、close 时不再把旧账写回
+    if (lm) { for (const i of lm.chunks) evictHooks.get(name)?.(i); lm.chunks = []; lm.mirrored = undefined; lm.hot = undefined; lm.hits = undefined; }
     try {
       const prefix = `chunk:${name}:`;
       for (const k of await staging.keys()) if (k === mKey(name) || k.startsWith(prefix)) await staging.del(k);
     } catch (e) { reportStoreError(e, "log"); }   // 清理 best-effort（staging 坏了不拦主流程）
   }
+  const chunkLenOf = (m: StagingMeta, i: number): number => Math.min(m.chunkBytes, m.totalBytes - i * m.chunkBytes);
+  const metaBytes = (m: StagingMeta): number => m.chunks.reduce((s, i) => s + chunkLenOf(m, i), 0);
   // 全局 cap 兜底：估算占用（got.length×chunk），超限清 touched 最旧的整组（scratch FIFO；跳过在用会话）。
   async function enforceCap(): Promise<void> {
     try {
+      if (estTotal !== null && estTotal <= capBytes) return;           // 2.1.5：估计没超限就不扫 keys（每片到账都会调，别每次全表走）
       const metas: { name: string; meta: StagingMeta }[] = [];
       for (const k of await staging.keys()) {
         if (!k.startsWith("meta:")) continue;
         const name = k.slice(5);
-        const meta = await readMeta(name);
+        const meta = liveMeta.get(name) ?? await readMeta(name);        // 在用会话用内存账（和它的 got 同一个对象），淘汰才能同步划掉
         if (meta) metas.push({ name, meta });
       }
-      let total = metas.reduce((s, x) => s + x.meta.chunks.length * x.meta.chunkBytes, 0);
+      let total = metas.reduce((s, x) => s + metaBytes(x.meta), 0);
+      estTotal = total;
       if (total <= capBytes) return;
-      metas.sort((a, b) => a.meta.touchedAt - b.meta.touchedAt);   // 只排 scratch 清理顺序，非内容决策
-      for (const { name, meta } of metas) {
-        if (total <= capBytes) break;
-        if (activeSessions.has(name)) continue;
-        await purgeName(name);
-        total -= meta.chunks.length * meta.chunkBytes;
+      if (!blockEviction) {
+        // 0.18 模式：整组 FIFO（最旧 touched 的整组先清；在用会话不清）
+        metas.sort((a, b) => a.meta.touchedAt - b.meta.touchedAt);   // 只排 scratch 清理顺序，非内容决策
+        for (const { name, meta } of metas) {
+          if (total <= capBytes) break;
+          if (activeSessions.has(name)) continue;
+          const n = metaBytes(meta);
+          await purgeName(name);
+          total -= n;
+        }
+        estTotal = total;
+        return;
       }
+      // 2.1.5 按块淘汰（user 10-21「store 的其他做」；预取库出生稿「按块的淘汰 + 钉热集」）：
+      //   候选 = 所有账上的块，**除了**在用会话里 hotMs 以内碰过的（钉热集：正在玩的那一段、预取库刚投机拉来的）。
+      //   淘汰顺序：不在用的会话先于在用的；命中次数少的先（一次性顺序扫过的块 hits=0 → 比反复用到的块先走，抗扫描污染）；再最久没碰的先。
+      //   不是 LRU 整组：正在玩的盘也能把早就翻过去的段放掉（以前在用会话一个字节都不清 → 暂存区能长到上限之外）。
+      const t = now();
+      const cands: { name: string; meta: StagingMeta; i: number; active: number; hits: number; hot: number }[] = [];
+      for (const { name, meta } of metas) {
+        const active = activeSessions.has(name) ? 1 : 0;
+        for (const i of meta.chunks) {
+          const hot = meta.hot?.[String(i)] ?? meta.touchedAt;
+          if (active && t - hot < hotMs) continue;
+          cands.push({ name, meta, i, active, hits: meta.hits?.[String(i)] ?? 0, hot });
+        }
+      }
+      cands.sort((a, b) => a.active - b.active || a.hits - b.hits || a.hot - b.hot);
+      const touched = new Map<string, StagingMeta>();
+      for (const c of cands) {
+        if (total <= capBytes) break;
+        await sDel(cKey(c.name, c.i));
+        const m = c.meta;
+        m.chunks = m.chunks.filter((x) => x !== c.i);
+        if (m.mirrored) { m.mirrored = m.mirrored.filter((x) => x !== c.i); if (!m.mirrored.length) m.mirrored = undefined; }
+        if (m.hot) delete m.hot[String(c.i)];
+        if (m.hits) delete m.hits[String(c.i)];
+        evictHooks.get(c.name)?.(c.i);
+        total -= chunkLenOf(m, c.i);
+        touched.set(c.name, m);
+      }
+      for (const [name, m] of touched) {
+        if (m.chunks.length === 0 && !activeSessions.has(name)) await sDel(mKey(name));   // 整组都走了：账也不留
+        else await writeMeta(name, m);
+      }
+      estTotal = total;
     } catch (e) { reportStoreError(e, "log"); }   // cap 清理失败无害（下次再清）；绝不影响主流程
   }
 
@@ -272,6 +328,16 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     const got = new Set<number>(meta.chunks);
     const mirrored = new Set<number>(meta.mirrored ?? []);
     await writeMeta(name, meta);
+    // 2.1.5 按块淘汰的记账：到账 = 热、0 命中；从 staging 命中 = 热、命中 +1（封顶 8）。命中只改内存账、最多每 2 s 落一次盘（淘汰顺序是 best-effort，不值得每次读都写 IDB）。
+    let lastHotFlush = now();
+    const touch = (i: number, hit: boolean): void => {
+      const k = String(i), t = now();
+      (meta.hot ??= {})[k] = t;
+      if (hit) (meta.hits ??= {})[k] = Math.min(8, (meta.hits[k] ?? 0) + 1);
+      else (meta.hits ??= {})[k] ??= 0;
+      if (hit && t - lastHotFlush >= 2000) { lastHotFlush = t; void writeMeta(name, meta); }
+    };
+    evictHooks.set(name, (i) => { got.delete(i); mirrored.delete(i); verifiedEvict(i); });
     const nChunks = Math.max(1, Math.ceil(size / chunkSize));
     let closed = false;
 
@@ -292,6 +358,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     let firstOk = false;                                     // 镜像的第一片已和云端比过、一样
     let firstCheck: Promise<"same" | "differs" | "unknown"> | null = null;   // 并发的头几片共用一次核对（不每片都打云端）
     const verified = new Set<number>();                      // 这会话里已和云端比过、一样的镜像片（arrived 不再记进 mirrored）
+    const verifiedEvict = (i: number): void => { verified.delete(i); };
 
     const chunkOff = (i: number): number => i * chunkSize;
     const chunkLen = (i: number): number => Math.min(chunkSize, size - chunkOff(i));
@@ -329,7 +396,8 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     async function arrived(i: number, bytes: Uint8Array, origin: string): Promise<void> {
       if (origin === "mirror" && !mirror) return;             // 镜像已被拒：它晚到的字节不要
       let changed = false;
-      if (!got.has(i)) { got.add(i); changed = true; }
+      if (!got.has(i)) { got.add(i); changed = true; if (estTotal !== null) estTotal += chunkLen(i); }
+      touch(i, false);
       if (origin === "mirror" && !verified.has(i) && !mirrored.has(i)) { mirrored.add(i); changed = true; }
       if (changed) { meta.chunks = [...got]; meta.mirrored = mirrored.size ? [...mirrored] : undefined; meta.touchedAt = now(); }
       const seq = origin === "mirror" ? ++mirrorChunks : 0;   // 抽样节拍在到达那一刻定（2.1.3）
@@ -376,7 +444,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
     // 拉一个分片（去重 / 让路 / 车道 / 对冲全在 scheduler）：staging 有就秒答；拉到即落 staging + 记账。
     const fetchChunk = (i: number, prio: "playback" | "pin"): Promise<Uint8Array> => scheduler.request({
       key: `${name}:${i}`, prio,
-      preflight: async () => { const c = await sGet(cKey(name, i)); return c ? new Uint8Array(await c.arrayBuffer()) : null; },
+      preflight: async () => { const c = await sGet(cKey(name, i)); if (c) touch(i, true); return c ? new Uint8Array(await c.arrayBuffer()) : null; },
       sources: sourcesFor(i),
       arrived: (bytes, origin) => arrived(i, bytes, origin),
     });
@@ -447,7 +515,7 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
         const state: MirrorState = mirror ? (item === null || mirrorUp(mirror.src) ? "ok" : "down") : mirrorState;
         return { ...s, mirror: state, mirrorLabel: mirror?.src.label, cloudless: item === null };
       },
-      close() { closed = true; activeSessions.delete(name); if (liveMeta.get(name) === meta) liveMeta.delete(name); },
+      close() { closed = true; activeSessions.delete(name); evictHooks.delete(name); if (liveMeta.get(name) === meta) { liveMeta.delete(name); if (meta.chunks.length) void writeMeta(name, meta); } },   // 关会话把命中账落盘（有账才写：promote 清过的不复活）
     };
   }
 

@@ -17,6 +17,7 @@ import "./store-folder-listing.test.mjs";
 import "./busy-key.test.mjs";
 import "./dir-index-cache.test.mjs";
 import "./download-session.test.mjs";
+import "./staging-block-eviction.test.mjs";   // 2026-10-21 2.1.5：streaming 模式 staging 按块淘汰 + 钉热集
 import "./chunk-scheduler.test.mjs";   // 2026-10-17 2.0.0：分片调度（互等修了 / 车道 / 卡住对冲 / 让道 / 来源回落）
 import "./mirror.test.mjs";            // 2026-10-17 2.0.0：替代来源（本机文件 / HTTP 镜像）
 import "./store-upload-session.test.mjs";   // 2026-10-21 F-54：createStore uploads.resumable → 记忆面（sha256 token）递给 provider
