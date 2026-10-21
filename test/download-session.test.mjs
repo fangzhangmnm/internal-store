@@ -464,6 +464,34 @@ describe("download-session · 2.0.0 streaming 开关", () => {
     s.close();
   });
 
+  it("2.2.0 verifyChunk：宿主哈希表核不过 → 拒掉镜像、这片回落云端、清未验片；核过的片抽样不再找它；宿主抛错 = 没结论照旧", async () => {
+    const data = bytes(40);                                   // 10 片
+    const files = new Map([["f", { etag: "e", data }]]);
+    const bad = Uint8Array.from(data); bad[9] = 7;             // 第 3 片（off 8）一个字节不同——第一片核对抓不到、抽样 1/16 撞不到
+    const m = memMirror("tbl", new Map([["f", bad]]));
+    const asked = [];
+    const verifyChunk = ({ index, offset, length }, b) => { asked.push(index); const ref = data.slice(offset, offset + length); return b.length === ref.length && b.every((x, k) => x === ref[k]); };
+    const { sessions, staging } = mkSessions2({ files, streaming: { verifyChunk }, mirrors: [m.src] });
+    const s = await sessions.open("f");
+    await s.read(0, 4); await s.read(4, 4);
+    eq(s.status().mirror, "ok");
+    const got = await s.read(8, 4);
+    eq([...got].join(","), [...data.slice(8, 12)].join(","), "★核不过 → 交出去的是云端的字节");
+    eq(s.status().mirror, "rejected", "★镜像这一版不再用");
+    assert(asked.includes(2), "宿主被问了第 3 片");
+    const meta = JSON.parse(await staging._map.get("meta:f").text());
+    eq((meta.mirrored ?? []).length, 0, "没验过的镜像片全清（核过的两片在 verified 里、不算没验过）");
+    s.close();
+    // 宿主抛错 = 没结论：字节照交、镜像照用
+    const m2 = memMirror("tbl2", new Map([["g", bytes(12)]]));
+    const files2 = new Map([["g", { etag: "e", data: bytes(12) }]]);
+    const env2 = mkSessions2({ files: files2, streaming: { verifyChunk: () => { throw new Error("no table"); } }, mirrors: [m2.src] });
+    const s2 = await env2.sessions.open("g");
+    await s2.read(4, 4);
+    eq(s2.status().mirror, "ok", "宿主核不了不算镜像的错");
+    s2.close();
+  });
+
   it("镜像出错 → 回落云端 + 进冷却（status down）；云端够不着而账上有这份 → 只用镜像开会话（cloudless）", async () => {
     const data = bytes(12);
     const files = new Map([["f", { etag: "e", data }]]);

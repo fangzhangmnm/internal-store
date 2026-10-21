@@ -947,6 +947,13 @@ export interface StreamingOptions {
     lanes?: number;
     mirrors?: () => MirrorSource[];
     stallMs?: number;
+    verifyChunk?: (ctx: {
+        name: string;
+        index: number;
+        offset: number;
+        length: number;
+        origin: "mirror" | "cloud";
+    }, bytes: Uint8Array) => boolean | Promise<boolean>;
 }
 
 // @public

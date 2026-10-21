@@ -63,6 +63,10 @@ export interface StreamingOptions {
   stallMs?: number;
   /** 替代来源（本机文件 / 局域网 / Tailscale 镜像），按偏好排序；每次开会话取一次。 */
   mirrors?: () => MirrorSource[];
+  /** 2.2.0（F-63 / KudsRocket W-44）：宿主自己的完整性核对——镜像交出一片之前把字节给宿主（宿主按它文件头里的明文分片哈希表核）。
+   *  返 false = 这片不对：这个镜像这一版不再用（同 rejectMirror：拒掉 + 清它没验过的片），这片回落云端；返 true = 当已验过（抽样不再找它）；
+   *  抛错 / 没给 = 没结论，库照旧只靠第一片核对 + 每 16 片抽 1 片。库对内容盲：哈希表怎么存、怎么算全是宿主的事。origin 现在只会是 "mirror"。 */
+  verifyChunk?: (ctx: { name: string; index: number; offset: number; length: number; origin: "mirror" | "cloud" }, bytes: Uint8Array) => boolean | Promise<boolean>;
 }
 export type MirrorState = "none" | "ok" | "down" | "rejected";
 /** 流式句柄的零网络快照（状态条：「有请求卡着」比实时 KB 更要紧——user 10-17）。 */
@@ -421,6 +425,13 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
             try {
               const b = await m.handle.read(off, len, o);
               if (b.length !== len) throw new Error(`mirror "${m.src.label}": chunk ${i} returned ${b.length} bytes, wanted ${len}`);
+              if (streaming?.verifyChunk && mirror === m) {   // 2.2.0：宿主的哈希表先核（有结论就不用抽样）
+                let verdict: boolean | null = null;
+                try { verdict = await streaming.verifyChunk({ name, index: i, offset: off, length: len, origin: "mirror" }, b); }
+                catch (e) { reportStoreError(e, "log"); verdict = null; }   // 宿主核不了（表缺 / 自己抛）= 没结论
+                if (verdict === false) { await rejectMirror(`host verify chunk ${i}`); throw new Error(`mirror "${m.src.label}": chunk ${i} failed the host's integrity check`); }
+                if (verdict === true) verified.add(i);
+              }
               if (!firstOk && item !== null && mirror === m) {
                 let checker = false;
                 if (!firstCheck) { checker = true; firstCheck = range(item, off, len).then((ref) => (sameBytes(ref, b) ? "same" : "differs"), (e) => { reportStoreError(e, "log"); return "unknown"; }); }
