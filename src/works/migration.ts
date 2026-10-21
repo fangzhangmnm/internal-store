@@ -49,13 +49,16 @@ export interface StoreNamespace {
   root: string;      // `${appId}.${databaseId}`
   dbName: string;    // IDB 库名 = root
   schemaKey: string; // 相对键 "database-version"
+  /** 2.2.0：流式暂存区自己的库名 = `${root}.staging`（仍在 `${appId}.` 前缀内，wipeAppNamespace 自动覆盖）。 */
+  stagingDbName: string;
 }
 
 export function storeNamespace(appId: string, databaseId: string): StoreNamespace {
   if (!appId) throw new Error("storeNamespace: appId 必填——同 origin 兄弟 PWA 隔离的红线，不给会共用一个库");
   if (!databaseId) throw new Error("storeNamespace: databaseId 必填——同 app 多 store 实例隔离（默认 defaultStore）");
+  if (databaseId.endsWith(".staging")) throw new Error(`storeNamespace: databaseId 不许以 ".staging" 结尾（${databaseId}）——那是 2.2.0 流式暂存区库名的后缀，会和别的实例撞库`);
   const root = `${appId}.${databaseId}`;
-  return { root, dbName: root, schemaKey: "database-version" };
+  return { root, dbName: root, schemaKey: "database-version", stagingDbName: `${root}.staging` };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -72,6 +75,8 @@ export interface MigrationCtx {
   kv: MigrationKv;
   ns: StoreNamespace;
   log?: (msg: string) => void;
+  /** 2.2.0：主库（`ns.dbName`）的裸键面（不分区、不去前缀），给要动 IDB 的迁移用。测试 / 没有 IDB 的环境不给 → 那部分迁移跳过（只盖戳）。 */
+  blobs?: { keys(): Promise<string[]>; del(key: string): Promise<void> };
 }
 
 export interface Migration {
@@ -84,7 +89,21 @@ export interface Migration {
  * 有序注册表：每次动 kv/IDB 结构加一条，version 单调递增。
  * **现为空**——库以最新标准出生（无用户/无后向兼容，2026-07-13 清 V001/V002 tax）。
  */
-export const MIGRATIONS: readonly Migration[] = [];
+export const MIGRATIONS: readonly Migration[] = [
+  // 2.2.0（道 6 F-58 §8 第 1 件，user 2026-10-21「同意」）：流式暂存区（staging/ 分区）搬出主库、住自己的库 `${root}.staging`。
+  //   旧库里的 `staging/` 键**不迁、整批删**：staging 只装云端拉来的 re-fetchable 字节（download-session 纪律），清了绝不丢数据。
+  //   一等作品（files/）和三等暂存不再同库同表；主库的 usage 不再混进分片。
+  {
+    version: "v001-20261021",
+    describe: "staging/ 分区搬出主库（新库 `${root}.staging`）；主库里的旧 staging/ 键整批删（re-fetchable）",
+    async run(ctx) {
+      if (!ctx.blobs) { ctx.log?.("[migration] v001: no blobs port (test / no IDB) → skip IDB part"); return; }
+      const keys = (await ctx.blobs.keys()).filter((k) => k.startsWith("staging/"));
+      for (const k of keys) await ctx.blobs.del(k);
+      ctx.log?.(`[migration] v001: purged ${keys.length} legacy staging/ key(s) from ${ctx.ns.dbName}`);
+    },
+  },
+];
 
 /**
  * 读戳 → 按序跑欠的迁移 → **run 成功后才盖新戳**（崩了不盖→下次重跑）。幂等：戳已到位则整体 no-op。
@@ -118,8 +137,8 @@ export function localStorageMigrationKv(): MigrationKv {
 
 /** prod 组装 + 跑（createStore 在 ready-gate 前调）。命名空间根 = `${appId}.${databaseId}`。
  *  kv 经 namespacedKv 包过 → migration 内所有键读写自动落 `${root}.` 命名空间（含 keys() 只列本命名空间）。 */
-export async function runStoreMigrations(appId: string, databaseId: string, log?: (m: string) => void): Promise<void> {
+export async function runStoreMigrations(appId: string, databaseId: string, log?: (m: string) => void, blobs?: MigrationCtx["blobs"]): Promise<void> {
   const ns = storeNamespace(appId, databaseId);
   const kv = namespacedKv(localStorageMigrationKv(), ns.root);
-  await runMigrations({ kv, ns, log });
+  await runMigrations({ kv, ns, log, blobs });
 }

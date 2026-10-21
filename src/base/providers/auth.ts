@@ -34,13 +34,20 @@ interface AuthConfig {
 
 // （取代前身宿主的 config.js import，去 app 化。）
 let CLIENT_ID = "";
-let AUTHORITY = "https://login.microsoftonline.com/common";
+// 2.2.0（周账道 1 审计查出）：默认值以前是 /common——家规 #7「personal Microsoft account only，authority 必须 /consumers，/common 禁止」；
+//   八个 app 都显式传了 /consumers 所以没炸过，但库默认值不能是个坑。configureOneDriveAuth 对非 /consumers 的 authority 直接拒。
+let AUTHORITY = "https://login.microsoftonline.com/consumers";
+/** 当前 authority（测试 / 诊断）。 */
+export function authAuthority(): string { return AUTHORITY; }
 let SCOPES = ["Files.ReadWrite.AppFolder", "offline_access"];
 let MSAL_URL: string | null = null;
 /** OneDrive auth 配置注入。app 调一次（clientId/authority/scopes/msalUrl；msalUrl = vendored MSAL 脚本相对路径）。 */
 export function configureOneDriveAuth({ clientId, authority, scopes, msalUrl }: AuthConfig = {}): void {
   if (clientId) CLIENT_ID = clientId;
-  if (authority) AUTHORITY = authority;
+  if (authority) {
+    if (!/^https:\/\/login\.microsoftonline\.com\/consumers\/?$/.test(authority)) throw new Error(`configureOneDriveAuth: authority must be https://login.microsoftonline.com/consumers (family hard rule #7: personal Microsoft accounts only; /common is forbidden) — got ${authority}`);
+    AUTHORITY = authority;
+  }
   if (scopes) SCOPES = scopes;
   if (msalUrl != null) {   // 浏览器相对路径（vendored 脚本）→ 绝对；node 里 = null
     MSAL_URL = (typeof document !== "undefined" && document.baseURI)

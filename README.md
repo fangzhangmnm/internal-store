@@ -9,6 +9,8 @@
 
 > 2.1.4：`createStore({ uploads: { resumable: true } })` = 上传会话落盘（> 4 MB 的分块上传刷新 / 被杀后接着传；默认关；详 `ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md`）。
 
+> 2.2.0：流式暂存区住自己的库 `${appId}.${databaseId}.staging`（主库旧 `staging/` 键由 `MIGRATIONS` v001 整批删）；MSAL authority 默认 `/consumers`、别的值直接拒（家规 #7）。详 `ai-docs/20261021-2.2.0-staging-split-authority-consumers.md`。
+
 ## 包与消费（@internal/store）
 
 - 消费：库仓 `npm run release` 出 `internal-store-<ver>.tgz` → 拷进消费方仓 `vendor-pkgs/` **并 commit** → `"@internal/store": "file:./vendor-pkgs/internal-store-<ver>.tgz"`。升级=显式换 tgz。永不 workspace:* 跨仓、永不 git 依赖（自包含不变量：克隆任一 app 仓断网能构建）。
@@ -143,7 +145,7 @@ store.files.listTrash();    store.files.listBackup();               // 列回收
 store.files.restoreTrash({ trashKey, fromCloud, cloudItemId, targetName, encrypted });   // 恢复（side-aware：both 两腿都恢复，云端腿撞名自动 (2)）
 store.files.purgeTrash({ trashKey, cloudItemId, confirm });         // 彻底删除（confirm 回调确认）
 store.files.emptyTrash({ scope: "both" });                          // 清空回收站（"local" | "cloud" | "both"）
-store.files.emptyBackup({ scope: "both" });                         // 清空备份箱（同 scope；暂无 gallery UI，控制台/以后面板调）
+store.files.emptyBackup({ scope: "both" });                         // 清空备份箱（同 scope；gallery 0.8.6 起搁置区视图顶上有「清空…」钮）
 ```
 - `trash()`（2.1.2 前叫 `delete()`）把文件移入回收站（可恢复）；版本冲突时被替下的旧副本进备份（不丢）。`TrashItem.conflictLive`=离线删被回线 edit-wins 撤销→本地 trash 有、云端还活着（两存，UI surface）。
 

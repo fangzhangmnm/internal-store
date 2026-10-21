@@ -67,6 +67,7 @@ import "./cloud-sync.test.ts";
 import "./folder-delete.test.ts";
 import "./store-lost-response-claim.test.mjs";
 import "./migration.test.mjs";
+import "./staging-split.test.mjs";   // 2026-10-21 2.2.0：staging 分库 + v001 迁移 + authority 默认 /consumers
 import "./store-narrow-waist.test.ts";
 import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOnline∧signedIn / hiddenName
 import "./edit-race.test.ts";

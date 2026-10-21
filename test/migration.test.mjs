@@ -61,15 +61,15 @@ describe("migration › 命名空间根 appId.databaseId（同 origin 兄弟 PWA
 });
 
 describe("migration › MIGRATIONS 注册表（tax 已清）", () => {
-  it("现为空——库以最新标准出生", () => { eq(MIGRATIONS.length, 0); });
+  it("注册表 = 有且只有 v001-20261021（2.2.0 staging 分库；2026-07-13 清 tax 后第一条真迁移）", () => { eq(MIGRATIONS.length, 1); eq(MIGRATIONS[0].version, "v001-20261021"); });
   it("version 单调（将来加迁移的护栏；现空 vacuously 真）", () => {
     for (let i = 1; i < MIGRATIONS.length; i++) assert(MIGRATIONS[i - 1].version < MIGRATIONS[i].version, "version 应单调递增");
   });
-  it("空注册表跑 runMigrations → no-op、不写任何键", async () => {
+  it("跑默认注册表（没 blobs 面）→ 只盖戳、不动 kv 数据键", async () => {
     const kv = memMkv({ "files.etag:x.ora": "e" });
-    await runMigrations(ctxOf(kv));   // 默认 MIGRATIONS（空）
-    eq(kv._dump()[NS.schemaKey], undefined, "无迁移不盖戳");
-    eq(kv._dump()["files.etag:x.ora"], "e", "无迁移不动数据");
+    await runMigrations(ctxOf(kv));   // 默认 MIGRATIONS（v001：IDB 那半在没 blobs 面时跳过）
+    eq(kv._dump()[NS.schemaKey], "v001-20261021", "盖戳");
+    eq(kv._dump()["files.etag:x.ora"], "e", "迁移不动 kv 数据键");
   });
 });
 

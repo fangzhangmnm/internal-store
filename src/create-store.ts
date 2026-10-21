@@ -27,6 +27,7 @@ import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn, Upl
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./works/cloud-sync.ts";
 import { mergeTrash, type TrashItem } from "./works/trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./base/local-cache.ts";
+import { createIdbCache } from "./base/idb-store.ts";   // 2.2.0：迁移的主库裸键面
 import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage, type StreamingOptions, type StreamStatus } from "./stream/download-session.ts";
 import { runStoreMigrations, storeNamespace } from "./works/migration.ts";
 import { namespacedKv, type KeyedKv } from "./base/kv-namespace.ts";
@@ -460,7 +461,10 @@ export function createStore(config: StoreConfig) {
   const migrationReady: Promise<void> =
     config.skipMigration || !(globalThis as { localStorage?: unknown }).localStorage
       ? Promise.resolve()
-      : runStoreMigrations(appId, databaseId);
+      : (() => {   // 2.2.0：迁移要能动主库（v001 删旧 staging/ 键）→ 给它一条裸键面，跑完就关
+          const raw = createIdbCache(ns.dbName);
+          return runStoreMigrations(appId, databaseId, undefined, { keys: () => raw.keys(), del: (k) => raw.del(k) }).finally(() => { raw.close(); });
+        })();
   const offloadMod = createOffload({ cloud, local, head, isOnline, serialize: sub.serialize });   // serialize：offload 的 hardDelete ⟂ save 的 local 写互斥（红线：驱逐不吃未推字节）
   // 云端防抖标记（candidate-gone）：clean cloud-gone 孤儿第一次权威见 gone 只标记，跨 GRACE 第二次+ 才 send trash（用户拍板 ~24h，2026-07-17）。
   const CLOUD_GONE_GRACE_MS = 24 * 3600 * 1000;
@@ -468,7 +472,7 @@ export function createStore(config: StoreConfig) {
   const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeIdentifier: config.activeIdentifier, hidden: config.hidden, drop: (n) => tierOf(n) === "resource" });   // 2.1.0：三等资源云端没了本地直接丢
 
   // ── 分片下载会话（A1）：staging tee + 播放优先/pin 严格串行调度。keepOffline / openStream 走它。──
-  const stagingStore = config.staging ?? createStagingStore(ns.dbName);
+  const stagingStore = config.staging ?? createStagingStore(ns.stagingDbName);   // 2.2.0：暂存区住自己的库 `${appId}.${databaseId}.staging`（道 6 F-58 §8；三等暂存不再和一等作品同库同表）
   const toU8Raw = async (raw: Uint8Array | ArrayBuffer | Blob): Promise<Uint8Array> =>
     raw instanceof Uint8Array ? raw : raw instanceof ArrayBuffer ? new Uint8Array(raw) : new Uint8Array(await raw.arrayBuffer());
   const sessions = createDownloadSessions({

@@ -57,12 +57,12 @@ describe("maintenance · typed consent（库内比对，不过不执行）", () 
 describe("maintenance · wipe 作用域 + blocked 诚实报告", () => {
   it("只删 `${appId}.` 前缀（多实例全删；GUID `-` 前缀/兄弟 app 不碰）；localStorage 只报计数", async () => {
     const env = fakeEnv({
-      dbs: ["wp.defaultStore", "wp.gallery-g1", "wp-bd6cece69075d759.crash", "jrp.defaultStore"],
+      dbs: ["wp.defaultStore", "wp.defaultStore.staging", "wp.gallery-g1", "wp-bd6cece69075d759.crash", "jrp.defaultStore"],
       lsKeys: ["wp.defaultStore.files.etag:画.ora", "wp.gallery-g1.database-version", "jrp.defaultStore.x", "unrelated"],
     });
     try {
       const r = await wipeAppNamespace({ appId: "wp", consent: CONSENT });
-      eq(r.deletedDatabases.sort().join(","), "wp.defaultStore,wp.gallery-g1", "两实例全删");
+      eq(r.deletedDatabases.sort().join(","), "wp.defaultStore,wp.defaultStore.staging,wp.gallery-g1", "两实例全删（2.2.0 分出去的 .staging 库也在前缀内）");
       eq(r.blockedDatabases.length, 0);
       eq(r.localStorageKeysRemoved, 2, "本命名空间两键（只报计数）");
       assert(env.alive.has("wp-bd6cece69075d759.crash"), "app 自家 GUID 库（`-` 非 `.`）不碰");
