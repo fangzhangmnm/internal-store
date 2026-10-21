@@ -309,10 +309,12 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
       reportStoreError(new Error(`mirror "${src.label}" served different bytes for "${name}" (${reason}); dropped it for this version and purged ${bad.length} unverified chunk(s)`), "warning");
     }
     /** 抽样核对（事后、异步）：镜像给的每 VERIFY_EVERY 片比 1 片。云端够不着 → 没结论（不动）。
-     *  一样 → 这片从「没验过」里划掉；不一样 → 拒掉镜像、清它没验过的片（这片已经交出去了——同尺寸、只有中段不同的文件只能靠抽样，残余风险如实记在发版说明）。 */
-    async function sampleVerify(i: number, bytes: Uint8Array): Promise<void> {
+     *  一样 → 这片从「没验过」里划掉；不一样 → 拒掉镜像、清它没验过的片（这片已经交出去了——同尺寸、只有中段不同的文件只能靠抽样，残余风险如实记在发版说明）。
+     *  seq = 这片是镜像交出的第几片，**在到达那一刻定**（2.1.3 修：以前在 await 落 staging 之后才看计数，三路并发时第 16 片醒来计数已是 17、18 → 抽样被系统性跳过；
+     *  test/download-session「并发下也按节拍抽」钉着）。 */
+    async function sampleVerify(i: number, bytes: Uint8Array, seq: number): Promise<void> {
       if (item === null || !mirror || verified.has(i)) return;
-      if (mirrorChunks % VERIFY_EVERY !== 0) return;
+      if (seq % VERIFY_EVERY !== 0) return;
       let ref: Uint8Array | null = null;
       try { ref = await range(item, chunkOff(i), chunkLen(i)); } catch (e) { reportStoreError(e, "log"); return; }
       if (!mirror) return;                                   // 其间已被别的核对拒掉
@@ -330,11 +332,11 @@ export function createDownloadSessions(cfg: DownloadSessionsCfg) {
       if (!got.has(i)) { got.add(i); changed = true; }
       if (origin === "mirror" && !verified.has(i) && !mirrored.has(i)) { mirrored.add(i); changed = true; }
       if (changed) { meta.chunks = [...got]; meta.mirrored = mirrored.size ? [...mirrored] : undefined; meta.touchedAt = now(); }
-      if (origin === "mirror") mirrorChunks++;
+      const seq = origin === "mirror" ? ++mirrorChunks : 0;   // 抽样节拍在到达那一刻定（2.1.3）
       await sPut(cKey(name, i), new Blob([bytes as BlobPart]));
       if (changed) await writeMeta(name, meta);
       void enforceCap();
-      if (origin === "mirror") void sampleVerify(i, bytes);
+      if (origin === "mirror") void sampleVerify(i, bytes, seq);
     }
 
     /** 这一片的来源（按偏好）：健康的镜像在前、云端在后。镜像的成败回写健康表。

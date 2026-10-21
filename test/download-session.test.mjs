@@ -450,6 +450,20 @@ describe("download-session · 2.0.0 streaming 开关", () => {
     s2.close();
   });
 
+  it("镜像抽样核对在并发下也按节拍抽（2.1.3 修：节拍在片到达那一刻定，不在 await 之后看计数）", async () => {
+    // 2.1.2 及以前：arrived() 先 mirrorChunks++、再 await 落 staging、之后才看 mirrorChunks % 16——三路并发时第 16 片醒来看到的计数已经是 17、18 → 抽样被系统性跳过。
+    const data = bytes(80);                                   // 20 片；第 1 片核对（一样），之后任何一片被抽到都该不一样
+    const files = new Map([["f", { etag: "e", data }]]);
+    const bad = Uint8Array.from(data, (x, i) => (i < 4 ? x : (x + 1) % 251));   // 只有第 1 片和云端一样
+    const m = memMirror("busy", new Map([["f", bad]]));
+    const { sessions } = mkSessions2({ files, streaming: { lanes: 3 }, mirrors: [m.src] });
+    const s = await sessions.open("f");
+    await s.read(0, 80);                                      // 一口气要全盘 = 20 片并发排队
+    await sleep(30);
+    eq(s.status().mirror, "rejected", "★20 片里至少一片被抽到 → 镜像必被拒");
+    s.close();
+  });
+
   it("镜像出错 → 回落云端 + 进冷却（status down）；云端够不着而账上有这份 → 只用镜像开会话（cloudless）", async () => {
     const data = bytes(12);
     const files = new Map([["f", { etag: "e", data }]]);
