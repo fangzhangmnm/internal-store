@@ -14,5 +14,6 @@
   ② KudsRocket 这种大文件高频消费方专属的东西（流式上传、暂存区、将来的 delta 列举 / 索引文件）做独立模块或独立包，艺术类 app 永不 import；
   ③ 每个版本的发版说明（ai-docs/<日期>-<版本>-*.md）单列「行为差异」，艺术类 app 升级时逐条过、不默认接受。钉版本是现有的隔离墙（WeebPaint 钉 0.13.0）。edited by Claude Fable 5.1 2026-10-15
   ②′（2026-10-17 深夜，user「艺术类 app 不传 streaming 也许需要视频参考呢」；edited by Claude Fable 5.1）：② 说的是**作品那台引擎不为大文件消费方改行为**，不是艺术类 app 不许用流式面——流式面是三等资源的通用面（电台的音乐、参考窗的视频、KudsRocket 的大文件），任何 app 都可以开 `createStore({ streaming })`。
+  ④ **真要默认开一条行为变更，发版说明里先写「为什么这条不走默认关」**（2026-10-21 user 追认 0.18.0「干净副本接谱系」默认开时：「默认开，下次遇到同样的问题还是需要想清楚」——那条当时没写理由、事后被审计问出来）。写不出理由就默认关。edited by Claude Opus 5.5 2026-10-21
   两台引擎（作品：cloud-sync / push / local-head / safe-resolve…；资源：download-session / chunk-scheduler / mirror / sw）**互不 import、只共用底座**，`test/engine-boundary-guard.test.mjs` 机械执法；是否物理拆成 cloud / store / stream 三包（= 3.0.0）未定，见 `ai-docs/20261017-2.0.0-streaming-lanes-stall-mirrors.md`「为什么是 major」。
   **源码三个夹 = 底座 + 两台引擎（2.1.1，2026-10-17 深夜 user「做」）**：`src/base/`（底座：provider / graph / auth / IDB / 身份语法 / 错误 / 类型）、`src/works/`（作品引擎）、`src/stream/`（资源引擎，含 `sw/`）；顶层只有组合根 `create-store.ts` / `index.ts` 和 `testing/` 替身。**新文件先想清进哪个夹**——不进夹、或跨夹 import，守卫直接红。真拆包那天三个夹就是三个包。
