@@ -952,6 +952,11 @@ export interface StoreUI {
         occasion: "open" | "push";
         cloudState?: CloudState;
     }) => Promise<ResolveChoice>;
+    resolveRenameOld?: (ctx: {
+        oldName: string;
+        newName: string;
+        reason: "diverged" | "unknown-lineage";
+    }) => Promise<"trash" | "keep" | "cancel">;
     text?: StoreTextFn;
 }
 
@@ -1031,6 +1036,7 @@ export type TryMoveResult = {
     where?: string;
     oldName?: string;
     oldKept?: boolean;
+    oldKeptByUser?: boolean;
     oldUnknown?: boolean;
     oldCloudOrphan?: boolean;
     cloudDeferred?: boolean;
@@ -1038,6 +1044,9 @@ export type TryMoveResult = {
     ok: false;
     reason: "name-collision";
     where: "local" | "cloud";
+} | {
+    ok: false;
+    reason: "cancelled";
 };
 
 // @public

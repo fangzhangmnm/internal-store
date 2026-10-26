@@ -17,7 +17,7 @@ import type { AdoptFn } from "../base/types.ts";
 export interface FreshnessCfg {
   cloud: Pick<CloudSync, "fetchMeta">;
   head: Pick<LocalHead, "seenBase" | "isDirtyAnywhere" | "markSeen">;
-  safeResolve: Pick<SafeResolve, "safePull">;
+  safeResolve: Pick<SafeResolve, "safePull"> & Partial<Pick<SafeResolve, "tryHeal">>;
   busy?: Busy;
   /** 0.17.0：刚列过的云端帧（fresh-hints.ts）。只在「提示 etag === 本 tab 已见 base」时省掉 fetchMeta；别的情况一律照常问云端。 */
   hints?: Pick<FreshHints, "peek">;
@@ -36,6 +36,10 @@ export interface OpenOpts {
   adopt?: AdoptFn;
   localDirty?: () => boolean;
   busy?: Busy;
+  /** 2.2.2：本地 at-rest 字节（给回执丢失自愈用）。给了 → 脏 ∧ 云端动过时，先拉云端逐字节比：一样 = 上次推其实落了、只是回执没回来 → markSynced、不弹面；
+   *  不一样才交 onNewer。和 push 路径的 tryHeal 是同一条规则（MoonSinger 2026-10-08「一直会遇到云端冲突的提示」= 这条路以前只在推时有，open 时没有，
+   *  所以 MoonSinger 开歌前先批量推一遍借它自愈；user 2026-10-26「批，库出 2.2.2」）。拉的过程照样被 probe（「跳过到离线」）打断：慢网不许把人卡死。 */
+  localBytes?: () => Promise<Uint8Array | null>;
 }
 /** refresh（事件驱动的纯干净快进）的选项。 */
 export interface RefreshOpts {
@@ -99,7 +103,7 @@ export function createFreshness(cfg: FreshnessCfg) {
     : reason;
 
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
-    const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy } = opts;
+    const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy, localBytes } = opts;
     if (!isOnline()) { adoptDurableBase(name, localDirty); return { source: "local", reason: "offline" }; }
     if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { source: "local", reason: "in-sync" }; }   // 同下面 meta.etag===base 分支，只是证据来自刚列的帧
     return busy("cloud.checking", async () => {
@@ -134,6 +138,18 @@ export function createFreshness(cfg: FreshnessCfg) {
         // 快进没承诺过什么 → 失败只 info（状态栏，不 banner；captive portal 下每次 open 都会走到这里）。
         if (!r.ok && r.reason !== "edited-during-pull") reportStoreError(new Error(`「${name}」云端有新版本但暂时取不到（${pullFailText(r.reason)}），已打开本地版本`), "info");   // 途中保存导致的作罢不是故障：本地有了未推改动，之后推送自会撞冲突面
         return r.ok ? { source: "fast-forwarded", backupName: r.backupName } : { source: "local", reason: r.reason, error: r.error };
+      }
+      // 2.2.2：弹面之前先试回执丢失自愈——拉云端逐字节比，一样就认领（同 push 的 tryHeal）。慢网：probe（「跳过到离线」）先到 → 当 skipped（不弹面、谱系不动；
+      //   迟到的比对若相等仍会 markSynced，那是关于字节的事实、无害）。拉失败 = 比不出，照旧交 ui。
+      //   先用 meta 里的大小当闸（零网络）：大小不同 = 不可能一样 → 不拉、直接弹面（守住「面前不预拉整份云端」——QA 2026-08-20 / store-open-conflict 测试）；大小一样才拉来逐字节比。
+      if (localBytes && safeResolve.tryHeal) {
+        const mine = await localBytes().catch((e) => { reportStoreError(e, "log"); return null; });
+        if (mine && (meta.size == null || meta.size === mine.byteLength)) {
+          const healing = (async () => { try { return await safeResolve.tryHeal!(name, mine); } catch (e) { reportStoreError(e, "log"); return false; } })();
+          const outcome = probe ? await Promise.race([healing.then((h) => ({ k: "heal" as const, h })), Promise.resolve(probe).then(() => ({ k: "skip" as const }))]) : { k: "heal" as const, h: await healing };
+          if (outcome.k === "skip") return { source: "local", reason: "skipped" };
+          if (outcome.h) return { source: "local", reason: "healed" };
+        }
       }
       // dirty 分叉 → 交 ui（takeCloud=拉 / keepMine|cancel=留本地）
       const choice = onNewer ? await onNewer({ name, cloudEtag: meta.etag, baseEtag: base, cloudTime: meta.lastModified }) : "cancel";

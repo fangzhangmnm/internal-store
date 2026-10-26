@@ -56,6 +56,7 @@ import "./freshness.test.ts";
 import "./store-open-conflict.test.ts";
 import "./open-lineage.test.ts";   // 0.18.0：open 核对没跑成时干净副本接血统
 import "./push-lineage-recapture.test.ts";   // 2026-10-26 2.2.1：谱系丢了的脏副本推前先问云端 + 面的 cloudState 真话 + pushAll 失败带原因（CatsUp 天天弹假面的根）
+import "./open-heal-rename-ask.test.ts";   // 2026-10-26 2.2.2：open 回执丢失自愈（可逃生）+ 改名撞上谱系不明先问人搬不搬旧的
 import "./resolve.test.ts";        // 0.18.0：file.resolve() 主动叫面
 import "./local-head.test.ts";
 import "./local-conflict-guard.test.ts";

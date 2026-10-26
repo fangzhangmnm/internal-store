@@ -35,6 +35,11 @@ export interface IdentityCfg {
   deleteOffline?: (name: string) => Promise<void>;   // 复用 del.del 的离线删语义（本地 move-aside + base-etag 云删排队 + null 守卫 + forget）
   queueUpload?: (name: string) => void;              // 离线新建 float 的补推入队（uploadReplay.enqueue，ADR-0018）
   nameOccupied?: (name: string) => Promise<"local" | "cloud" | null>;   // 唯一名字占用检查（create-store 注入）；assertNameFree 据此抛
+  /** 2.2.2（user 2026-10-26「同意，反正不删就行了」；周账 F-92）：改名 / 移动撞上「不知道云端旧的该不该搬」——这台有没传的改动 ∧ 云端那份和这台的谱系对不上
+   *  （云端被别的设备改过 = diverged；这台不知道自己派生自哪一版 = unknown-lineage）——**动任何字节之前**先问人：
+   *  trash = 新名推上去后把云端旧的移进回收站（可恢复，永不硬删）· keep = 留着（两份，tryMove 返 oldKeptByUser）· cancel = 不改名、什么都不动。
+   *  不给 = 2.2.1 行为：默认留着 + 返 oldKept 让宿主如实说。 */
+  askKeepOld?: (ctx: { oldName: string; newName: string; reason: "diverged" | "unknown-lineage" }) => Promise<"trash" | "keep" | "cancel">;
 }
 export interface RenameOpts { encode?: () => BytesSource | Promise<BytesSource>; getEditVersion?: () => number; cloud?: boolean; busy?: Busy; skipOccupiedCheck?: boolean }
 export interface AcquireOpts { localName?: string; adopt?: AdoptFn; busy?: Busy }
@@ -42,13 +47,14 @@ export interface IdResult {
   status: string; where?: string; newName?: string; oldName?: string; localName?: string;
   oldCloudOrphan?: boolean;   // 旧名进 .trash 失败 → 云端遗留孤儿
   oldKept?: boolean;          // 谱系不明/分叉 → 改名降级为 save-as，云端旧名**原地留着**（须告知用户）
+  oldKeptByUser?: boolean;    // 2.2.2：留着是人在面里选的（askKeepOld → keep），不是库拿不准的默认
   oldUnknown?: boolean;       // 云端旧名的状态取不到（离线/错误）→ 没碰它；「取不到」≠「没有」，必须如实说
   cloudDeferred?: boolean;    // 云端推失败 → newName 留本地 dirty 待推
   item?: unknown; error?: unknown;
 }
 
 export function createIdentity(cfg: IdentityCfg) {
-  const { cloud, local, head, doPush, serialize, serialize2, seal, busy: _busy = passBusy, isOnline, deleteOffline, queueUpload, nameOccupied } = cfg;
+  const { cloud, local, head, doPush, serialize, serialize2, seal, busy: _busy = passBusy, isOnline, deleteOffline, queueUpload, nameOccupied, askKeepOld } = cfg;
   const unseal = (name: string, blob: Blob) => seal ? seal.unsealForRead(name, blob) : Promise.resolve(blob as Blob | null);
 
   // 目标名占用护栏（**碰撞检查内化**：caller 不必先 list 目标夹——app 原则上不知道别夹内容）。
@@ -95,6 +101,19 @@ export function createIdentity(cfg: IdentityCfg) {
         return { status: "renamed", where: "offline-move", newName };
       }
 
+      // 2.2.2：谱系不明 / 分叉 → 动字节之前先问人搬不搬云端旧的（JSDoc 见 IdentityCfg.askKeepOld）。只在在线、这台有没传改动、云端确实有旧名时问。
+      let userOld: "trash" | "keep" | null = null;
+      if (doCloud && askKeepOld && hasLocal && bytes != null && (!isOnline || isOnline()) && head.isDirtyAnywhere(oldName)) {
+        const pre = await probeOld(oldName);
+        if (pre.known && pre.meta) {
+          const base0 = head.seenBase(oldName);
+          if (base0 == null || base0 !== pre.meta.etag) {
+            const c = await askKeepOld({ oldName, newName, reason: base0 == null ? "unknown-lineage" : "diverged" });
+            if (c === "cancel") return { status: "cancelled", oldName, newName };
+            userOld = c;
+          }
+        }
+      }
       if (local && hasLocal) {
         await local.save(newName, bytes!);          // 先存新名（phantom-path：绝不先删）
         await local.hardDelete(oldName);            // 成功后才删旧名
@@ -128,18 +147,19 @@ export function createIdentity(cfg: IdentityCfg) {
         //   doPush 含最多 4 次重试 + 可能的冲突面**用户交互**，可以长达几十秒。push 之前那次读早就陈旧了，
         //   拿它决定「要不要搬走云端旧名」= 用几十秒前的世界观做破坏性动作。
         const after = await probeOld(oldName);
-        let oldCloudOrphan = false, oldKept = false, oldUnknown = false;
+        let oldCloudOrphan = false, oldKept = false, oldUnknown = false, oldKeptByUser = false;
         if (!after.known) {
           // 云端状态取不到（离线/瞬时错误）。**「取不到」≠「没有」**——绝不能拿未知当空白然后什么都不说。
           oldUnknown = true;                                   // 一个指头都不碰，并让 caller 如实告知
         } else if (after.meta == null) {
           /* 云端确实没有旧名（本来就是纯本地文件）→ 无事可做 */
-        } else if (baseAtStart != null && baseAtStart === after.meta.etag) {
-          // 谱系完好 → move 语义成立，旧名进 .trash（不 hard-delete，C5）。
+        } else if ((baseAtStart != null && baseAtStart === after.meta.etag) || userOld === "trash") {
+          // 谱系完好 → move 语义成立，旧名进 .trash（不 hard-delete，C5）。2.2.2：人在面里选了「搬走旧的」也走这条——进回收站可恢复，不是删。
           // 单腿事件（只有云端这一条腿，本地旧名没有对应的 trash 项）→ 自己生成 id，无配对需求。
           try { await cloud.trash(oldName, asideStamp(Date.now()), { baseEtag: after.meta.etag }); } catch (e) { reportStoreError(e, "warning"); oldCloudOrphan = true; }   // If-Match 锁住刚重取的那一版   // 旧名进 .trash 失败→云端遗留孤儿：surface
         } else {
           oldKept = true;   // 谱系不明/分叉 → 云端旧名原地留着（caller 须告知用户「旧的还在，叫 X」）
+          oldKeptByUser = userOld === "keep";
         }
         head.forget(oldName);
         return {
@@ -148,7 +168,7 @@ export function createIdentity(cfg: IdentityCfg) {
             : oldKept ? "cloud-push+kept"
             : oldCloudOrphan || (after.known && after.meta) ? "cloud-push+trash"
             : "cloud-push",
-          newName, oldCloudOrphan, oldKept, oldUnknown, oldName,
+          newName, oldCloudOrphan, oldKept, oldKeptByUser, oldUnknown, oldName,
         };
       } catch (e) {
         reportStoreError(e, "warning");   // 云端推失败、newName 留本地 dirty 待推 → surface

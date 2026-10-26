@@ -70,6 +70,11 @@ export interface StoreUI {
   onReplayStatus?: (evt: { phase: "start" | "pushed" | "collision" | "done"; name?: string; done: number; total: number }) => void;
   /** 'ask' 模式：回线/成功连接问一次「N 篇离线上传现在同步到云端？」。 */
   confirmReplay?: (count: number) => Promise<boolean>;
+  /** 2.2.2（user 2026-10-26「同意，反正不删就行了」；周账 F-92「重命名会多出一份」）：改名 / 移动撞上「不知道云端旧的该不该搬」时问人——这台有没传的改动 ∧
+   *  云端那份和这台的谱系对不上（diverged = 云端被别的设备改过；unknown-lineage = 这台不知道自己派生自哪一版）。trash = 旧的进回收站（可恢复，永不硬删）·
+   *  keep = 留着（两份；tryMove 返 oldKeptByUser）· cancel = 不改名、一个字节不动。按钮词 = 「搬走旧的（进回收站）/ 留着旧的 / 取消」。
+   *  不给 = 2.2.1 行为：默认留着 + tryMove 返 oldKept，宿主如实说。 */
+  resolveRenameOld?: (ctx: { oldName: string; newName: string; reason: "diverged" | "unknown-lineage" }) => Promise<"trash" | "keep" | "cancel">;
 }
 
 /** createStore 的配置。 */
@@ -215,8 +220,9 @@ export class StoreDisposedError extends Error {
  *  oldKept=谱系不明降级 save-as、云端旧名原地留着；oldUnknown=云端旧名状态取不到（「取不到」≠「没有」）；
  *  oldCloudOrphan=旧名进 .trash 失败成云端孤儿；cloudDeferred=云端推失败、新名只在本地待推。 */
 export type TryMoveResult =
-  | { ok: true; where?: string; oldName?: string; oldKept?: boolean; oldUnknown?: boolean; oldCloudOrphan?: boolean; cloudDeferred?: boolean }
-  | { ok: false; reason: "name-collision"; where: "local" | "cloud" };
+  | { ok: true; where?: string; oldName?: string; oldKept?: boolean; oldKeptByUser?: boolean; oldUnknown?: boolean; oldCloudOrphan?: boolean; cloudDeferred?: boolean }
+  | { ok: false; reason: "name-collision"; where: "local" | "cloud" }
+  | { ok: false; reason: "cancelled" };   // 2.2.2：人在「搬不搬云端旧的」那张面里选了取消 → 一个字节没动
 
 /** save 的结果：本地一定落了（没落会抛），云端**不一定**上去了。pushed:true = 云端已确认落地（拿到新 etag）；
  *  pushed:false = 只落了本地，reason：not-attempted(tryPush:false) / offline-or-error / deferred(落地未确认)
@@ -753,6 +759,7 @@ export function createStore(config: StoreConfig) {
     deleteOffline: (name: string) => del.del(name, { isOnline }).then(() => {}),   // 完整离线删语义（move-aside + base-etag 云删排队 + null 守卫 + forget）
     queueUpload: (name: string) => uploadReplay.enqueue(name),                     // never-synced float 重连补推（ADR-0018）
     nameOccupied,                                                                  // 唯一占用检查（assertNameFree 据此抛）
+    askKeepOld: ui.resolveRenameOld,                                               // 2.2.2：谱系不明 / 分叉的改名先问人搬不搬云端旧的（宿主没给 = 默认留着 + oldKept）
   });
   const trashMod = createTrash({ cloud, local, head, busy: busyT });
 
@@ -810,11 +817,12 @@ export function createStore(config: StoreConfig) {
     const occ = await nameOccupied(to);
     if (occ) return { ok: false, reason: "name-collision", where: occ };
     const r = await identity.rename(from, to, { skipOccupiedCheck: true });   // 已 nameOccupied 预检，跳过内部重复
+    if (r.status === "cancelled") return { ok: false, reason: "cancelled" };   // 2.2.2：面里选了取消，什么都没动
     notifyFolderOf(from); notifyFolderOf(to);                                 // 旧夹移出 + 新夹移入，两边重画
     for (const cb of renameListeners) { try { cb(from, to); } catch (e) { ui.reportError(e, "warning"); } }   // 监听器抛错不许污染改名结果
     // 结果必须透出去：以前这里整个丢掉 r，于是 app 无条件报「已重命名（含云端）」——
     //   云端推失败(cloudDeferred)、旧名成孤儿(oldCloudOrphan)、旧名被留下(oldKept) 全被吞掉 = UI 谎报成功。
-    return { ok: true, where: r.where, oldKept: r.oldKept, oldUnknown: r.oldUnknown, oldCloudOrphan: r.oldCloudOrphan, cloudDeferred: r.cloudDeferred, oldName: from };
+    return { ok: true, where: r.where, oldKept: r.oldKept, oldKeptByUser: r.oldKeptByUser, oldUnknown: r.oldUnknown, oldCloudOrphan: r.oldCloudOrphan, cloudDeferred: r.cloudDeferred, oldName: from };
   });
 
   // ── ui 映射：冲突回调喂 ui.resolveConflict（必填，绝不静默 cancel）。local 给本地字节（IDB，便宜）；
@@ -1076,6 +1084,7 @@ export function createStore(config: StoreConfig) {
               isOnline, probe: esc?.probe,
               onNewer: onConflictFor("open"),
               localDirty: () => sub.edits.localDirty(),
+              localBytes: async () => { const b = await local.get(name); return b ? await toU8(b instanceof Blob ? b : new Blob([b as BlobPart])) : null; },   // 2.2.2：回执丢失自愈
             }).catch((e) => ui.reportError(e));
           } finally { esc?.settle(); }
           return readLocal();

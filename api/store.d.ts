@@ -1403,6 +1403,15 @@ export declare interface StoreUI {
     }) => void;
     /** 'ask' 模式：回线/成功连接问一次「N 篇离线上传现在同步到云端？」。 */
     confirmReplay?: (count: number) => Promise<boolean>;
+    /** 2.2.2（user 2026-10-26「同意，反正不删就行了」；周账 F-92「重命名会多出一份」）：改名 / 移动撞上「不知道云端旧的该不该搬」时问人——这台有没传的改动 ∧
+     *  云端那份和这台的谱系对不上（diverged = 云端被别的设备改过；unknown-lineage = 这台不知道自己派生自哪一版）。trash = 旧的进回收站（可恢复，永不硬删）·
+     *  keep = 留着（两份；tryMove 返 oldKeptByUser）· cancel = 不改名、一个字节不动。按钮词 = 「搬走旧的（进回收站）/ 留着旧的 / 取消」。
+     *  不给 = 2.2.1 行为：默认留着 + tryMove 返 oldKept，宿主如实说。 */
+    resolveRenameOld?: (ctx: {
+        oldName: string;
+        newName: string;
+        reason: "diverged" | "unknown-lineage";
+    }) => Promise<"trash" | "keep" | "cancel">;
 }
 
 /** 2.0.0 流式面的行为开关（user 2026-10-15「行为变更默认关、消费方显式开」）：createStore({ streaming }) 传了才生效；不传 = 0.18 行为。 */
@@ -1515,6 +1524,7 @@ export declare type TryMoveResult = {
     where?: string;
     oldName?: string;
     oldKept?: boolean;
+    oldKeptByUser?: boolean;
     oldUnknown?: boolean;
     oldCloudOrphan?: boolean;
     cloudDeferred?: boolean;
@@ -1522,6 +1532,9 @@ export declare type TryMoveResult = {
     ok: false;
     reason: "name-collision";
     where: "local" | "cloud";
+} | {
+    ok: false;
+    reason: "cancelled";
 };
 
 /** provider.upload 的选项。 */
