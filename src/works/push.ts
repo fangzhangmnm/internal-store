@@ -29,8 +29,8 @@ function retriable(e: unknown): boolean {
 type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
 
 export interface PushCfg {
-  cloud: Pick<CloudSync, "push">;
-  head: Pick<LocalHead, "ifMatchFor" | "onPushed" | "recordEdit"> & Partial<Pick<LocalHead, "editCount">>;
+  cloud: Pick<CloudSync, "push"> & Partial<Pick<CloudSync, "fetchMeta">>;
+  head: Pick<LocalHead, "ifMatchFor" | "onPushed" | "recordEdit"> & Partial<Pick<LocalHead, "editCount" | "seenBase" | "markSeen">>;
   seal: Pick<Seal, "sealForWrite" | "isContainer">;
   safeResolve: Pick<SafeResolve, "tryHeal" | "resolveConflict">;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
@@ -42,13 +42,24 @@ export interface PushCfg {
   backoffMs?: number;
   /** 退避 backoffMs × 2^(n-1)（封顶 15 s）；默认线性 backoffMs × n。 */
   exponential?: boolean;
+  /** 2.2.1（默认 true）：**谱系丢了的脏副本，推之前先问一次云端**。什么时候算丢：If-Match 算不出来（脏、没捕到 parent、内存 base 空 = 刷新冲掉了）
+   *  ∧ 磁盘上有这份上次同步到的 etag（durable；真·新文件没有）。问到云端 === durable（没人动）→ markSeen 重捕 parent → 带 If-Match 推——
+   *  这和 freshness.open 在线时对脏副本做的是**同一条规则**（freshness.ts「reload 后内存 _base 空…markSeen 重捕」那段），只是搬到推之前再做一次；
+   *  问到云端 ≠ durable（真动过）→ 不再盲推撞 409，直接走 412 同一条路：tryHeal → 冲突面（cloudState 真的是 changed）；
+   *  云端没了 / 问不到 → 照旧（无 If-Match 推：没了就建回去、问不到就撞 409 让上层 surface）。
+   *  修的是 2026-10-26 CatsUp「正常编辑天天弹『云端有新版本』」：刷新前 30 s 内改过 → 刷新后本地恢复先于登录 → 0.18.0 只给干净副本接谱系、
+   *  脏的没人补 → 之后每次推都是盲推 → 409 被当成撞名 → pushAll 报 failed、自动保存弹假面、「处理…」要按两次（家族根 ai-docs/20261026-cloud-conflict-ux-postmortem.md §3）。
+   *  为什么默认开（10-21 规矩：默认开要先写为什么）：它只去掉一个**假阳性**——If-Match 仍然是云端此刻的版本、真分叉照样 412 → 面，不新增任何覆盖路径；
+   *  多标签页的顾虑和 open 在线时已有的重捕完全一样大；而且 0.18.0 的干净那半已经默认开，两半一开一关没法向消费方解释。false = 2.2.0 行为。 */
+  recaptureLineage?: boolean;
   sleep?: (ms: number) => Promise<void>;
 }
 
 export interface PushOpts {
   encode: () => BytesSource | Promise<BytesSource>;
   getEditVersion?: () => number;
-  onConflict?: (ctx: { name: string }) => ResolveChoice | Promise<ResolveChoice>;
+  /** 真分叉时问人。2.2.1 起 ctx 可能带 cloudState（推之前刚问过云端时顺手给，省一趟 fetchMeta；没带 = 调用方自己去问）。 */
+  onConflict?: (ctx: { name: string; cloudState?: "changed" | "absent" }) => ResolveChoice | Promise<ResolveChoice>;
   adopt?: AdoptFn;
   // 谱系断裂（无 base 推撞上云端同名）时的去向。见 doPush 的 isCollision 分支。
   //   false（默认）= 抛 CloudNameCollisionError（**真·新建**该走这条：两设备各建同名不同物，护栏正确）
@@ -68,11 +79,11 @@ export type PushStatus = "pushed" | "deferred" | "healed" | "resolved" | "unreso
 export interface PushResult { status: PushStatus; dirtyAfter?: boolean; resolution?: string; reason?: string; backupName?: string; backedUp?: string | null }
 
 export function createPush(cfg: PushCfg) {
-  const { cloud, head, seal, safeResolve, serialize, editVersion,
+  const { cloud, head, seal, safeResolve, serialize, editVersion, recaptureLineage = true,
     busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, exponential = pushRetryDefaults.exponential, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
   async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress, loserBackup }: PushOpts): Promise<PushResult> {
-    const ifMatch = head.ifMatchFor(name);              // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
+    let ifMatch = head.ifMatchFor(name);                // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
     const v0 = getEditVersion();
     // 0.15.2：这个文件的保存计数。全局游标（getEditVersion）要宿主自己推进，拆库后没人推进过 → dirtyAfter 恒 false：
     //   推送途中 save() 又落了新字节，推完却把 dirty 清掉。计数由 recordEdit 自己涨，不靠宿主。
@@ -82,7 +93,27 @@ export function createPush(cfg: PushCfg) {
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);
     const session = cfg.sessionFor ? await cfg.sessionFor(name, bytes) : undefined;   // F-54：同一份字节重试 / 下次开页都认得这条会话
+    // 2.2.1 谱系重捕（JSDoc 见 PushCfg.recaptureLineage）：If-Match 算不出来 ∧ 这份以前同步过 → 先问云端，而不是盲推撞 409。
+    let staleKnown = false;   // 问出来云端 ≠ durable：别再 PUT 了（必 412），直接走冲突那条路
+    const durable = head.seenBase?.(name) ?? null;
+    if (ifMatch == null && recaptureLineage && durable != null && cloud.fetchMeta && head.markSeen) {
+      let meta: Awaited<ReturnType<NonNullable<typeof cloud.fetchMeta>>> | undefined;
+      try { meta = await cloud.fetchMeta(name); } catch { meta = undefined; }   // 问不到 = 未知 → 照旧盲推（撞了由上层 surface），不据此下结论
+      if (meta && meta.etag === durable) { head.markSeen(name, meta.etag); ifMatch = head.ifMatchFor(name); }   // 云端没动：重捕 parent（= freshness.open 同一条规则）
+      else if (meta) staleKnown = true;                                                                           // 云端动过：真分叉
+      // meta === null（云端没了）：照旧无 If-Match 推 = 建回去（ghost 的 save 语义不在本次改动范围）
+    }
+    const onCloudConflict = async (): Promise<PushResult> => {
+      if (await safeResolve.tryHeal(name, bytes)) {   // lost-response 自愈
+        const dirtyAfter = editedSince();
+        if (dirtyAfter) head.recordEdit(name);        // 编辑发生在推期间 → 基于刚自愈的版本重标脏（B2）
+        return { status: "healed", dirtyAfter };
+      }
+      const choice = onConflict ? await onConflict({ name, cloudState: "changed" }) : "cancel";   // 真分叉 → 交 ui 选（默认 cancel=留 dirty）
+      return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
+    };
     return busy("sync.pushing", async () => {
+      if (staleKnown) return onCloudConflict();
       let attempt = 0, lastErr: unknown;
       while (attempt < maxAttempts) {
         attempt++;
@@ -97,15 +128,7 @@ export function createPush(cfg: PushCfg) {
           head.onPushed(name, item.eTag, dirtyAfter);
           return { status: "pushed", dirtyAfter };
         } catch (e: unknown) {
-          if (isConflict(e)) {
-            if (await safeResolve.tryHeal(name, bytes)) {   // lost-response 自愈
-              const dirtyAfter = editedSince();
-              if (dirtyAfter) head.recordEdit(name);        // 编辑发生在推期间 → 基于刚自愈的版本重标脏（B2）
-              return { status: "healed", dirtyAfter };
-            }
-            const choice = onConflict ? await onConflict({ name }) : "cancel";   // 真分叉 → 交 ui 选（默认 cancel=留 dirty）
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
-          }
+          if (isConflict(e)) return onCloudConflict();
           // 谱系断裂：无 base 推撞上云端同名（cloud-sync 的 409 + 尾字节 differ → CloudNameCollisionError）。
           //   两种情形共用这一个错误，但该走的路完全相反：
           //     ① **真·新建**（surfaceCollision=false）→ 云端那个是「别的设备建的同名不同物」。

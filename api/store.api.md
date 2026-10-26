@@ -244,6 +244,7 @@ export function createStore(config: StoreConfig): {
             pushAll: () => Promise<{
                 pushed: number;
                 failed: string[];
+                failures: PushFailure[];
             }>;
         };
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
@@ -666,6 +667,17 @@ export interface PurgeOpts {
 }
 
 // @public
+export interface PushFailure {
+    // (undocumented)
+    name: string;
+    // (undocumented)
+    reason: PushFailureReason;
+}
+
+// @public
+export type PushFailureReason = "conflict" | "collision" | "network" | "deferred" | "error";
+
+// @public
 export interface PushResult {
     item: CloudItem | null;
 }
@@ -886,6 +898,7 @@ export interface StoreConfig {
         exponential?: boolean;
     };
     readOnlyFiles?: boolean;
+    recaptureLineageOnPush?: boolean;
     reconcilePolicy: "app-driven" | "none";
     signedIn?: () => boolean;
     skipMigration?: boolean;

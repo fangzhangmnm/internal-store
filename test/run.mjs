@@ -55,6 +55,7 @@ import "./seal.test.ts";
 import "./freshness.test.ts";
 import "./store-open-conflict.test.ts";
 import "./open-lineage.test.ts";   // 0.18.0：open 核对没跑成时干净副本接血统
+import "./push-lineage-recapture.test.ts";   // 2026-10-26 2.2.1：谱系丢了的脏副本推前先问云端 + 面的 cloudState 真话 + pushAll 失败带原因（CatsUp 天天弹假面的根）
 import "./resolve.test.ts";        // 0.18.0：file.resolve() 主动叫面
 import "./local-head.test.ts";
 import "./local-conflict-guard.test.ts";

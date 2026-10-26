@@ -358,6 +358,7 @@ export declare function createStore(config: StoreConfig): {
             pushAll: () => Promise<{
                 pushed: number;
                 failed: string[];
+                failures: PushFailure[];
             }>;
         };
         /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
@@ -925,6 +926,16 @@ export declare interface PurgeOpts {
     busy?: Busy;
 }
 
+/** 2.2.1：dirty.pushAll 的失败条目（名字 + 原因）。`failed: string[]` 仍在（老消费方零改动），这是它的带原因版。 */
+export declare interface PushFailure {
+    name: string;
+    reason: PushFailureReason;
+}
+
+/** 2.2.1：dirty.pushAll 一个文件没推成的原因。conflict = 撞上真分叉（这里不弹面、默认留脏，去 `file.resolve()`）；collision = 撞名（从没同步过的新文件在云端已有同名别的文件）；
+ *  network = 云端不可达；deferred = 落地未确认（provider 没回 etag）；error = 别的异常（已 reportError）。 */
+export declare type PushFailureReason = "conflict" | "collision" | "network" | "deferred" | "error";
+
 /** push 的结果。 */
 export declare interface PushResult {
     /** 上传后的云端 item。 */
@@ -1275,6 +1286,10 @@ export declare interface StoreConfig {
      *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
      *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
     openLineageFromDurable?: boolean;
+    /** 2.2.1（默认 true）：谱系丢了的脏副本推之前先问一次云端——云端还是这份字节同步到的那一版就重捕谱系、带 If-Match 推；真动过才走冲突面。
+     *  修的是 CatsUp 2026-10-26「正常编辑天天弹『云端有新版本』，云端其实没人动」（刷新前改过 + 本地恢复先于登录 → 0.18.0 只接了干净那半）。
+     *  为什么默认开 / 安全边界见 push.ts PushCfg.recaptureLineage；false = 2.2.0 行为。 */
+    recaptureLineageOnPush?: boolean;
     /** 加密相关的 app 域注入（不加密的 app 不传）。 */
     crypt?: {
         /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */

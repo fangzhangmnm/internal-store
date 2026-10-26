@@ -17,6 +17,7 @@ export { CloudNetworkError } from "./base/errors.ts";   // 网络层失败的类
 export { CloudStaleRefError } from "./base/errors.ts";   // 「已被别处动过」错误族（ref 失效 404 收敛；app 提示刷新列表。2026-08-26）
 /** 主门牌类型：配置（StoreConfig）、UI bundle（StoreUI）、文件对象（RawFile/ZipFile）、store 本体（Store）、at-rest 密文（EncryptedBlob）。 */
 export type { StoreConfig, StoreUI, RawFile, ZipFile, Store, EncryptedBlob, FileStream } from "./create-store.ts";
+export type { PushFailure, PushFailureReason } from "./create-store.ts";   // 2.2.1：dirty.pushAll 失败带原因
 /** 统一列举面（README §2）的类型：列举项（Item）、8-badge 同步状态（SyncState）、列举上下文（ListContext）。 */
 export type { Item, SyncState, ListContext } from "./works/listing.ts";
 export type { LocalSaveReceipt } from "./base/types.ts";   // A4 守护写回执（guard="user-save" 撞版 surface）

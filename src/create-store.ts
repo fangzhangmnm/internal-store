@@ -128,6 +128,10 @@ export interface StoreConfig {
    *  修的是「重开页面、登录完成前就打字 → 第一次推没有 If-Match → 409 → 冤枉的冲突面」（WXHW 2026-10-16 单设备根因）。
    *  base 只会被记成本地字节当时同步到的那一版、永远不比字节更新，If-Match 照样挡真分叉；false = 0.17.2 行为。细节见 freshness.ts FreshnessCfg.lineageFromDurable。 */
   openLineageFromDurable?: boolean;
+  /** 2.2.1（默认 true）：谱系丢了的脏副本推之前先问一次云端——云端还是这份字节同步到的那一版就重捕谱系、带 If-Match 推；真动过才走冲突面。
+   *  修的是 CatsUp 2026-10-26「正常编辑天天弹『云端有新版本』，云端其实没人动」（刷新前改过 + 本地恢复先于登录 → 0.18.0 只接了干净那半）。
+   *  为什么默认开 / 安全边界见 push.ts PushCfg.recaptureLineage；false = 2.2.0 行为。 */
+  recaptureLineageOnPush?: boolean;
   /** 加密相关的 app 域注入（不加密的 app 不传）。 */
   crypt?: {
     /** 明文→不透明 peek 字节（app 域；store 不看内容）。 */
@@ -226,6 +230,11 @@ export type SaveResult = { pushed: boolean; reason?: string; resolution?: "keepM
  *  · unchanged = 云端没变、只是这台有没推的改动（resolve 时 etag === base）· never = 云端从来没有过（本地从没同步过，0.18.4）。
  *  absent / never 时选「云端覆盖本地」= 跟着云端：本地那份移到回收站；选「本地覆盖云端」= 传上去（never 就是第一次上传）。 */
 export type CloudState = "changed" | "absent" | "unchanged" | "never";   // never（0.18.4）= 云端从来没有过这份（本地从没同步过）：本地覆盖云端 = 第一次上传、云端覆盖本地 = 这份进回收站
+/** 2.2.1：dirty.pushAll 一个文件没推成的原因。conflict = 撞上真分叉（这里不弹面、默认留脏，去 `file.resolve()`）；collision = 撞名（从没同步过的新文件在云端已有同名别的文件）；
+ *  network = 云端不可达；deferred = 落地未确认（provider 没回 etag）；error = 别的异常（已 reportError）。 */
+export type PushFailureReason = "conflict" | "collision" | "network" | "deferred" | "error";
+/** 2.2.1：dirty.pushAll 的失败条目（名字 + 原因）。`failed: string[]` 仍在（老消费方零改动），这是它的带原因版。 */
+export interface PushFailure { name: string; reason: PushFailureReason }
 /** file.resolve() 的终态（0.18.0）：
  *  no-local 这台没有副本 · clean 没有未推的改动（没什么要处理）· offline 云端够不着 · cancelled 人在面里选了取消 ·
  *  pushed 人选「本地覆盖云端」且推上去了（云端没动 = 普通推；动过 = 412 → 库照常再弹面、按人选的走）· not-pushed 推没落地（reason = push 终态）·
@@ -708,7 +717,8 @@ export function createStore(config: StoreConfig) {
       async clear() { kv.remove(key); },
     };
   } : undefined;
-  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, sessionFor, ...config.pushRetry });
+  const recaptureLineage = config.recaptureLineageOnPush ?? true;   // 2.2.1
+  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, sessionFor, recaptureLineage, ...config.pushRetry });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
   const uploadReplayPolicy: UploadReplayPolicy = config.offlineUploadReplay ?? "manual";
@@ -717,7 +727,7 @@ export function createStore(config: StoreConfig) {
     if (uploadReplayPolicy === "ask" && !ui.confirmReplay) throw new Error("createStore: offlineUploadReplay='ask' 需 ui.confirmReplay（回线询问用户）");
   }
   // 后台 push 实例：与 pushMod 同深模块编排，唯 busy 换透传——drain 不锁屏（ADR-0018 §4：非 busy 后台）。
-  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), sessionFor, ...config.pushRetry });
+  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), sessionFor, recaptureLineage, ...config.pushRetry });
   // 0.15.1（2026-09-26，WXHW user「为什么推加密件需要密码。不就是二进制吗」→「修」）：**本地 at-rest 字节直推，不解壳不重封**。
   //   以前先 unsealForRead 得明文再交 doPush 重新 sealForWrite —— 等于要密码才能把已经封好的容器搬上云；锁着（无密码）= status "locked" 留 dirty，
   //   pushAll / 离线补推在锁屏 / reload 后全推不动。sealForWrite 本就对「已是容器」原样透传（搬运路径），明文文件也原样（prev 非容器），
@@ -811,9 +821,20 @@ export function createStore(config: StoreConfig) {
   //   cloud 恒 null = **不预拉**（QA 2026-08-20）：现有宿主（WeebPaint/JRP）的 sheet 只用 name 不渲染 blob，
   //   预拉整份云端 = sheet 前双倍下载（takeCloud 时 safePull 反正会拉**最新**），且弹 sheet 前的长拉窗口
   //   会吞掉用户点「跳过到离线」。将来宿主要预览云端版 → escalate 改 StoreUI 契约（懒取），别回填这里。──
-  const onConflictFor = (occasion: "open" | "push") => async ({ name }: { name: string }): Promise<ResolveChoice> => {
+  // 2.2.1：面上的 cloudState 按真相填，不再写死 "changed"（2026-10-26 复盘 §4-1：盲推 409 被当撞名时面说「云端和本机各有一版新改动」，云端其实没人动，
+  //   而主按钮是「云端覆盖本地」= 把用户最新的改动扔进备份箱）。open 路径（freshness 已比过 etag ≠ base）和 push 刚问过云端的，直接用带来的；
+  //   没带的（412 / 撞名）问一趟云端：没了 → absent / never；还是 durable 那版 → unchanged（只会在撞名 409 的路上出现）；别的 → changed；问不到 → changed（可能变了）。
+  const cloudStateNow = async (name: string): Promise<CloudState> => {
+    try {
+      const meta = await cloud.fetchMeta(name);
+      const base = head.seenBase(name);
+      return !meta ? (base == null ? "never" : "absent") : meta.etag === base ? "unchanged" : "changed";
+    } catch (e) { ui.reportError(e, "log"); return "changed"; }
+  };
+  const onConflictFor = (occasion: "open" | "push") => async ({ name, cloudState, cloudEtag }: { name: string; cloudState?: CloudState; cloudEtag?: string }): Promise<ResolveChoice> => {
     if (tierOf(name) === "auto-backup") return "keepMine";   // 2.1.0 二等自动备份：永不弹面，这台的赢（输的那份不进备份箱 —— push 的 loserBackup）
-    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: "changed" });   // 412 / 撞名 / open 时云端更新：云端一定有别的版本
+    const state: CloudState = cloudState ?? (cloudEtag != null ? "changed" : await cloudStateNow(name));   // open：freshness 已经看到云端 etag ≠ base
+    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: state });
   };
   const onConflict = onConflictFor("push");   // save 的 push 412 / surfaceCollision 走这份；open 路径用 onConflictFor("open")
 
@@ -1357,21 +1378,28 @@ export function createStore(config: StoreConfig) {
          *  sheet）；名字留在 failed 里，用户打开该文件走正常 save/冲突面解决。
          *  ⚠ 滥用警示：这是**自动续推**（登录后 / 回线 / 回前台把已 consent 的保存补上去），If-Match 守着、撞上就留 dirty。
          *  **不要**把它接到用户按的「传上去 / 全部推送」按钮上——那是替人选了「本地覆盖云端」的方向。失败名单里的文件只能经 `resolve()` 处理。 */
-        pushAll: async (): Promise<{ pushed: number; failed: string[] }> => {
+        pushAll: async (): Promise<{ pushed: number; failed: string[]; failures: PushFailure[] }> => {
           roGuard("dirty.pushAll");
           await migrationReady;
-          let pushed = 0; const failed: string[] = [];
+          let pushed = 0; const failed: string[] = []; const failures: PushFailure[] = [];
           for (const name of dirtyNames()) {
-            const st = await sub.serialize(name, async (): Promise<"pushed" | "clean" | "failed"> => {
+            const st = await sub.serialize(name, async (): Promise<"pushed" | "clean" | PushFailureReason> => {
               if (!head.isDirtyAnywhere(name)) return "clean";          // 其间已被推干净/删除 → 不重推不计数
               try {
                 const r = await pushLocalBytes(name);                   // vetted push（seal + If-Match + F0 deferred 不算成功）
-                return (r.status === "pushed" || r.status === "healed") ? "pushed" : "failed";
-              } catch (e) { ui.reportError(e, "warning"); return "failed"; }   // 冲突/撞名/网络 → 留 dirty 报名字
+                if (r.status === "pushed" || r.status === "healed") return "pushed";
+                // 2.2.1：失败带原因（app 才能说真话、画列表）。cancelled / unresolved = 撞上真分叉（这里不弹面，默认 cancel 留脏）；deferred = 落地未确认
+                return r.status === "deferred" ? "deferred" : "conflict";
+              } catch (e) {
+                ui.reportError(e, "warning");                            // 撞名 / 网络 → 留 dirty 报名字
+                const n = (e as { name?: string } | null)?.name;
+                return n === "CloudNameCollisionError" ? "collision" : n === "CloudNetworkError" ? "network" : "error";
+              }
             });
-            if (st === "pushed") pushed++; else if (st === "failed") failed.push(name);
+            if (st === "pushed") pushed++;
+            else if (st !== "clean") { failed.push(name); failures.push({ name, reason: st }); }
           }
-          return { pushed, failed };
+          return { pushed, failed, failures };
         },
       }),
       /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
