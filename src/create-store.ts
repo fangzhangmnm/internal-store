@@ -1138,6 +1138,15 @@ export function createStore(config: StoreConfig) {
         let cloudState: CloudState = "changed";
         try { const meta = await cloud.fetchMeta(name); cloudState = !meta ? (head.seenBase(name) == null ? "never" : "absent") : meta.etag === head.seenBase(name) ? "unchanged" : "changed"; }
         catch (e) { ui.reportError(e, "log"); }   // 拿不到就按「可能变了」问
+        // 2.2.3：回执丢失自愈也走「处理…」这条路（家族周账 F-142，2026-11-03）。云端版本号变了 ∧ 本机还脏 → 先拉云端逐字节比，
+        //   一样 = 上次推其实早落了云、只是回执没回来 → 认领（markSynced），不弹面、返 pushed（和 push 路 healed 的映射一致）；
+        //   不一样才问人。push 路（412 → tryHeal）和 open 路（2.2.2）早就这么做；10-26 撤掉登录后批量推以后，「处理…」成了
+        //   唯一入口却没人比字节 → 云端 = 本机字节也弹「云端和本机各有一版新改动」（MoonSinger 工单 A2 的 e2e 抓到的假面）。
+        //   拉不到 / 比不出 → tryHeal 返 false，照旧弹面；二等自动备份本来就 keepMine，比一次字节只省一次推。
+        if (cloudState === "changed") {
+          const cur = await local.get(name);
+          if (cur && await safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])))) { notifyFolderOf(name); return { status: "pushed" }; }
+        }
         const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "keepMine"   // 2.1.0 二等：不问人，这台的赢
           : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
         if (choice === "cancel") return { status: "cancelled" };
