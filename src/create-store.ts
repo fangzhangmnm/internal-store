@@ -1338,7 +1338,9 @@ export function createStore(config: StoreConfig) {
     assertValidCollectionName(name);
     const cached = _collections.get(name);
     if (cached) return cached;
-    const coll = rejectAfterDispose(createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, getInitData: opts.getInitData }));
+    // 2.2.4（家族周账 F-100 / 工单 D 查出）：collection 也吃 store 的 isOnline（= rawOnline ∧ signedIn），以前没递 → 宿主选了「离线继续」
+    //   之后改偏好 / 阅读位置仍会打网（folder-flow 的快路径和 pull-merge-push 都看这个谓词）。「离线一条网都不打」要对 file 和 collection 同时成立。
+    const coll = rejectAfterDispose(createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, getInitData: opts.getInitData, isOnline }));
     registerScaffold(name);   // store 自动在云端 idempotent 建出 .${appId}/<name>.json
     _collections.set(name, coll);
     return coll;
