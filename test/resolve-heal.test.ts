@@ -86,3 +86,28 @@ test("[resolve-heal] 云端没变（版本号 = 基准）、本机脏 → 不比
   eq(await r.cloudText("稿.ora"), "MINE", "云端 = 这台的");
   assert((await r.store.files.dirty.count()) === 0, "推完不脏");
 });
+
+// 2.2.5：比字节那一趟也有逃生口（A19）。云端挂死 + 人点「跳过到离线」→ resolve 返 offline、不弹面、不卡。
+test("[resolve-heal] 慢网：拉云端比字节挂住，点「跳过到离线」→ offline、零面、不卡住；仍脏", async () => {
+  const provider = createMockProvider();   // mock 的 download 不走 hook、挂不死；用「probe 已先到」来钉逃生那条路（真慢网 = 同一条 race）
+  const local = createMockLocal();
+  const conflicts: string[] = [];
+  const ui = {
+    busy: <T>(_l: string, fn: () => Promise<T>) => fn(),
+    resolveConflict: async ({ name }: { name: string }) => { conflicts.push(name); return "cancel"; },
+    reportError: () => {},
+    offlineEscape: () => ({ probe: Promise.resolve(), settle: () => {} }),   // 人已经点了「跳过到离线」：probe 先于比字节到（真慢网 = 同一条 race）
+  } as never;
+  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption: createMockEncryption(), persistence: "none",
+    appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local, isOnline: () => true, signedIn: () => true, skipMigration: true });
+  const f = store.file("稿.ora", { mode: "existing" });
+  eq((await f.save(enc("V1"), { tryPush: true })).pushed, true, "V1 推上去");
+  await f.save(enc("V2"), { tryPush: false });
+  provider._seed("稿.ora", "V2");                 // 云端版本号变了（同字节），但下载挂死
+  const p = f.resolve();
+  const out = await Promise.race([p, new Promise<"hung">((r) => setTimeout(() => r("hung"), 3000))]);
+  assert(out !== "hung", "resolve 没卡住");
+  eq((out as { status: string }).status, "offline", "人说离线 = offline");
+  eq(conflicts.length, 0, "零面");
+  eq(await store.files.dirty.count(), 1, "仍脏，下次再处理");
+});

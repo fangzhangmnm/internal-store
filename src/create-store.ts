@@ -1145,7 +1145,17 @@ export function createStore(config: StoreConfig) {
         //   拉不到 / 比不出 → tryHeal 返 false，照旧弹面；二等自动备份本来就 keepMine，比一次字节只省一次推。
         if (cloudState === "changed") {
           const cur = await local.get(name);
-          if (cur && await safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])))) { notifyFolderOf(name); return { status: "pushed" }; }
+          if (cur) {
+            // 2.2.5：比字节那一趟拉云端也和「跳过到离线」赛跑（A19：每个等云端的时刻都有出口；open 路 2.2.2 早就这样）。
+            //   probe 先到 = 人说「现在离线」→ 返 offline，不弹面（面是问「云端 vs 本机」，人刚说了不等云端）；下次再按照旧。
+            const esc = ui.offlineEscape?.();
+            try {
+              const healing = safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])));
+              const outcome = esc ? await Promise.race([healing.then((h) => ({ k: "heal" as const, h })), Promise.resolve(esc.probe).then(() => ({ k: "skip" as const }))]) : { k: "heal" as const, h: await healing };
+              if (outcome.k === "skip") return { status: "offline" };
+              if (outcome.h) { notifyFolderOf(name); return { status: "pushed" }; }
+            } finally { esc?.settle(); }
+          }
         }
         const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "keepMine"   // 2.1.0 二等：不问人，这台的赢
           : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
