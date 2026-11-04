@@ -60,6 +60,8 @@ import "./open-heal-rename-ask.test.ts";   // 2026-10-26 2.2.2：open 回执丢�
 import "./resolve.test.ts";
 import "./resolve-heal.test.ts";
 import "./collection-offline.test.ts";   // 2.2.4 F-100：collection 也吃 isOnline（离线一条网都不打）
+import "./save-offline.test.ts";         // 2.2.6：file.save 也吃 isOnline（MoonSinger H4 查出的洞）
+import "./listing-cloud-sealed.test.mjs"; // 2.2.6：Item.cloudSealed（gallery 0.8.11 第三路）
 import "./local-head.test.ts";
 import "./local-conflict-guard.test.ts";
 import "./offload.test.ts";

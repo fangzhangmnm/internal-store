@@ -730,6 +730,10 @@ export declare interface Item {
     /** 2.1.2：公民等级（docKinds 表的 tier；不是文档 → "work"）。gallery 画「自动」「只读」徽章用（user 2026-10-17「Item 列举面没带 tier：带」）。
      *  和 syncState 一样是库填好的事实，下游不要再从名字重推一份。 */
     tier: DocTier;
+    /** 2.2.6（2026-11-04）：云端那份是加密容器——云端文件名经 toName 变了名 = 带容器后缀（cloud-sync.ts：全库唯一的加密名判定 seam，身份本身以 .zip 结尾的 app 走 config.toName 的例外也在那）。
+     *  只在 true 时写。给 gallery 0.8.11「加密态 = 本地字节 ∨ store 的事实」当第三路：纯云端、这台没字节的加密件第一次打开前就能亮锁、不显明文封面。
+     *  和 kind / tier 一样是库填好的事实，下游别再从名字推；不是 syncState 的派生、不参与 badge。列举本来就拿到名字，零多余请求。 */
+    cloudSealed?: true;
 }
 
 /** localStorage / IDB / 内存 都能实现的极简 KV（store 不直碰 localStorage，红线 #7）。 */

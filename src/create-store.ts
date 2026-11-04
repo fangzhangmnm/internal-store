@@ -1043,6 +1043,13 @@ export function createStore(config: StoreConfig) {
         }
         notifyFolderOf(name);                                    // 网盘模型：本夹 watcher 即时反映新增/变脏（无云往返；gallery 没开=cheap no-op）
         if (opts?.tryPush === false) return { pushed: false, reason: "not-attempted" };   // 只落本地（autosave/consent-safe，ADR-0016/0018：opaque Work 的 push 必 consent-gated）
+        // 2.2.6（2026-11-04 Claude Fable 5.1；MoonSinger 工单 H4 查出、user「库自己守同意」）：isOnline 为假（选了「离线继续」/ 没网 / 没登录）→ **一条网都不打**。
+        //   以前这里直接 pushMod.push → fetchMeta / upload 必失败才回 reason；闸门设计稿「库离线一条网都不打」对 save 不成立，app 只能在自己的 store 接缝里把 tryPush 改假、六家各补一次。
+        //   后果和「推了没成」完全一样：文件留 dirty、ADR-0018 从没同步过的照样入补推队列、宿主拿到 pushed:false reason:"offline"；少的只是那个注定失败的请求。
+        if (!isOnline()) {
+          if (head.isDirtyThisTab(name) && head.seenBase(name) == null) uploadReplay.enqueue(name);
+          return { pushed: false, reason: "offline" };
+        }
         // surfaceCollision：**编辑既有文件**时，谱系断裂撞名走冲突面而非抛 collision（push.ts 的长注释解释了为什么两者相反）。
         //   mode:"new" 的首存不给 —— 那里撞名是「别的设备建了同名不同物」，抛错两份都留是 §A 身份行的保证。
         let pushed = false, reason: string | undefined, resolution: SaveResult["resolution"];

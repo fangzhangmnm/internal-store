@@ -44,6 +44,10 @@ export interface Item {
   /** 2.1.2：公民等级（docKinds 表的 tier；不是文档 → "work"）。gallery 画「自动」「只读」徽章用（user 2026-10-17「Item 列举面没带 tier：带」）。
    *  和 syncState 一样是库填好的事实，下游不要再从名字重推一份。 */
   tier: DocTier;
+  /** 2.2.6（2026-11-04）：云端那份是加密容器——云端文件名经 toName 变了名 = 带容器后缀（cloud-sync.ts：全库唯一的加密名判定 seam，身份本身以 .zip 结尾的 app 走 config.toName 的例外也在那）。
+   *  只在 true 时写。给 gallery 0.8.11「加密态 = 本地字节 ∨ store 的事实」当第三路：纯云端、这台没字节的加密件第一次打开前就能亮锁、不显明文封面。
+   *  和 kind / tier 一样是库填好的事实，下游别再从名字推；不是 syncState 的派生、不参与 badge。列举本来就拿到名字，零多余请求。 */
+  cloudSealed?: true;
 }
 
 /** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
@@ -130,7 +134,7 @@ export type WatchFolderErrorPhase = "local" | "remote";
 
 // ── listFolder 的可选预取/快照注入（A3）─────────────────────────────────────────────
 /** 现场云帧预取（修双拉）：调用方已拉好 cloud.listFolder 结果 → 传进来复用，undefined=listing 自取，null=云不可达。 */
-export interface CloudFolderPrefetch { files: { name: string; eTag: string; size: number; lastModifiedDateTime?: string | number; ref?: string }[]; folders: string[]; complete: boolean }
+export interface CloudFolderPrefetch { files: { name: string; /** 云端真实路径（cloud-sync 给；≠ name = 加密容器名，2.2.6 cloudSealed 据此）。 */ path?: string; eTag: string; size: number; lastModifiedDateTime?: string | number; ref?: string }[]; folders: string[]; complete: boolean }
 /** 「上次云帧」目录索引缓存（dir-index-cache 分区解析后，非 SSoT）：**只用于给本地帧追加 cloud-only 缺项**，
  *  绝不参与本地项的 badge 分类（否则保存后旧 eTag 会闪假 newer-on-cloud）、绝不喂 reconcile（红线）。 */
 export interface StaleCloudView { files: { name: string; size?: number; lastModified?: number }[]; folders: string[] }
@@ -151,7 +155,7 @@ export function createListing(cfg: ListingCfg) {
   // 一个 path 的原始事实 → Item（cloud/local 两轴 + head → classifier）。listAllItems 与 listFolder 共用。
   function classifyPath(
     path: string,
-    cf: { eTag: string; size: number; lastModified?: number } | undefined,
+    cf: { eTag: string; size: number; lastModified?: number; sealed?: boolean } | undefined,
     hasLocal: boolean,
     cloudReachable: boolean,
     absenceAuthoritative: boolean,
@@ -175,7 +179,7 @@ export function createListing(cfg: ListingCfg) {
     //   判据与 badge 同源（dirty）：badge 说「未推」时间就是你本地最后一存；badge 说「已同步」时间就是云端那份；
     //   跨设备 B 机不 dirty → 云端时间正确。仅影响显示，不进任何同步/冲突判断（no-timestamps 红线不动）。
     const lastModified = dirty ? (localStat?.updatedAt ?? cf?.lastModified) : (cf?.lastModified ?? localStat?.updatedAt);
-    return { identifier: path, ...describe(path), syncState, size: cf?.size ?? localStat?.size, lastModified };
+    return { identifier: path, ...describe(path), syncState, size: cf?.size ?? localStat?.size, lastModified, ...(cf?.sealed ? { cloudSealed: true as const } : {}) };
   }
 
   // 本地项的轻量元信息（size+updatedAt），批量取 → classifyPath 给本地项填尺寸/时间。stat 缺（老 mock）→ 跳过。
@@ -199,11 +203,11 @@ export function createListing(cfg: ListingCfg) {
     const absenceAuthoritative = cloudReachable && cloudRes!.complete === true;
 
     const prefix = folder ? `${folder}/` : "";
-    const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number }>();
+    const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number; sealed?: boolean }>();
     // 身份 = **全名（c.name = toName(云端文件名)）**：明文 X.dat 恒等、加密 X.dat.zip 去尾 .zip → 都归一到 X.dat。
     //   本地 key（appKeys / 迁移后）也是全名 X.dat → 两轴按同一 key 归一；否则 cloud 与 local 分裂成两项、open 对不上
     //   （=0B/打开空白的根因，v390）。app 在边界用 sessionFileName 把裸 session 名转全名；encFileName 负责加密件的 .zip 追加。
-    for (const c of cloudRes?.files ?? []) { if (isHiddenAny(c.name)) continue; cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) }); }
+    for (const c of cloudRes?.files ?? []) { if (isHiddenAny(c.name)) continue; cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), sealed: typeof c.path === "string" && c.path !== c.name }); }
 
     // 本地：只看本夹前缀下的 key；直属文件 → 参与列举，更深的 → 记 immediate 子夹。隐藏项（末段 dot）全跳。
     const localDirect = new Set<string>();
@@ -256,10 +260,10 @@ export function createListing(cfg: ListingCfg) {
     const cloudReachable = cloudRes != null;
     const absenceAuthoritative = cloudReachable && cloudRes!.complete === true;
 
-    const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number }>();
+    const cloudMap = new Map<string, { eTag: string; size: number; lastModified?: number; sealed?: boolean }>();
     for (const c of cloudRes?.files ?? []) {
       if (isHiddenAny(c.name)) continue;
-      cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime) });   // 身份=session name（裸），见 listFolder 同处注释
+      cloudMap.set(c.name, { eTag: c.eTag, size: c.size, lastModified: toMs(c.lastModifiedDateTime), sealed: typeof c.path === "string" && c.path !== c.name });   // 身份=session name（裸），见 listFolder 同处注释
     }
     const localSet = new Set((await local.appKeys()).filter((k) => !isHiddenAny(k)));
 

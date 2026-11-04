@@ -517,6 +517,7 @@ export function isDirty(s: SyncState): boolean;
 
 // @public
 export interface Item {
+    cloudSealed?: true;
     identifier: string;
     kind?: string;
     lastModified?: number;
