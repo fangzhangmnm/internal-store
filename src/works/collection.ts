@@ -77,6 +77,14 @@ export interface CollectionConfig {
   localWriteDelayMs?: number;
   /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
   getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
+  /** 库内（store.dispose 用，2.2.7）：建好时交出这份 collection 的生命周期把手。不在 Collection 公开面上——关它的是 store，不是 app。 */
+  lifecycle?: (handle: CollectionLifecycle) => void;
+}
+
+/** collection 的生命周期把手（只给 store 的 dispose 用）。 */
+export interface CollectionLifecycle {
+  /** 收掉定时器。flush = 排着的本地写先落完再关（没落盘的改动不丢）；false = 只取消、等在飞的那笔收尾。之后这份 collection 再也不排写。 */
+  close(opts: { flush: boolean }): Promise<void>;
 }
 
 /** reconcileWithRemote 的终态。status 来自 folder-flow.sync（synced/offline/invalid/dirty），
@@ -143,10 +151,11 @@ const isTombstone = (e: FolderItem): boolean => valueOf(e) === null;
 
 export function createCollection(cfg: CollectionConfig): Collection {
   const { cloud, name, isOnline, syncDelayMs = 1500, now = () => Date.now(), manual = false,
-    local, localWriteDelayMs = 400, getInitData } = cfg;
+    local, localWriteDelayMs = 400, getInitData, lifecycle } = cfg;
   const flow = createFolderFlow({ cloud, name, encode, decode, isOnline });
   let env: FolderEnvelope = emptyFolder();
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;                             // store.dispose 关过（close()）：两个定时器都不再排，迟到的写不落到已关的 IDB 上
   let ready = false;                              // init 后置 true：pre-init 守卫（setItem 抛、getItem 返 default）
   const listeners = new Set<ChangeCb>();
 
@@ -210,7 +219,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
   }
   function clearLocalTimer(): void { if (localTimer != null) { clearTimeout(localTimer); localTimer = null; } }
   function scheduleLocalWrite(): void {
-    if (!local || localTimer != null) return;
+    if (!local || closed || localTimer != null) return;
     localTimer = setTimeout(() => { localTimer = null; void writeLocalNow(); }, localWriteDelayMs);
   }
   // ★ v436：本地写**失败也要说出来**。旧版 `.catch(reportStoreError(e,"log"))` 之后返回 localChain，
@@ -218,8 +227,9 @@ export function createCollection(cfg: CollectionConfig): Collection {
   //   三个 unload 屏障（app-prefs / app-state / preset-rack-controller）全靠它当「关机前落盘」的保证——
   //   一旦它说谎，用户的设置和预设就**静默丢失**。而这是**本地**那条腿，不是云端：
   //   离线是正常坏天气，本地写不进去不是。分级也从 "log" 提到 "warning"（要出 banner）。
-  function writeLocalNow(): Promise<{ ok: boolean; error?: unknown }> {
+  function writeLocalNow(final = false): Promise<{ ok: boolean; error?: unknown }> {
     if (!local) return Promise.resolve({ ok: true as const });
+    if (closed && !final) return Promise.resolve({ ok: false as const, error: new Error(`collection(${name}) closed`) });   // 关了以后不再写（只有 close 自己的最后一笔例外）；不上报——库已释放，对用户没有可说的
     clearLocalTimer();
     const snap = encode(env);                         // 抓当前 env 快照（含 uat）
     localChain = localChain
@@ -230,6 +240,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
 
   function clearTimer() { if (timer != null) { clearTimeout(timer); timer = null; } }
   function scheduleSync() {
+    if (closed) return;          // store 已释放：不再排本地写、不再排云推
     scheduleLocalWrite();        // 本地缓存与云无关：manual/auto 都写本地（强杀/离线靠它）
     cloud.setDirty(name, true);
     if (manual) return;          // 手动模式：只标脏，云 commit 由调用方 reconcileWithRemote() 驱动
@@ -340,6 +351,19 @@ export function createCollection(cfg: CollectionConfig): Collection {
 
   function flushLocal(): Promise<{ ok: boolean; error?: unknown }> { return writeLocalNow(); }
   function isDirty(): boolean { return cloud.isDirty(name); }
+
+  // store.dispose 用（经 cfg.lifecycle 交出，不在公开面上；2.2.7，家族周账 F-199 ①）：以前 dispose 不管这两个定时器——init 一跑就排一个 400 ms 的本地写，
+  //   开机拆空库（CatsUp settleNoHome）离 init 只差几十毫秒 → 到点 local.save 撞上已关的 IDB → reportStoreError(warning) 给用户冒一条英文，每次都中。
+  //   flush = 排着的本地写先落完再关（第 2 条：这台设备上没落盘的改动不丢）；不 flush = 只取消、等在飞的那笔收尾。关了之后 schedule* 都是 no-op。
+  async function close(opts: { flush: boolean }): Promise<void> {
+    if (closed) return;
+    const pending = localTimer != null;
+    closed = true;
+    clearTimer(); clearLocalTimer();
+    if (pending && opts.flush) await writeLocalNow(true);
+    else await localChain;
+  }
+  lifecycle?.({ close });
 
   return { init, reconcileWithRemote, setItem, deleteItem, getItem, getEntry, entries, keys, onChange, flushLocal, isDirty };
 }

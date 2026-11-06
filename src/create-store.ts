@@ -20,7 +20,7 @@ import { createOffload } from "./works/offload.ts";
 import { createReconcile } from "./works/reconcile.ts";
 import { createPendingGone } from "./works/pending-gone.ts";
 import { assertValidFileName, assertValidCollectionName, isHidden } from "./base/is-hidden.ts";
-import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig } from "./works/collection.ts";
+import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig, type CollectionLifecycle } from "./works/collection.ts";
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./works/listing.ts";
 import { createUploadReplay, type UploadReplayPolicy } from "./works/upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn, UploadSessionPort, UploadSessionRecord } from "./base/types.ts";
@@ -634,23 +634,32 @@ export function createStore(config: StoreConfig) {
     const stale = await readDirIndexCache(folder);
     return listing.listFolder(folder, LOCAL_CTX, stale ? { staleCloud: stale } : undefined);
   }
+  // 释放（dispose）之后还在飞的那一帧：库已经没了，这一帧对用户没有可说的——只进黑匣子，不弹（2.2.7，家族周账 F-199 ②：开机半秒内正开着图库、
+  //   app 拆空库时目录帧读到一半撞上关掉的 IDB → 以前冒一条红色英文；CatsUp 6 页并行 18 次 2 次）。释放前照常上报。每个 await 之后都看一眼 _disposed：
+  //   帧不再投递、不再 reconcile、不再写目录索引缓存——拆了的库上任何一步都不该再有副作用。
+  const reportFrame = (e: unknown, level: StoreErrorLevel = "error"): void => { ui.reportError(e, _disposed ? "log" : level); };
   async function pushLocalFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
-    try { emitFolder(folder, await localFrameSnap(folder)); } catch (e) { ui.reportError(e); emitFolderError(folder, e, "local"); }
+    try { const snap = await localFrameSnap(folder); if (_disposed) return; emitFolder(folder, snap); } catch (e) { reportFrame(e); emitFolderError(folder, e, "local"); }
   }
   async function pushRemoteFrame(folder: string): Promise<void> {
     if (!folderWatchers.has(folder)) return;
     void ensureScaffold();   // store 自管 scaffold 的首次云成功点：开库时 auth 未就绪跳过的，这里（app 订阅、auth 就绪后）补建
     // **单次**现场云列举，reconcile 与 listing 共享（A3 修双拉：一次订阅只打一遍 Graph）。失败 → null（云不可达，各自优雅降级）。
     const ctx = ctxNow();
-    const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { ui.reportError(e, "log"); return null; }) : null;
-    await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => ui.reportError(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
+    const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { reportFrame(e, "log"); return null; }) : null;
+    if (_disposed) return;
+    await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => reportFrame(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
+    if (_disposed) return;
     try {
       // 0.11.6：云不可达 / 凭证过期 / 未登录时的这一帧**同样掺 stale**——否则它会把本地帧刚显出来的云端名单又抹掉
       //   （09-06 晨案 items=4 的第二只手：本地帧掺了、远端帧没掺 → 两帧一闪又剩 4 张）。live 到了就以现场云帧为准。
       const stale = live ? null : await readDirIndexCache(folder);
-      emitFolder(folder, await listing.listFolder(folder, ctx, stale ? { cloudPrefetched: live, staleCloud: stale } : { cloudPrefetched: live }));
-    } catch (e) { ui.reportError(e); emitFolderError(folder, e, "remote"); }
+      const snap = await listing.listFolder(folder, ctx, stale ? { cloudPrefetched: live, staleCloud: stale } : { cloudPrefetched: live });
+      if (_disposed) return;
+      emitFolder(folder, snap);
+    } catch (e) { reportFrame(e); emitFolderError(folder, e, "remote"); }
+    if (_disposed) return;
     if (live?.complete) {
       writeDirIndexCache(folder, live);   // 完整云帧 → 覆盖目录索引缓存（下次冷首帧的底）
       for (const f of live.files) if (f.eTag) freshHints.note(f.name, { etag: f.eTag, lastModified: f.lastModifiedDateTime, size: f.size, item: f });   // 0.17.0：open 的新鲜度证据（只喂完整现场帧）
@@ -669,10 +678,14 @@ export function createStore(config: StoreConfig) {
     if (!set) { set = new Set(); folderWatchers.set(folder, set); }
     set.add(cb);
     if (opts?.onError) watcherOnError.set(cb, opts.onError);
-    const fail = (e: unknown, phase: WatchFolderErrorPhase): void => { ui.reportError(e); try { opts?.onError?.(e, phase); } catch (e2) { ui.reportError(e2); } };
+    const fail = (e: unknown, phase: WatchFolderErrorPhase): void => {
+      if (_disposed) { ui.reportError(e, "log"); return; }   // 库已释放：订阅随库一起没了，不叫 app 把列表画成「读取失败」
+      ui.reportError(e); try { opts?.onError?.(e, phase); } catch (e2) { ui.reportError(e2); }
+    };
     void (async () => {
       try { await migrationReady; } catch (e) { fail(e, "local"); return; }   // 迁移门 reject 以前是 unhandled rejection + 永无帧
-      try { cb(await localFrameSnap(folder)); } catch (e) { fail(e, "local"); }   // ① 本地帧（该新订阅者；含 stale 快照追加 → 冷首帧即显云端缺项）
+      if (_disposed) return;
+      try { const snap = await localFrameSnap(folder); if (_disposed) return; cb(snap); } catch (e) { fail(e, "local"); }   // ① 本地帧（该新订阅者；含 stale 快照追加 → 冷首帧即显云端缺项）
       await pushRemoteFrame(folder);                                              // ② 云端帧（全体 watcher；失败经 emitFolderError 通知）
     })();
     return (): void => { const s = folderWatchers.get(folder); if (s) { s.delete(cb); if (!s.size) folderWatchers.delete(folder); } };
@@ -1345,6 +1358,7 @@ export function createStore(config: StoreConfig) {
 
   //   （单例的为什么：否则两个实例各持内存信封、同步同一云文件 → 写互相看不见、冲突。）
   const _collections = new Map<string, Collection>();
+  const _collectionHandles: CollectionLifecycle[] = [];   // 每份 collection 的生命周期把手（dispose 收定时器 / 落盘用；不在公开面上，2.2.7）
   /** collection 工厂：走 collections 实例 + 云端 scaffold（全部带云同步——cloudless {local:true} 变体已
    *  物理移除 2026-08-28 清零轮：device 本地字段归 app 侧 localStorage 器官，store 单一职责；
    *  详 ai-docs/20260827-deprecation-cloudless-collection.md + WeebPaint v0.11.25 清零信号）。
@@ -1357,7 +1371,8 @@ export function createStore(config: StoreConfig) {
     if (cached) return cached;
     // 2.2.4（家族周账 F-100 / 工单 D 查出）：collection 也吃 store 的 isOnline（= rawOnline ∧ signedIn），以前没递 → 宿主选了「离线继续」
     //   之后改偏好 / 阅读位置仍会打网（folder-flow 的快路径和 pull-merge-push 都看这个谓词）。「离线一条网都不打」要对 file 和 collection 同时成立。
-    const coll = rejectAfterDispose(createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, getInitData: opts.getInitData, isOnline }));
+    const coll = rejectAfterDispose(createCollection({ cloud: collectionsCloud, name, local: collectionLocal, manual: opts.manual, getInitData: opts.getInitData, isOnline,
+      lifecycle: (h) => { _collectionHandles.push(h); } }));
     registerScaffold(name);   // store 自动在云端 idempotent 建出 .${appId}/<name>.json
     _collections.set(name, coll);
     return coll;
@@ -1519,7 +1534,10 @@ export function createStore(config: StoreConfig) {
       _disposed = true;                              // 先拒新调用（drain 才可能收敛）
       renameListeners.clear();
       unAuth?.();                                    // 0.11.6：退订 provider auth 事件
-      folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效
+      folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效；已经在飞的那帧每个 await 后看 _disposed 自退（reportFrame）
+      // 2.2.7（家族周账 F-199 ①）：每份 collection 排着的本地写定时器先收掉——init 一跑就排一个（400 ms）。drain = 先落盘再关（第 2 条：没落盘的改动不丢）；
+      //   快速拆除 = 只取消。以前漏了这一步 → 到点撞上已关的 IDB、给用户冒一条英文警告（CatsUp 开机拆空库每次都中；别的 app 搬家 / 登出拆库同样会中）。
+      await Promise.all(_collectionHandles.map((h) => h.close({ flush: opts?.drain !== false })));
       if (opts?.drain !== false) await sub.drain();  // 等所有 serialize 链尾（push/local 写都在链上）
       local.close?.();                               // 断 IDB（三个 cache 可能同/异实例，close 幂等）
       if (collectionLocal !== local) collectionLocal.close?.();
