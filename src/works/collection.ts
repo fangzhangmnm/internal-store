@@ -83,7 +83,7 @@ export interface CollectionConfig {
 
 /** collection 的生命周期把手（只给 store 的 dispose 用）。 */
 export interface CollectionLifecycle {
-  /** 收掉定时器。flush = 排着的本地写先落完再关（没落盘的改动不丢）；false = 只取消、等在飞的那笔收尾。之后这份 collection 再也不排写。 */
+  /** 收掉定时器。flush = 排着的本地写先落完再关（没落盘的改动不丢）、在飞的也等完；false = 只取消、什么都不等。之后这份 collection 再也不排写。 */
   close(opts: { flush: boolean }): Promise<void>;
 }
 
@@ -156,6 +156,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
   let env: FolderEnvelope = emptyFolder();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;                             // store.dispose 关过（close()）：两个定时器都不再排，迟到的写不落到已关的 IDB 上
+  let abandoned = false;                          // close({flush:false})：调用方要快速拆除，在飞的那笔不等——它撞上关掉的连接不是用户的事，只进黑匣子
   let ready = false;                              // init 后置 true：pre-init 守卫（setItem 抛、getItem 返 default）
   const listeners = new Set<ChangeCb>();
 
@@ -234,7 +235,7 @@ export function createCollection(cfg: CollectionConfig): Collection {
     const snap = encode(env);                         // 抓当前 env 快照（含 uat）
     localChain = localChain
       .then(() => local.save(localKey, snap).then(() => ({ ok: true as const })))
-      .catch((e) => { reportStoreError(e, "warning"); return { ok: false as const, error: e }; });
+      .catch((e) => { reportStoreError(e, abandoned ? "log" : "warning"); return { ok: false as const, error: e }; });
     return localChain;
   }
 
@@ -302,11 +303,14 @@ export function createCollection(cfg: CollectionConfig): Collection {
 
   async function init(): Promise<void> {
     await hydrateLocal();               // 先从本地缓存 hydrate（秒开 / 离线可读 / 强杀存活）；记 idbHad
+    // 2.2.7：init 走到一半库被释放——hydrate 撞上关掉的 IDB 会让 idbHad 假 → 接着 seed 会在拆掉的库上标脏、对齐会打网。到此为止，下次开库重来。
+    if (closed) return;
     // **eager seed**（idb 无=新库）：立即用 uat=1 填初始值，不等云端判定。随后 reconcile 拉云——
     //   云端/别设备的真数据（uat>1）经 LWW **必胜过 seed、覆盖**；云端确实空则 seed 被推上去。
     //   离线新设备照样立即有内容；在线新设备先显 seed、云端到了再覆盖（用户设计）。
     if (!idbHad) await seedInit();
     ready = true;                       // 本地(含 seed)就绪：getItem 有值、setItem 放行。云端后台对齐（不 block boot）。
+    if (closed) return;
     void reconcile().catch((e) => reportStoreError(e, "log"));   // 后台 pull-merge-push：真 cloud 覆盖 seed；seed 未被覆盖的推云
   }
 
@@ -354,14 +358,20 @@ export function createCollection(cfg: CollectionConfig): Collection {
 
   // store.dispose 用（经 cfg.lifecycle 交出，不在公开面上；2.2.7，家族周账 F-199 ①）：以前 dispose 不管这两个定时器——init 一跑就排一个 400 ms 的本地写，
   //   开机拆空库（CatsUp settleNoHome）离 init 只差几十毫秒 → 到点 local.save 撞上已关的 IDB → reportStoreError(warning) 给用户冒一条英文，每次都中。
-  //   flush = 排着的本地写先落完再关（第 2 条：这台设备上没落盘的改动不丢）；不 flush = 只取消、等在飞的那笔收尾。关了之后 schedule* 都是 no-op。
+  //   flush = 排着的本地写先落完再关（第 2 条：这台设备上没落盘的改动不丢；落不下去照常 warning）、在飞的那笔也等完。
+  //   不 flush = dispose({drain:false}) 的快速拆除：只取消、**一步也不等**（卡住的 IDB 不许把拆除也卡住），扔掉的那笔和撞墙的在飞写只进黑匣子。
+  //   云推的定时器两种都只取消：脏账在 kv、字节在本地，下次开库 init → reconcile 补推（测试 store-dispose-cleanup 钉着）。关了之后 schedule* 都是 no-op。
   async function close(opts: { flush: boolean }): Promise<void> {
     if (closed) return;
     const pending = localTimer != null;
     closed = true;
     clearTimer(); clearLocalTimer();
-    if (pending && opts.flush) await writeLocalNow(true);
-    else await localChain;
+    if (!opts.flush) {
+      abandoned = true;
+      if (pending) reportStoreError(new Error(`collection(${name}): fast dispose dropped a pending local write`), "log");
+      return;
+    }
+    await (pending ? writeLocalNow(true) : localChain);
   }
   lifecycle?.({ close });
 

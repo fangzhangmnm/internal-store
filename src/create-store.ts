@@ -1527,6 +1527,7 @@ export function createStore(config: StoreConfig) {
     /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
      *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；
      *  {drain:false} = 快速拆除，in-flight 操作会因连接关闭响亮失败、dirty 账还在下次补推）→ 关 IDB 连接。
+     *  2.2.7：drain 之前先关每份 collection：排着的本地写 drain = 先落盘、快速拆除 = 扔掉（进黑匣子）；排着的云推两种都取消，脏账在，下次开库补推。
      *  幂等。之后任何面（含 dispose 前已握着的 file/collection 对象）→ 抛 StoreDisposedError。
      *  ⚠ 不含 provider/auth 的登出（那是 app 侧 auth 的事）；错误上报单例 reporter 不重置（多实例共汇一处）。 */
     async dispose(opts?: { drain?: boolean }): Promise<void> {

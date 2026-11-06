@@ -257,6 +257,8 @@ export declare interface CollectionConfig {
     localWriteDelayMs?: number;
     /** 仅当这份 collection 的 json **不存在**时调（填初始值，uat=1）。store 内容无关：app 域构造 id+value 数组。 */
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
+    /** 库内（store.dispose 用，2.2.7）：建好时交出这份 collection 的生命周期把手。不在 Collection 公开面上——关它的是 store，不是 app。 */
+    lifecycle?: (handle: CollectionLifecycle) => void;
 }
 
 /** 对外 entry：id + uat（只读盖戳）+ value（任意 JSON）。 */
@@ -275,6 +277,14 @@ export declare interface CollectionInitItem {
     id: string;
     /** 初始值（不可为 undefined）。 */
     value: unknown;
+}
+
+/** collection 的生命周期把手（只给 store 的 dispose 用）。 */
+declare interface CollectionLifecycle {
+    /** 收掉定时器。flush = 排着的本地写先落完再关（没落盘的改动不丢）、在飞的也等完；false = 只取消、什么都不等。之后这份 collection 再也不排写。 */
+    close(opts: {
+        flush: boolean;
+    }): Promise<void>;
 }
 
 /** 这台设备上的文件当镜像（File API：`<input type=file>` / showOpenFilePicker 拿到的 File，slice 白送、零网络）。
@@ -416,6 +426,7 @@ export declare function createStore(config: StoreConfig): {
     /** 释放本 store 实例（切库/登出/多实例轮换用）。顺序：先拒新调用 + 停 watcher（不再有帧推给订阅者）→
      *  drain（默认 true：等 in-flight 的 push/写链收敛——正在推的字节**推完落账**，绝不半途掐；
      *  {drain:false} = 快速拆除，in-flight 操作会因连接关闭响亮失败、dirty 账还在下次补推）→ 关 IDB 连接。
+     *  2.2.7：drain 之前先关每份 collection：排着的本地写 drain = 先落盘、快速拆除 = 扔掉（进黑匣子）；排着的云推两种都取消，脏账在，下次开库补推。
      *  幂等。之后任何面（含 dispose 前已握着的 file/collection 对象）→ 抛 StoreDisposedError。
      *  ⚠ 不含 provider/auth 的登出（那是 app 侧 auth 的事）；错误上报单例 reporter 不重置（多实例共汇一处）。 */
     dispose(opts?: {

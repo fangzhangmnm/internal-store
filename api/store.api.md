@@ -176,6 +176,8 @@ export interface CollectionConfig {
     cloud: CloudSync;
     getInitData?: () => CollectionInitItem[] | Promise<CollectionInitItem[]>;
     isOnline?: () => boolean;
+    // Warning: (ae-forgotten-export) The symbol "CollectionLifecycle" needs to be exported by the entry point index.d.ts
+    lifecycle?: (handle: CollectionLifecycle) => void;
     local?: Pick<LocalCache, "save" | "get" | "exists">;
     localWriteDelayMs?: number;
     manual?: boolean;
