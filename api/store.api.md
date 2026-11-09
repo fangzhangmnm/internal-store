@@ -328,6 +328,10 @@ export interface EmptyTrashOpts {
     busy?: Busy;
     concurrency?: number;
     isOnline?: () => boolean;
+    keep?: (e: {
+        name: string;
+        where: "local" | "cloud";
+    }) => boolean;
     scope?: "local" | "cloud" | "both";
 }
 
@@ -1070,6 +1074,10 @@ export interface TrashOutcome {
 export interface TrashResult {
     cloud?: boolean;
     failed?: unknown[];
+    kept?: {
+        name?: string;
+        where: string;
+    }[];
     local?: boolean;
     name?: string | null;
     purged?: number;

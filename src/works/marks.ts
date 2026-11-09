@@ -29,6 +29,8 @@ export interface Marks {
   set(identifier: string, patch: { starred?: boolean; folded?: boolean }): Promise<void>;
   /** 改名 / 移动成功：记号跟着新身份走。 */
   rename(from: string, to: string): Promise<void>;
+  /** 现在加着星的全部身份（ready 之前问 = 空）。清空回收站「不连坐」用。 */
+  starredIdentifiers(): string[];
   /** 记号变了（这台改的、别的设备同步来的都算）→ 回调变了的那些身份。返退订。 */
   onChange(cb: (identifiers: string[]) => void): () => void;
   /** 去云端对一次（开夹的云端帧到了时顺手叫；云端没变 = 一次 fetchMeta）。不等、不抛。 */
@@ -70,6 +72,7 @@ export function createMarks(cfg: { getCollection: () => Collection; onError: (e:
       const r = await c().flushLocal();
       if (!r.ok) throw r.error instanceof Error ? r.error : new Error(`marks: local write failed moving "${from}" → "${to}"`);
     },
+    starredIdentifiers: () => (coll ? coll.entries().filter((e) => clean(e.value).starred).map((e) => e.id) : []),
     onChange: (cb) => c().onChange((ids: string[]) => cb(ids)),
     reconcile() {
       if (reconciling) return;

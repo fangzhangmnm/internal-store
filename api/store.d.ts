@@ -509,6 +509,12 @@ export declare interface EmptyTrashOpts {
     concurrency?: number;
     /** 清哪一端。 */
     scope?: "local" | "cloud" | "both";
+    /** 2.3.1（库内，create-store 注入；只给回收站用，备份箱不用）：这一条留着不清（加了星的，见 create-store 的 starredTrashKeeper）。
+     *  name：本地腿 = 原来的身份（全路径）；云端腿 = 回收站里带戳的文件名。留下的在结果的 kept 里报出来，不静默。 */
+    keep?: (e: {
+        name: string;
+        where: "local" | "cloud";
+    }) => boolean;
 }
 
 /** 加密容器的 at-rest 字节（branded）。唯一发牌方 = RawFile.getEncryptedBlob()。
@@ -1594,6 +1600,11 @@ export declare interface TrashResult {
     purged?: number;
     /** 失败汇总（逐项独立 try、不静默）。 */
     failed?: unknown[];
+    /** 2.3.1：清空回收站时留下没清的（加了星的不连坐）。没有 = 不带这个字段。 */
+    kept?: {
+        name?: string;
+        where: string;
+    }[];
 }
 
 /** tryMove 结果式返回（不抛，UI 渲染 where 标签）。ok:true 时**仍可能有话要说**（别只看 ok 就报「已重命名（含云端）」）：

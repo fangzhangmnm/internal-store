@@ -27,7 +27,7 @@ import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudF
 import { createUploadReplay, type UploadReplayPolicy } from "./works/upload-queue.ts";
 import type { CloudProvider, CloudSync, Kv, LocalCache, ByteSource, AdoptFn, UploadSessionPort, UploadSessionRecord } from "./base/types.ts";
 import { createCloudSync, CloudNameCollisionError, defaultCloudToName } from "./works/cloud-sync.ts";
-import { mergeTrash, type TrashItem } from "./works/trash-merge.ts";
+import { mergeTrash, baseNameOf, parseCloudTrashName, type TrashItem } from "./works/trash-merge.ts";
 import { createLocalCache, createCollectionCache, createStagingStore } from "./base/local-cache.ts";
 import { createIdbCache } from "./base/idb-store.ts";   // 2.2.0：迁移的主库裸键面
 import { createDownloadSessions, EtagChangedError, type StagingStore, type StagingCoverage, type StreamingOptions, type StreamStatus } from "./stream/download-session.ts";
@@ -1477,6 +1477,34 @@ export function createStore(config: StoreConfig) {
     }
   }
 
+  // ── 2.3.1 回收站不连坐（user 2026-11-08：加了星的画在别的设备上、星还没同步到的时候被删进了回收站——「不应该牵连，不应该连坐，就这个特例确实应该写一下」）──
+  //   加了星的东西照理进不了回收站（file.trash 被拒）；会在里面只有那一种情况。那时这台清空回收站 / 彻底删不许把它带走：留着，人可以还原，或者撤了星再删。
+  //   怎么认：本地腿的条目带着原来的身份 → 和加星名单精确比；云端腿只有带戳的文件名、**没有原来的文件夹** → 只能比文件名，同名的一律留（往留的方向错）。
+  //   记号读不出来 → 拒绝清空 / 彻底删（响亮）；一颗星都没有 → 不多做任何事（零多余请求）。备份箱不受影响。
+  type TrashLeg = { name: string; where: "local" | "cloud" };
+  async function starredTrashKeeper(op: string): Promise<((e: TrashLeg) => boolean) | null> {
+    if (!marks) return null;
+    if (!(await loadMarks())) throw new Error(`store: cannot read file marks, refusing ${op} (starred files may be in the trash)`);
+    const starred = marks.starredIdentifiers();
+    if (!starred.length) return null;
+    const exact = new Set(starred), bases = new Set(starred.map(baseNameOf));
+    return (e) => (e.where === "local" ? exact.has(e.name) : bases.has(parseCloudTrashName(e.name, toName).base));
+  }
+  /** 彻底删一条之前：它是不是加了星的。两把钥匙（本地 trashKey / 云端 ref）各自查回名字；有星而查不到名字 = 不知道 → 拒绝。 */
+  async function starGuardTrashItem(o: { trashKey?: string | null; cloudRef?: string | null }): Promise<void> {
+    const keep = await starredTrashKeeper("purgeTrash");
+    if (!keep) return;
+    if (o.trashKey && local.listTrash) {
+      const hit = (await local.listTrash()).find((t) => t.trashKey === o.trashKey);
+      if (hit && keep({ name: hit.name, where: "local" })) throw new StarredError(hit.name, "purgeTrash");
+    }
+    if (o.cloudRef != null) {
+      const hit = (await cloud.listTrash()).find((it) => it.ref === o.cloudRef);
+      if (!hit) throw new Error("store: cannot identify this trash item while starred files exist, refusing purgeTrash (restore it, or try again when the cloud is reachable)");
+      if (keep({ name: hit.name, where: "cloud" })) throw new StarredError(parseCloudTrashName(hit.name, toName).base, "purgeTrash");
+    }
+  }
+
   /** 2.3.0：改一份文件的记号（星 / 收起）。没开 fileMarks → 抛（调用方先看 files.fileMarks）。记号读不出来 → 抛，不装成改好了。 */
   async function setMarks(op: string, identifier: string, patch: { starred?: boolean; folded?: boolean }): Promise<void> {
     if (!marks) throw new Error(`store.files.${op}(): file marks are off — pass createStore({ fileMarks: true })`);
@@ -1625,9 +1653,9 @@ export function createStore(config: StoreConfig) {
       /** 从回收站/备份箱恢复一项。 */
       restoreTrash: singleFlight("恢复", (...a: Parameters<typeof trashMod.restore>) => { roGuard("restoreTrash"); return trashMod.restore(...a); }),
       /** 彻底删除回收站/备份箱一项。 */
-      purgeTrash: singleFlight("彻底删除", (...a: Parameters<typeof trashMod.purge>) => { roGuard("purgeTrash"); return trashMod.purge(...a); }),
+      purgeTrash: singleFlight("彻底删除", async (...a: Parameters<typeof trashMod.purge>) => { roGuard("purgeTrash"); await starGuardTrashItem(a[0] ?? {}); return trashMod.purge(...a); }),   // 2.3.1：加了星的那一份不许彻底删（StarredError）
       /** 清空回收站。 */
-      emptyTrash: singleFlight("清空回收站", (...a: Parameters<typeof trashMod.emptyTrash>) => { roGuard("emptyTrash"); return trashMod.emptyTrash(...a); }),
+      emptyTrash: singleFlight("清空回收站", async (...a: Parameters<typeof trashMod.emptyTrash>) => { roGuard("emptyTrash"); const keep = await starredTrashKeeper("emptyTrash"); return trashMod.emptyTrash(keep ? { ...(a[0] ?? {}), keep } : a[0]); }),   // 2.3.1：加了星的不连坐（结果的 kept 里报）
       /** 清空备份箱。 */
       emptyBackup: singleFlight("清空备份箱", (...a: Parameters<typeof trashMod.emptyBackup>) => { roGuard("emptyBackup"); return trashMod.emptyBackup(...a); }),
       //   日常开夹的惰性收敛已在 watchFolder 内走 reconcileFolder（看到夹才收敛，同一 converge SSOT）。

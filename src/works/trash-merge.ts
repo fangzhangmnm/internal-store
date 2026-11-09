@@ -33,12 +33,12 @@ export interface TrashItem {
 // stamped 名 = `<base> [<deleteEventId>]`（明文）或同名尾接 `.zip`（加密容器，encFileName 追加）。
 //   deleteEventId = `<yyyymmddhhmmss>-<guid>`，见 move-aside.asideStamp / cloud-sync.stampedName。
 const STAMP_RE = /^(.*) \[((\d{14})-[0-9a-fA-F-]+)\](\.zip)?$/;
-const baseNameOf = (n: string): string => (n.includes("/") ? n.slice(n.lastIndexOf("/") + 1) : n);
+export const baseNameOf = (n: string): string => (n.includes("/") ? n.slice(n.lastIndexOf("/") + 1) : n);
 
 // 云端 trash 文件名 → { 原 basename, deleteEventId, 时间戳, 是否加密 }。
 //   有戳：戳是分隔符，`(\.zip)?` 只可能是 encFileName 追加的那一个（原名自带的 .zip 在戳之前，不会被误吃）。
 //   无戳（异常/手工放入）→ 走 toName（全库唯一的加密名判定 seam）：名字变了 = 加密容器。
-function parseCloudTrashName(cloudName: string, toName: (n: string) => string): { base: string; id: string | null; ts: string | null; encrypted: boolean } {
+export function parseCloudTrashName(cloudName: string, toName: (n: string) => string): { base: string; id: string | null; ts: string | null; encrypted: boolean } {
   const m = cloudName.match(STAMP_RE);
   if (m) return { base: m[1], id: m[2], ts: m[3], encrypted: !!m[4] };
   const base = toName(cloudName);

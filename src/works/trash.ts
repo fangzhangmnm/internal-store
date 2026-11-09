@@ -51,7 +51,10 @@ export interface EmptyTrashOpts {
   /** 并发数。 */
   concurrency?: number;
   /** 清哪一端。 */
-  scope?: "local" | "cloud" | "both" }
+  scope?: "local" | "cloud" | "both";
+  /** 2.3.1（库内，create-store 注入；只给回收站用，备份箱不用）：这一条留着不清（加了星的，见 create-store 的 starredTrashKeeper）。
+   *  name：本地腿 = 原来的身份（全路径）；云端腿 = 回收站里带戳的文件名。留下的在结果的 kept 里报出来，不静默。 */
+  keep?: (e: { name: string; where: "local" | "cloud" }) => boolean }
 /** restore / purge / emptyTrash 的终态。 */
 export interface TrashResult {
   /** 终态串。 */
@@ -65,7 +68,9 @@ export interface TrashResult {
   /** 彻底删的条数。 */
   purged?: number;
   /** 失败汇总（逐项独立 try、不静默）。 */
-  failed?: unknown[] }
+  failed?: unknown[];
+  /** 2.3.1：清空回收站时留下没清的（加了星的不连坐）。没有 = 不带这个字段。 */
+  kept?: { name?: string; where: string }[] }
 
 export function createTrash(cfg: TrashCfg) {
   const { cloud, local, head, busy: _busy = passBusy } = cfg;
@@ -107,9 +112,11 @@ export function createTrash(cfg: TrashCfg) {
     const { isOnline, busy = _busy, concurrency = 5, scope = "both" } = opts;
     return busy("trash.emptyTrash", async () => {
       let purged = 0; const failed: { name?: string; where: string; error: string }[] = [];
+      const kept: { name?: string; where: string }[] = [];   // 2.3.1：加了星的留着（不连坐）
       const errMsg = (e: unknown) => String((e as { message?: unknown })?.message || e);
       if (scope !== "cloud" && local && local.listTrash && local.purgeTrash) {
         for (const t of await local.listTrash()) {
+          if (opts.keep?.({ name: t.name, where: "local" })) { kept.push({ name: t.name, where: "local" }); continue; }
           try { await local.purgeTrash(t.trashKey); purged++; }
           catch (e) { reportStoreError(e, "warning"); failed.push({ name: t.name, where: "local", error: errMsg(e) }); }
         }
@@ -117,7 +124,7 @@ export function createTrash(cfg: TrashCfg) {
       if (scope !== "local" && (!isOnline || isOnline())) {
         let items: CloudItem[] | null = null;
         try { items = await cloud.listTrash(); } catch (e) { reportStoreError(e, "warning"); failed.push({ where: "cloud-list", error: errMsg(e) }); }
-        items = items || [];
+        items = (items || []).filter((it) => { if (!opts.keep?.({ name: it.name, where: "cloud" })) return true; kept.push({ name: it.name, where: "cloud" }); return false; });
         for (let i = 0; i < items.length; i += concurrency) {   // bounded 并发，快约 N×
           await Promise.all(items.slice(i, i + concurrency).map(async (it) => {
             try { await cloud.purge(it.ref, it.eTag); purged++; }
@@ -125,7 +132,7 @@ export function createTrash(cfg: TrashCfg) {
           }));
         }
       }
-      return { status: "emptied", purged, failed };
+      return kept.length ? { status: "emptied", purged, failed, kept } : { status: "emptied", purged, failed };
     });
   }
 

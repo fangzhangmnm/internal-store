@@ -217,3 +217,55 @@ test("[marks] 没变的不写：重复加星 / 给没有记号的撤星不产生
   await until(() => w.item("画.ora")?.starred === true, "有星");
   w.un();
 });
+
+// ── 2.3.1 回收站不连坐（user 2026-11-08：「不应该牵连，不应该连坐，就这个特例确实应该写一下」）──
+//   加了星的东西照理进不了回收站；会在里面只有一种情况：别的设备（星还没同步到 / 没更新的旧版 app）把它删了进去。那时这台清空回收站 / 彻底删不许带走它。
+test("[marks] 回收站不连坐：别的设备把加了星的删进了回收站 → 这台清空回收站留下它、如实报；没加星的照清；撤星后才清得掉", async () => {
+  const a = rig({ marks: true });
+  await a.store.file("宝贝.ora", { mode: "new" }).save(enc("B"), { tryPush: true });
+  await a.store.file("夹/深处.ora", { mode: "new" }).save(enc("D"), { tryPush: true });
+  await a.store.file("普通.ora", { mode: "new" }).save(enc("P"), { tryPush: true });
+  await a.store.files.star("宝贝.ora"); await a.store.files.star("夹/深处.ora");
+  const old = rig({ marks: false, provider: a.provider });                       // 另一台：不认识星（旧版 app / 星还没同步到）
+  for (const id of ["宝贝.ora", "夹/深处.ora", "普通.ora"]) eq((await old.store.file(id, { mode: "existing" }).trash()).status, "trashed", `另一台删得掉 ${id}（已知的洞）`);
+  const before = await a.store.files.listTrash();
+  eq(before.length, 3, "三份都在云端回收站里");
+  const r = await a.store.files.emptyTrash({ scope: "both" });
+  eq(r.purged, 1, "只清掉没加星的那一份");
+  eq((r.kept ?? []).length, 2, "留下两份加了星的，并且报出来");
+  const left = (await a.store.files.listTrash()).map((t) => t.identifier.split("/").pop()).sort().join("|");
+  eq(left, "宝贝.ora|深处.ora", "回收站里还剩加了星的那两份（子文件夹里的那份靠文件名认）");
+  // 单独彻底删那一份：拒
+  const item = (await a.store.files.listTrash()).find((t) => t.identifier.endsWith("宝贝.ora"))!;
+  await throwsStarred(() => a.store.files.purgeTrash({ trashKey: item.localKey, cloudRef: item.cloudRef }), "彻底删加了星的那一份");
+  eq((await a.store.files.listTrash()).length, 2, "一份没少");
+  // 还原得回来
+  await a.store.files.restoreTrash({ trashKey: item.localKey, fromCloud: true, cloudRef: item.cloudRef, targetName: "宝贝.ora", encrypted: false });
+  assert(a.cloudPaths().includes("宝贝.ora"), "还原回来了");
+  // 撤了星的那一份：清得掉
+  await a.store.files.unstar("夹/深处.ora");
+  const r2 = await a.store.files.emptyTrash({ scope: "both" });
+  eq(r2.purged, 1); assert(!("kept" in r2), "没有留下的就不带 kept");
+  eq((await a.store.files.listTrash()).length, 0);
+});
+
+test("[marks] 回收站不连坐：一颗星都没有 / 没开记号 = 清空和彻底删同 2.3.0（不多查一次、结果里没有 kept）", async () => {
+  for (const marks of [true, false]) {
+    const a = rig({ marks });
+    await a.store.file("普通.ora", { mode: "new" }).save(enc("P"), { tryPush: true });
+    await a.store.file("另一份.ora", { mode: "new" }).save(enc("Q"), { tryPush: true });
+    await a.store.file("普通.ora", { mode: "existing" }).trash(); await a.store.file("另一份.ora", { mode: "existing" }).trash();
+    const one = (await a.store.files.listTrash())[0]!;
+    eq((await a.store.files.purgeTrash({ trashKey: one.localKey, cloudRef: one.cloudRef })).status, "purged");
+    const r = await a.store.files.emptyTrash({ scope: "both" });
+    assert(!("kept" in r), "不带 kept"); eq((await a.store.files.listTrash()).length, 0);
+  }
+});
+
+test("[marks] 回收站不连坐只管回收站：备份箱照清", async () => {
+  const a = rig({ marks: true });
+  await a.store.file("宝贝.ora", { mode: "new" }).save(enc("B"), { tryPush: true });
+  await a.store.files.star("宝贝.ora");
+  const r = await a.store.files.emptyBackup({ scope: "both" });
+  eq(r.status, "emptied"); assert(!("kept" in r));
+});
