@@ -58,6 +58,10 @@ export type { Account } from "./base/providers/auth.ts";
 export type { ChangeCb } from "./works/collection.ts";
 /** 文件/回收站/删除/刷新各面的收发形状（Result/Opts 类型群）。 */
 export type { TryMoveResult, SaveResult, ResolveOutcome, CloudState } from "./create-store.ts";
+// 2.3.0：锁 / 星 / 收起（家族「源文件原则上只读」；createStore({ lockByDefault, fileMarks })，两个都默认关 = 2.2 行为）。
+export { LockedError, StarredError } from "./create-store.ts";
+export type { Unlock } from "./works/unlocks.ts";
+export type { FileMarks } from "./works/marks.ts";
 export type { TrashResult, RestoreOpts, PurgeOpts, EmptyTrashOpts } from "./works/trash.ts";
 export type { RefreshOpts, FreshResult } from "./works/freshness.ts";
 export type { TrashOutcome } from "./works/delete.ts";

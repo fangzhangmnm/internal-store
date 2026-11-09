@@ -249,6 +249,16 @@ export function createStore(config: StoreConfig): {
                 failures: PushFailure[];
             }>;
         };
+        lockByDefault: boolean;
+        unlock: (identifier: string) => Promise<Unlock>;
+        lock: (identifier: string) => Promise<void>;
+        unlockOf: (identifier: string) => Unlock | null;
+        watchUnlocks: (cb: (live: Unlock[]) => void) => (() => void);
+        fileMarks: boolean;
+        star: (identifier: string) => Promise<void>;
+        unstar: (identifier: string) => Promise<void>;
+        fold: (identifier: string) => Promise<void>;
+        unfold: (identifier: string) => Promise<void>;
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
             onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
         }) => () => void;
@@ -360,6 +370,14 @@ export interface FetchMetaResult {
     item: CloudItem;
     lastModified: string | number;
     size: number;
+}
+
+// @public
+export interface FileMarks {
+    // (undocumented)
+    folded?: true;
+    // (undocumented)
+    starred?: true;
 }
 
 // @public
@@ -520,10 +538,12 @@ export function isDirty(s: SyncState): boolean;
 // @public
 export interface Item {
     cloudSealed?: true;
+    folded?: true;
     identifier: string;
     kind?: string;
     lastModified?: number;
     size?: number;
+    starred?: true;
     syncState: SyncState;
     tier: DocTier;
 }
@@ -575,6 +595,15 @@ export interface LocalSaveReceipt {
         foreignRev: number;
     };
     rev: number;
+}
+
+// @public
+export class LockedError extends Error {
+    constructor(identifier: string, op: string);
+    // (undocumented)
+    identifier: string;
+    // (undocumented)
+    op: string;
 }
 
 // @public
@@ -738,6 +767,7 @@ export interface RawFile {
         tryPush?: boolean;
         hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */
         onProgress?: (done: number, total: number) => void;
+        bornLocked?: boolean;
     }): Promise<SaveResult>;
     stagingCoverage(): Promise<StagingCoverage | null>;
     trash(): Promise<TrashOutcome>;
@@ -864,6 +894,15 @@ export interface StagingStore {
 }
 
 // @public
+export class StarredError extends Error {
+    constructor(identifier: string, op: string);
+    // (undocumented)
+    identifier: string;
+    // (undocumented)
+    op: string;
+}
+
+// @public
 export type StorageManagerLike = {
     persist?: () => Promise<boolean>;
     persisted?: () => Promise<boolean>;
@@ -886,11 +925,14 @@ export interface StoreConfig {
     docKinds: readonly DocKind[];
     encryption: EncryptionPort;
     encryptionSaltFileName?: string;
+    fileMarks?: boolean;
     getPassword?: (name: string) => string | null;
     hidden?: (identifier: string) => boolean;
     isOnline?: () => boolean;
     kv?: Kv;
     local?: LocalCache;
+    lockByDefault?: boolean;
+    now?: () => number;
     offlineUploadReplay?: UploadReplayPolicy;
     openLineageFromDurable?: boolean;
     persistence: "app-managed" | "none";
@@ -910,6 +952,7 @@ export interface StoreConfig {
     stagingChunkBytes?: number;
     streaming?: StreamingOptions;
     ui: StoreUI;
+    unlockTtlMs?: number;
     uploads?: {
         resumable?: boolean;
     };
@@ -1051,6 +1094,13 @@ export type TryMoveResult = {
     ok: false;
     reason: "cancelled";
 };
+
+// @public
+export interface Unlock {
+    expiresAt: number;
+    identifier: string;
+    unlockedAt: number;
+}
 
 // @public
 export interface UploadOpts {

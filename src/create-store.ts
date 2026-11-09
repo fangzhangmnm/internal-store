@@ -19,6 +19,8 @@ import { createTrash } from "./works/trash.ts";
 import { createOffload } from "./works/offload.ts";
 import { createReconcile } from "./works/reconcile.ts";
 import { createPendingGone } from "./works/pending-gone.ts";
+import { createUnlocks, type Unlock } from "./works/unlocks.ts";
+import { createMarks, MARKS_COLLECTION, type Marks } from "./works/marks.ts";
 import { assertValidFileName, assertValidCollectionName, isHidden } from "./base/is-hidden.ts";
 import { createCollection, emptyCollectionBytes, type Collection, type CollectionConfig, type CollectionLifecycle } from "./works/collection.ts";
 import { createListing, toMs, type ListContext, type FolderSnapshot, type CloudFolderPrefetch, type StaleCloudView, type WatchFolderErrorPhase } from "./works/listing.ts";
@@ -203,12 +205,39 @@ export interface StoreConfig {
    *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
    *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
   readOnlyFiles?: boolean;
+  // ── 2.3.0：锁、星、收起（家族「源文件原则上只读」，user 2026-11-08；设计稿 = 家族根 ai-docs/20261108-design-lock-star-versions.md）──
+  /** **迁移开关，默认 false = 2.2 的全部行为一字不变。** true = 一等作品（docKinds 里 tier "work" 的文档）默认只读：
+   *  没有活着的解锁（`files.unlock(identifier)`）就不能改内容——`file.save`（改已有的）抛 `LockedError`。
+   *  `mode:"new"` 的首存不拦（新建不是改；存成后自动带一枚解锁，除非 `save(…, { bornLocked: true })`）。
+   *  不归锁管的：改名 / 移动、加密 / 解密 / 换密码、删除（归星管）、同步（快进、冲突面里人选的那一下、补推已经存下的字节、重新上传）。
+   *  不是声明过的文档（图片、杂物）、二等自动备份、三等资源：不受影响。每个 app 把界面和保存那条路改好之后再打开（专门迁移一轮，不许顺手开）。 */
+  lockByDefault?: boolean;
+  /** 一枚解锁放凉多久过期（ms）。默认 24 h（user「过期的话，我觉得就用一天吧」）。滑动：每次成功的 save 把它往后推；正开着的那份（activeIdentifier）过期不打断。 */
+  unlockTtlMs?: number;
+  /** true = 开「记号」：星（`files.star`，加了星的拒绝送进回收站）和收起（`files.fold`，纯显示）。记在一份库自己的同步文件里
+   *  （云端 `.${appId}/store.file-marks.json`，和 collection 同一套设施）。**默认 false = 不建那份文件、列举不带这两个字段、star / fold 抛错**——
+   *  开了会多建一份云端文件（第一次列目录 / 用到记号时）、每次开夹的云端帧多一次 fetchMeta，所以是显式开关（本库规则：行为变更默认关）。 */
+  fileMarks?: boolean;
+  /** 内部 / 测试 seam：本机时钟（只给解锁的过期用；默认 Date.now）。 */
+  now?: () => number;
 }
 
 /** files 面只读镜像（readOnlyFiles:true）下调用写路径 → 抛此错（app surface；这不是失败，是契约）。 */
 export class ReadOnlyFilesError extends Error {
   /** resource 给了 = 2.1.0 三等资源那一种文档只读（docKinds 行 tier:"resource"）；没给 = readOnlyFiles:true 的整面只读。 */
   constructor(op: string, resource?: string) { super(resource ? `三等资源「${resource}」只读：${op}` : `只读镜像：files 面不可写（${op}）`); this.name = "ReadOnlyFilesError"; }
+}
+
+/** 2.3.0：`lockByDefault` 开着、这份作品没有活着的解锁时改它的内容 → 抛此错（app surface；这不是失败，是契约）。
+ *  走到这里说明 app 的界面层 / 保存层漏了：锁着的作品本来就不该收到编辑。app 要响亮报出来，不许吞；要改就让人先解锁（`files.unlock`，只许由人的手势调用）。 */
+export class LockedError extends Error {
+  identifier: string; op: string;
+  constructor(identifier: string, op: string) { super(`作品锁着，不能改（${op}）：${identifier}——先解锁`); this.name = "LockedError"; this.identifier = identifier; this.op = op; }
+}
+/** 2.3.0：加了星的文件不许送进回收站（app surface；这不是失败，是契约）。要删，人先撤星（`files.unstar`）。 */
+export class StarredError extends Error {
+  identifier: string; op: string;
+  constructor(identifier: string, op: string) { super(`加了星，不能送进回收站（${op}）：${identifier}——先撤星`); this.name = "StarredError"; this.identifier = identifier; this.op = op; }
 }
 
 /** store.dispose() 之后再调任何面 → 抛此错（app surface；这不是失败，是契约——切库/登出后旧句柄必须响亮死，绝不静默半工作）。 */
@@ -288,7 +317,10 @@ export interface RawFile {
    *  ⚠ 滥用警示（2026-10-16 user「禁止越狱」）：**不要**用 `open()` 再 `save()` 来「刷新基准、把本机传上去」——那是后写的赢（LWW），
    *  绕开了冲突面；也不要把 save 接到一个叫「传上去 / 推一把」的按钮上当成「处理没同步的文件」的动作：那个动作只有一个合法入口 = `resolve()`，
    *  由人在面里三选一（云端覆盖本地 / 本地覆盖云端 / 取消）。save 只用于「用户刚编辑、要落盘」。 */
-  save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */ onProgress?: (done: number, total: number) => void }): Promise<SaveResult>;
+  save(bytes: Bytes | Blob, opts?: { tryPush?: boolean; hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */ onProgress?: (done: number, total: number) => void;
+    /** 2.3.0（只在 `lockByDefault` 开着、且这是 `mode:"new"` 的首存时有意义）：true = 新建的这份生来锁着（存下来的一版、导入的文件）；
+     *  默认 false = 存成后带一枚解锁（刚新建的东西当然要接着画）。别的场合忽略。 */
+    bornLocked?: boolean }): Promise<SaveResult>;
   /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
   open(): Promise<Blob | null>;
   /** 头片 peek（0.15.0，首个消费者 = CatsUp `.glb` 封面：glTF 把 thumbnail 放 BIN 首段）：文件**开头** bytesLength 字节的
@@ -435,6 +467,36 @@ export function createStore(config: StoreConfig) {
   // 2.1.0 公民等级（docKinds 行的 tier；不是文档的名字按作品 = 2.0 行为）。等级在这里传死，没有按次调用改等级的口。
   const tierOf = (name: string): DocTier => ids.parse(name)?.tier ?? "work";
   const tierGuard = (op: string, name: string): void => { roGuard(op); if (tierOf(name) === "resource") throw new ReadOnlyFilesError(op, name); };
+  // ── 2.3.0 锁（家族「源文件原则上只读」）：和 tierGuard 同一个咽喉点旁边。开关关着 = lockGuard 永远放行。──
+  //   只管声明过的一等文档：图片 / 杂物在图库里没有解锁钮，拦了就没有人的手势能放行；二等 / 三等各有各的规矩。
+  const unlocks = createUnlocks({ kv, ttlMs: config.unlockTtlMs ?? 24 * 3600 * 1000, now: config.now, activeIdentifier: config.activeIdentifier });
+  const lockApplies = (name: string): boolean => config.lockByDefault === true && ids.parse(name)?.tier === "work";
+  const lockGuard = (op: string, name: string): void => { if (lockApplies(name) && !unlocks.get(name)) throw new LockedError(name, op); };
+  // ── 2.3.0 记号（星 / 收起）：一份库自己的 collection，懒开（第一次用才建云端文件）。fileMarks 关着 = marks 为 null，下面每一处都原样放行。──
+  const marks: Marks | null = config.fileMarks === true
+    ? createMarks({ getCollection: () => collection(MARKS_COLLECTION), onError: (e) => reportStoreError(e, "log") }) : null;
+  let _marksState: "off" | "unloaded" | "ready" | "broken" = marks ? "unloaded" : "off";
+  /** 把记号读进内存（本机缓存，快；不等云端）。读进来了才返 true。第一次读成时接上「记号变了 → 重画那几夹」。 */
+  async function loadMarks(): Promise<boolean> {
+    if (!marks) return false;
+    try {
+      await marks.ready();
+      if (_marksState !== "ready") {
+        _marksState = "ready";
+        marks.onChange((changed) => { for (const f of new Set(changed.map((n) => (n.includes("/") ? n.slice(0, n.lastIndexOf("/")) : "")))) void pushLocalFrame(f); });
+      }
+      return true;
+    } catch (e) { _marksState = "broken"; reportStoreError(e, "warning"); return false; }
+  }
+  const isStarredNow = (name: string): boolean => _marksState === "ready" && marks!.get(name).starred === true;
+  /** 送进回收站之前问一句。记号读不出来 = 不知道有没有星 → 拒绝（响亮），不放行。 */
+  async function starGuard(op: string, name: string): Promise<void> {
+    if (!marks) return;
+    if (!(await loadMarks())) throw new Error(`store: cannot read file marks, refusing ${op} of "${name}" (it may be starred)`);
+    if (isStarredNow(name)) throw new StarredError(name, op);
+  }
+  /** 机器的自动送回收站用：加了星 / 记号还读不出来 → 留着不动。 */
+  const keepFromAutoTrash = (name: string): boolean => _marksState === "off" ? false : _marksState === "ready" ? isStarredNow(name) : true;
   const local = config.local ?? createLocalCache(ns.dbName, { identifiers: ids });              // 文件缓存（files/trash/backup 分区）；prod=idb、测试注入 mock
   const collectionLocal = config.local ?? createCollectionCache(ns.dbName);   // collections 分区缓存（collection 自带 `collections/` 前缀）
   const rawOnline = config.isOnline ?? ((): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine !== false);
@@ -484,7 +546,7 @@ export function createStore(config: StoreConfig) {
   // 云端防抖标记（candidate-gone）：clean cloud-gone 孤儿第一次权威见 gone 只标记，跨 GRACE 第二次+ 才 send trash（用户拍板 ~24h，2026-07-17）。
   const CLOUD_GONE_GRACE_MS = 24 * 3600 * 1000;
   const pendingGone = createPendingGone(kv, config.cloudGoneGraceMs ?? CLOUD_GONE_GRACE_MS);
-  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeIdentifier: config.activeIdentifier, hidden: config.hidden, drop: (n) => tierOf(n) === "resource" });   // 2.1.0：三等资源云端没了本地直接丢
+  const reconcileMod = createReconcile({ cloud, local, head, pending: pendingGone, isOnline, activeIdentifier: config.activeIdentifier, hidden: config.hidden, drop: (n) => tierOf(n) === "resource", keep: keepFromAutoTrash });   // 2.1.0：三等资源云端没了本地直接丢；2.3.0：加了星的机器不替人送回收站
 
   // ── 分片下载会话（A1）：staging tee + 播放优先/pin 严格串行调度。keepOffline / openStream 走它。──
   const stagingStore = config.staging ?? createStagingStore(ns.stagingDbName);   // 2.2.0：暂存区住自己的库 `${appId}.${databaseId}.staging`（道 6 F-58 §8；三等暂存不再和一等作品同库同表）
@@ -563,7 +625,7 @@ export function createStore(config: StoreConfig) {
 
   // ── 统一列举（README §2）：整个虚拟 FS 一次列举 = local ∪ cloud，每项带 syncState。mergeLocalCloud 收进库内。──
   const listing = createListing({ cloud, local, head, pendingFolders: readPending, isPendingGone: (p) => pendingGone.isPending(p), pendingFolderDeletions: readFolderDel, hidden: config.hidden,
-    describe: (n) => { const d = ids.parse(n); return { kind: d?.kind, tier: d?.tier ?? "work" }; } });   // 2.1.2：列举行带 kind / tier（user「带」）
+    describe: (n) => { const d = ids.parse(n); const m = _marksState === "ready" ? marks!.get(n) : null; return { kind: d?.kind, tier: d?.tier ?? "work", starred: m?.starred, folded: m?.folded }; } });   // 2.1.2：列举行带 kind / tier（user「带」）；2.3.0 带星 / 收起
 
   // ── watchFolder（网盘模型）：订阅**一个**文件夹。app 只知「这一夹更新了」，分不出也不需分 local/remote。──────
   //   连接态 store 自持（config.signedIn/isOnline）——app 不再传 ctx。每次回调同 shape（FolderSnapshot，仅该夹直属子项）。
@@ -631,6 +693,7 @@ export function createStore(config: StoreConfig) {
   //   60 张画凭空消失成 3 张（09-06 晨案）。唯一不掺 = 明确登出：provider.onAuthChanged reason "signOut" → 清整个分区（见下）。
   //   stale 只补 cloud-only 缺项，本地项 badge 仍塌到本地视角（listing 内保证）——写后重画也走这，cloud-only 项不闪没。
   async function localFrameSnap(folder: string): Promise<FolderSnapshot> {
+    if (marks) await loadMarks();   // 2.3.0：记号先读进内存（本机缓存；读不出来 = 这一帧不带星，不为它丢帧；拦删除那一头照样拒）。没开记号 = 一步不多等
     const stale = await readDirIndexCache(folder);
     return listing.listFolder(folder, LOCAL_CTX, stale ? { staleCloud: stale } : undefined);
   }
@@ -649,6 +712,7 @@ export function createStore(config: StoreConfig) {
     const ctx = ctxNow();
     const live = (ctx.online && ctx.signedIn) ? await cloud.listFolder(folder).catch((e) => { reportFrame(e, "log"); return null; }) : null;
     if (_disposed) return;
+    if (marks) { await loadMarks(); if (_disposed) return; if (live) marks.reconcile(); }   // 2.3.0：收敛之前记号必须在内存里（加了星的不自动送回收站）；云端够得着就顺手对一次记号（不等）
     await reconcileMod.reconcileFolder(folder, { cloudPrefetched: live }).catch((e) => reportFrame(e));   // 「看到夹才 reconcile」：惰性、非静默、仅本夹（喂的是**现场**帧，绝非快照）
     if (_disposed) return;
     try {
@@ -832,6 +896,9 @@ export function createStore(config: StoreConfig) {
     const r = await identity.rename(from, to, { skipOccupiedCheck: true });   // 已 nameOccupied 预检，跳过内部重复
     if (r.status === "cancelled") return { ok: false, reason: "cancelled" };   // 2.2.2：面里选了取消，什么都没动
     notifyFolderOf(from); notifyFolderOf(to);                                 // 旧夹移出 + 新夹移入，两边重画
+    // 2.3.0：解锁和记号（星 / 收起）跟着新身份走。没搬成不许污染改名结果（字节已经搬完了）：报出来，人看见星没了可以再点一次。
+    try { unlocks.rename(from, to); } catch (e) { ui.reportError(e, "warning"); }
+    if (marks) { try { if (await loadMarks()) await marks.rename(from, to); } catch (e) { ui.reportError(e, "warning"); } }
     for (const cb of renameListeners) { try { cb(from, to); } catch (e) { ui.reportError(e, "warning"); } }   // 监听器抛错不许污染改名结果
     // 结果必须透出去：以前这里整个丢掉 r，于是 app 无条件报「已重命名（含云端）」——
     //   云端推失败(cloudDeferred)、旧名成孤儿(oldCloudOrphan)、旧名被留下(oldKept) 全被吞掉 = UI 谎报成功。
@@ -1002,6 +1069,8 @@ export function createStore(config: StoreConfig) {
     //   本地覆盖云端 = 断掉旧谱系、按首推传回去（云端此刻若已有同名别的文件 → 撞名不覆盖、库再弹一张「云端有新版本」的面）、取消 = 不动。
     //   云端还在（同版 / 有新版）、从没同步过、问不到云端 → 照旧 clean（candidate 问不到云端 → offline，免得「没有要处理的」说谎）。
     //   0.18.6（审计）：「云端覆盖本地」只在云端**此刻**确实没有时才删——面开着时别的设备把这份传回来了 → 两边都不动，返 unresolved / cloud-reappeared，人再按一次走正常的「云端有新版」路。
+    /** 2.3.0：冲突面里人选了「这份进回收站」那一支之前问星。记号读不出来 = 按加了星算（不动）。 */
+    const starredForResolve = async (): Promise<boolean> => { if (!marks) return false; return !(await loadMarks()) || isStarredNow(name); };
     const resolveCleanGone = async (): Promise<ResolveOutcome> => {
       if (head.seenBase(name) == null) return { status: "clean" };                       // 从没同步过的干净文件 = 真本地文件（local-only），没有「没同步好」
       const candidate = pendingGone.isPending(name);
@@ -1014,6 +1083,7 @@ export function createStore(config: StoreConfig) {
         : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent" });
       if (choice === "cancel") return { status: "cancelled" };
       if (choice === "takeCloud") {                                                       // 跟着云端：本地这份移到回收站（库的删除路径，可恢复；不硬删）——只在云端此刻确实没有时
+        if (await starredForResolve()) return { status: "unresolved", reason: "starred" };   // 2.3.0：加了星 → 两边都不动，人先撤星
         const d = await delIfCloudAbsentSF(name);
         if (d.status === "trashed") pendingGone.clear(name);
         notifyFolderOf(name);
@@ -1038,6 +1108,8 @@ export function createStore(config: StoreConfig) {
       async save(bytes, opts) {
         tierGuard("save", name);
         await migrationReady;
+        const creating = !_createChecked;                        // mode:"new" 的首存 = 新建，不是改
+        if (!creating) lockGuard("save", name);                  // 2.3.0 锁：改已有的作品要有活着的解锁。在任何副作用（标脏、落盘）之前
         if (!_createChecked) {                                   // mode="new" 首存护栏：撞名不覆盖（本地/在线云端任一占用即抛）
           _createChecked = true;
           const where = await nameOccupied(name);                // v417：把 where 带进错误——本地占用别谎称"云端同名"
@@ -1054,6 +1126,9 @@ export function createStore(config: StoreConfig) {
         if (receipt && typeof receipt === "object" && receipt.foreignOverwrite) {
           reportStoreError(new Error(`local overwrite conflict: "${name}" was written by another tab (rev ${receipt.foreignOverwrite.foreignRev}); their bytes were ${receipt.foreignOverwrite.backedUp ? "backed up before overwrite" : "overwritten (recent copy already in backup)"}`), "warning");
         }
+        // 2.3.0 锁：字节落了本机才算。新建 → 带一枚解锁（除非生来锁着）；改已有的 → 把过期往后推（「只要你再画，这个时间就会无限往后拖」）。
+        //   记账失败不许让保存失败（字节已经在盘上了）：报出来；后果只是这份提前锁上，人再解一次。
+        if (lockApplies(name)) { try { if (creating) { if (!opts?.bornLocked) unlocks.unlock(name); } else unlocks.noteSaved(name); } catch (e) { reportStoreError(e, "warning"); } }
         notifyFolderOf(name);                                    // 网盘模型：本夹 watcher 即时反映新增/变脏（无云往返；gallery 没开=cheap no-op）
         if (opts?.tryPush === false) return { pushed: false, reason: "not-attempted" };   // 只落本地（autosave/consent-safe，ADR-0016/0018：opaque Work 的 push 必 consent-gated）
         // 2.2.6（2026-11-04 Claude Fable 5.1；MoonSinger 工单 H4 查出、user「库自己守同意」）：isOnline 为假（选了「离线继续」/ 没网 / 没登录）→ **一条网都不打**。
@@ -1182,6 +1257,7 @@ export function createStore(config: StoreConfig) {
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
           if (cloudState === "absent" || cloudState === "never") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）
+            if (await starredForResolve()) return { status: "unresolved", reason: "starred" };   // 2.3.0：加了星 → 两边都不动，人先撤星
             const d = await delIfCloudAbsentSF(name);                 // 0.18.6：只在云端此刻确实没有时；面开着时回来了 → 两边不动，unresolved / cloud-reappeared
             notifyFolderOf(name);
             return trashedOrWhy(d);
@@ -1203,7 +1279,13 @@ export function createStore(config: StoreConfig) {
         return pushed ? { status: "pushed" } : { status: "not-pushed", reason: r.status };
       },
       tryMove(to) { tierGuard("tryMove", name); return tryMoveSF(name, to); },
-      async trash() { tierGuard("trash", name); const r = await delSF(name); notifyFolderOf(name); return r; },   // 2.1.2 起叫 trash（原 delete；动词 = 语义：移进回收站）。返 TrashOutcome（v436）：cancelled/noop/queuedCloudDelete 都不是「已进回收站」
+      async trash() {
+        tierGuard("trash", name);
+        await starGuard("trash", name);                          // 2.3.0 星：加了星的不许送进回收站（StarredError）；要删先撤星
+        const r = await delSF(name);
+        if (r.status !== "cancelled") { try { unlocks.lock(name); } catch (e) { reportStoreError(e, "log"); } }   // 进了回收站的那份，解锁不留（同名的新文件 / 还原回来的不该生来开着）
+        notifyFolderOf(name); return r;
+      },   // 2.1.2 起叫 trash（原 delete；动词 = 语义：移进回收站）。返 TrashOutcome（v436）：cancelled/noop/queuedCloudDelete 都不是「已进回收站」
       reupload() {
         tierGuard("reupload", name);
         return busyK("file.reuploading", undefined, async () => {
@@ -1395,6 +1477,15 @@ export function createStore(config: StoreConfig) {
     }
   }
 
+  /** 2.3.0：改一份文件的记号（星 / 收起）。没开 fileMarks → 抛（调用方先看 files.fileMarks）。记号读不出来 → 抛，不装成改好了。 */
+  async function setMarks(op: string, identifier: string, patch: { starred?: boolean; folded?: boolean }): Promise<void> {
+    if (!marks) throw new Error(`store.files.${op}(): file marks are off — pass createStore({ fileMarks: true })`);
+    assertValidFileName(identifier, appId);
+    await migrationReady;
+    if (!(await loadMarks())) throw new Error(`store.files.${op}("${identifier}"): cannot read file marks`);
+    await marks.set(identifier, patch);   // 落本机才返回；云端那一趟 collection 自己排（防抖推）。collection.onChange → 那一夹重画
+  }
+
   return {
     // ── file + collection。改身份走 file.tryMove(to)。──
     /** 文件对象工厂（含 tryMove/pullIfClean/save/open/trash/reupload…）。 */
@@ -1454,6 +1545,29 @@ export function createStore(config: StoreConfig) {
           return { pushed, failed, failures };
         },
       }),
+      // ── 2.3.0 锁（家族「源文件原则上只读」）。这四个不受 lockByDefault 影响（开关只决定 save 拦不拦）；前端看 `lockByDefault` 决定画不画锁。──
+      /** 这个库是不是「作品默认只读」（createStore({ lockByDefault }) 的原值）。图库 / app 据此决定要不要画锁和解锁钮。 */
+      lockByDefault: config.lockByDefault === true,
+      /** 解锁一份作品。**只许由人的手势调用**（app 契约 + 各仓守卫测试）：代码替人解锁 = 这把锁白装。逐件、只记在这台设备、不同步；
+       *  放凉 unlockTtlMs（默认一天）过期，每次成功的 save 往后推；正开着的那份过期不打断。已经解着的 = 重新计时。 */
+      unlock: async (identifier: string): Promise<Unlock> => { assertValidFileName(identifier, appId); await migrationReady; return unlocks.unlock(identifier); },
+      /** 提前收回解锁（车钥匙那一下）。本来就锁着 = 什么都不做。 */
+      lock: async (identifier: string): Promise<void> => { assertValidFileName(identifier, appId); await migrationReady; unlocks.lock(identifier); },
+      /** 现在有没有活着的解锁（界面画灰 / 亮）；锁着 → null。同步、现算，零网络。 */
+      unlockOf: (identifier: string): Unlock | null => unlocks.get(identifier),
+      /** 订阅活着的解锁：订阅当场给一次全表，之后有变化（解 / 锁 / 过期 / 改名）再给。返退订。 */
+      watchUnlocks: (cb: (live: Unlock[]) => void): (() => void) => unlocks.watch(cb),
+      // ── 2.3.0 记号：星 / 收起（要 createStore({ fileMarks: true })；没开 → 这四个抛）。──
+      /** 这个库开没开记号（createStore({ fileMarks }) 的原值）。 */
+      fileMarks: marks != null,
+      /** 加星：之后库拒绝把它送进回收站（`file.trash` 抛 StarredError；冲突面里选「这份进回收站」→ unresolved / starred；云端没了过宽限也不自动送）。列举里 `Item.starred`。 */
+      star: (identifier: string): Promise<void> => setMarks("star", identifier, { starred: true }),
+      /** 撤星。 */
+      unstar: (identifier: string): Promise<void> => setMarks("unstar", identifier, { starred: false }),
+      /** 收起：纯显示记号（列举里 `Item.folded`）。库照常列出它、不拦任何动作。 */
+      fold: (identifier: string): Promise<void> => setMarks("fold", identifier, { folded: true }),
+      /** 取消收起。 */
+      unfold: (identifier: string): Promise<void> => setMarks("unfold", identifier, { folded: false }),
       /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
       watchFolder,
       /** 0.14.0：身份变更事件——任何入口的 `file.tryMove` 成功后同步回调 `(from, to)`（库身份 = 全名；含离线 move 分支；撞名 ok:false 不发）。
@@ -1519,7 +1633,7 @@ export function createStore(config: StoreConfig) {
       //   日常开夹的惰性收敛已在 watchFolder 内走 reconcileFolder（看到夹才收敛，同一 converge SSOT）。
       /** **全库** cloud-gone 收敛（去抖后 send trash）。**仅用户显式指令**（隐藏的「校验完整性」入口），
        *  绝不自动/轮询——全树 listAll 是重活。 */
-      reconcileAll: (opts?: { activeIdentifier?: string }) => reconcileMod.reconcile({ activeFileName: opts?.activeIdentifier }),
+      reconcileAll: async (opts?: { activeIdentifier?: string }) => { if (marks) await loadMarks(); return reconcileMod.reconcile({ activeFileName: opts?.activeIdentifier }); },   // 2.3.0：先把记号读进来（加了星的不自动送回收站；读不出来 = 一律不动）
     }),
     // （encryption 面已随 @internal/encryption 立户退役 2026-08-28：加密是纯内容操作不属于同步引擎——
     //   app 用自己的 createEncryption 实例（无库模式也活着），store 只经 EncryptionPort 收同一实例。）
@@ -1534,6 +1648,7 @@ export function createStore(config: StoreConfig) {
       if (_disposed) return;
       _disposed = true;                              // 先拒新调用（drain 才可能收敛）
       renameListeners.clear();
+      unlocks.close();                               // 2.3.0：解锁的过期定时器收掉（账在 kv 里，下次开库照旧）
       unAuth?.();                                    // 0.11.6：退订 provider auth 事件
       folderWatchers.clear();                        // 停 watcher：in-flight 帧推送经 has(folder) 检查自然失效；已经在飞的那帧每个 await 后看 _disposed 自退（reportFrame）
       // 2.2.7（家族周账 F-199 ①）：每份 collection 排着的本地写定时器先收掉——init 一跑就排一个（400 ms）。drain = 先落盘再关（第 2 条：没落盘的改动不丢）；

@@ -9,6 +9,8 @@
 
 > 2.1.4：`createStore({ uploads: { resumable: true } })` = 上传会话落盘（> 4 MB 的分块上传刷新 / 被杀后接着传；默认关；详 `ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md`）。
 
+> 2.3.0：**锁 / 星 / 收起**（家族「源文件原则上只读」，user 2026-11-08）。两个开关都默认关 = 2.2 行为：`createStore({ lockByDefault: true })` = 一等作品没解锁就 `save` 抛 `LockedError`（`files.unlock / lock / unlockOf / watchUnlocks`）；`createStore({ fileMarks: true })` = `files.star / unstar / fold / unfold` + `Item.starred / folded`，加了星的拒绝送进回收站（`StarredError`）。见下面 §2.2；详 `ai-docs/20261108-2.3.0-lock-star-fold.md`。
+
 > 2.2.0：流式暂存区住自己的库 `${appId}.${databaseId}.staging`（主库旧 `staging/` 键由 `MIGRATIONS` v001 整批删）；MSAL authority 默认 `/consumers`、别的值直接拒（家规 #7）。详 `ai-docs/20261021-2.2.0-staging-split-authority-consumers.md`。
 
 ## 包与消费（@internal/store）
@@ -198,6 +200,35 @@ const p = await zip.getPeek({ bytesLength: 131072, zipEntry: "Thumbnails/thumbna
 - peek/预览是**格式无关的不透明 binary blob**（jpg/png/随便，库不看、不构造、不解码）。
 
 ---
+
+### 2.2 锁 / 星 / 收起（2.3.0；两个开关都默认关）
+
+> as-of 2.3.0 / 2026-11-08。家规 = 家族 `CLAUDE.md`「源文件原则上只读：手动解锁才能改」。**每个 app 专门迁移一轮才打开开关，不许顺手开。**
+
+**锁（`createStore({ lockByDefault: true })`）**——一等作品（docKinds 里 tier `"work"` 的文档）默认只读，这是三层里的最后一层（界面不收输入 → app 的保存拒绝并报错 → 库拒绝写入）。
+
+| 动词 | 没解锁时 |
+|---|---|
+| `file.save`（改已有的） | 抛 `LockedError`（任何副作用之前：不标脏、不落盘、不打网）。成功的 save 把过期往后推 |
+| `file.save`（`mode:"new"` 的首存） | 不拦（新建不是改）。存成后带一枚解锁；`save(…, { bornLocked: true })` = 生来锁着（存下来的一版、导入的文件） |
+| `tryMove` / `trash` / `encrypt` / `decrypt` / `rekey` | 不归锁管（改名、删除、加密算档案那头；删除归星） |
+| `pullIfClean` / `resolve()` / `dirty.pushAll` / `reupload` / 离线补推 | 不归锁管（同步的是已经存下的字节，不是改内容） |
+| 图片、杂物（不是声明过的文档）、二等自动备份、三等资源 | 不受影响 |
+
+- `files.unlock(identifier)` → `Unlock { identifier, unlockedAt, expiresAt }`。**只许由人的手势调用**——代码替人解锁 = 这把锁白装（各 app 守卫测试钉）。`files.lock(identifier)` 提前收回；`files.unlockOf(identifier)` 同步现算；`files.watchUnlocks(cb)` 订阅当场给一次全表、之后有变化再给。
+- 一枚解锁：逐件、**只记在这台设备的 kv（`internal.unlocks`），永不进任何同步面**；放凉 `unlockTtlMs`（默认 24 h）过期，滑动——`expiresAt = max(解锁那刻, 最近一次成功的 save) + ttl`；`activeIdentifier()` 指着的那份过期不打断，它不再是活动文档的那一刻才落锁。改名 / 移动成功解锁跟着走；进了回收站解锁不留。
+- **和「no-timestamps」红线的关系**：那条红线说的是内容的新旧、谁覆盖谁从不看时间戳。这里的时间只决定**这台设备此刻让不让改**，不参与任何同步 / 合并 / 新鲜度判断；它是防误触的保险，不是安全边界，**不是把时间戳引进同步决策的先例**。本机时钟被往回拨过 → 一看到就把那条改记成现在，最多再等一个 ttl。
+- `files.lockByDefault`（布尔）= 开关的原值，前端据此决定画不画锁。四个动词本身不受开关影响（开关只决定 `save` 拦不拦）。
+
+**记号：星 / 收起（`createStore({ fileMarks: true })`）**——记在一份库自己的 collection 里（云端 `.${appId}/store.file-marks.json`；逐条合并、带墓碑、If-Match，和 §3 同一套设施）。条目 = 身份 → `{ starred?, folded? }`。
+
+- `files.star / unstar(identifier)`：加了星的，库拒绝送进回收站——`file.trash()` 抛 `StarredError`；`resolve()` 的面里人选「云端覆盖本地 = 这份进回收站」→ `{ status: "unresolved", reason: "starred" }`，两边不动；云端那份没了、过了 24 h 宽限，机器也**不**自动送回收站，停在 `pendingGone`（要你处理），撤星后下一轮照常收敛。记号读不出来 → 拒绝删除（响亮），不放行。
+- `files.fold / unfold(identifier)`：**纯显示记号**。库照常列出它、不拦任何动作；图库拿 `Item.folded` 决定画不画成一条细条。「存下来的一版」那种收起靠名字（`<主干>.backup-<日期>`），是图库认的，库零命名知识。
+- 列举：`Item.starred` / `Item.folded` 只在 true 时写；记号变了（这台改的、别的设备同步来的）那一夹自动重画。改名 / 移动成功记号跟着新身份走。文件进了回收站，条目留着不动。
+- 它是人的决定，不是能重建的缓存。**已知的洞**：记号那份文件丢了 = 星没了（保护失效，作品不丢）、手动收起的重新露出来；两台设备离线各点一次 = 逐条后改的为准；别的设备（或同一台的另一个标签页）还没同步到这颗星之前，在那边照样删得掉；没更新的旧版 app、网盘自己的网页拦不住；清空回收站不看星（加了星的东西在别的设备被删进回收站后，这台清空回收站会把它带走）。
+- `files.fileMarks`（布尔）= 开关的原值。没开时四个动词抛、列举不带这两个字段、云端不建那份文件。
+
+**后端无关**：锁 = 本机一条 kv；星 / 收起 = 一份普通的同步文件。没有用到任何一家后端特有的功能。
 
 ## 3. 集合 store —— 一个 JSON 装多个**原子** item
 

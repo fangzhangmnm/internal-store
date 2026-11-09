@@ -48,6 +48,12 @@ export interface Item {
    *  只在 true 时写。给 gallery 0.8.11「加密态 = 本地字节 ∨ store 的事实」当第三路：纯云端、这台没字节的加密件第一次打开前就能亮锁、不显明文封面。
    *  和 kind / tier 一样是库填好的事实，下游别再从名字推；不是 syncState 的派生、不参与 badge。列举本来就拿到名字，零多余请求。 */
   cloudSealed?: true;
+  /** 2.3.0：人给这份加了星（createStore({ fileMarks: true }) 才有；只在 true 时写）。加了星的，库拒绝送进回收站（file.trash 抛 StarredError）。
+   *  和 kind / tier 一样是库填好的事实，下游别从别处推。 */
+  starred?: true;
+  /** 2.3.0：人把这份收起了（同上，只在 true 时写）。**纯显示用**：库照常列出它、不拦任何动作；图库拿它决定画不画成一条细条。
+   *  名字带 `.backup-日期` 的那种「存下来的一版」不在这里——那是图库按名字认的，库零命名知识。 */
+  folded?: true;
 }
 
 /** 列举上下文：syncState 的可解析度由它决定（用户拍板：store 吃 ctx、返解析好的 badge）。 */
@@ -112,7 +118,7 @@ export interface ListingCfg {
   isPendingGone?: (path: string) => boolean;   // clean cloud-gone 孤儿在防抖 grace 内（pending-gone 深模块）→ 显 pendingGone badge
   pendingFolderDeletions?: () => string[];   // 离线排队待删的已上云空夹（全路径）→ **从 folders 减去**（回线 drain 前先隐藏，不再 list）
   hidden?: (name: string) => boolean;   // 0.14.0：宿主额外隐藏名（config.hiddenName），叠在 is-hidden 的 dot 规则之上
-  describe?: (identifier: string) => { kind?: string; tier: DocTier };   // 2.1.2：身份 → 种类 / 等级（create-store 用 docKinds 表填；没给 → tier "work"）
+  describe?: (identifier: string) => { kind?: string; tier: DocTier; starred?: boolean; folded?: boolean };   // 2.1.2：身份 → 种类 / 等级（create-store 用 docKinds 表填；没给 → tier "work"）；2.3.0 多带星 / 收起的记号
 }
 
 /** 单夹 snapshot（watchFolder 每次回调的形状）——**只这一夹的直属子项**（非递归）。 */
@@ -150,7 +156,11 @@ export function createListing(cfg: ListingCfg) {
   const isHiddenAny = (n: string): boolean => isHidden(n) || !!cfg.hidden?.(n);
   const { cloud, local, head, pendingFolders, isPendingGone, pendingFolderDeletions } = cfg;
   // 2.1.2：种类 / 等级（kind 没有就不放字段，免得 undefined 污染 deq）
-  const describe = (n: string): { kind?: string; tier: DocTier } => { const d = cfg.describe?.(n); return d ? (d.kind !== undefined ? { kind: d.kind, tier: d.tier } : { tier: d.tier }) : { tier: "work" }; };
+  const describe = (n: string): { kind?: string; tier: DocTier; starred?: true; folded?: true } => {
+    const d = cfg.describe?.(n);
+    if (!d) return { tier: "work" };
+    return { ...(d.kind !== undefined ? { kind: d.kind } : {}), tier: d.tier, ...(d.starred ? { starred: true as const } : {}), ...(d.folded ? { folded: true as const } : {}) };   // 2.3.0：记号只在 true 时放字段
+  };
 
   // 一个 path 的原始事实 → Item（cloud/local 两轴 + head → classifier）。listAllItems 与 listFolder 共用。
   function classifyPath(

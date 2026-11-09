@@ -80,6 +80,8 @@ import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOn
 import "./edit-race.test.ts";
 import "./identifiers.test.ts";   // 0.16.0：身份的语法（docKinds 表）
 import "./restore-naming.test.ts";   // 0.16.0：取回撞名两条腿走表；zip()/encrypt 守卫
+import "./lock.test.ts";   // 2.3.0：作品默认只读、手动解锁（lockByDefault，默认关）
+import "./file-marks.test.ts";   // 2.3.0：星（拒绝送进回收站）/ 收起（纯显示记号）（fileMarks，默认关）
 
 console.log("\n  @internal/store —— 云同步引擎契约测试\n");
 await run();

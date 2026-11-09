@@ -55,6 +55,8 @@ export interface ReconcileCfg {
   hidden?: (name: string) => boolean;       // 0.14.0：宿主额外隐藏名（config.hiddenName）——隐藏项云端本就不列，绝不据此误判 gone
   /** 2.1.0：这个名字的本地副本只是缓存（三等资源）→ 云端没了直接丢，不进回收站。 */
   drop?: (name: string) => boolean;
+  /** 2.3.0：这个名字机器不许替人送进回收站（加了星；或者记号还读不出来 → 一律不动）。过了宽限也停在 candidate（pendingGone「要你处理」），等人在面里选。 */
+  keep?: (name: string) => boolean;
 }
 
 export function createReconcile(cfg: ReconcileCfg) {
@@ -83,6 +85,7 @@ export function createReconcile(cfg: ReconcileCfg) {
     const demoted: string[] = [];
     for (const name of demote) {
       if (!pending.seenGone(name, now())) continue;   // 首次见 gone / grace 内 → 标记+留着（badge），不删
+      if (cfg.keep?.(name)) continue;                 // 2.3.0 加了星：过了宽限机器也不动手（candidate 标记留着 = 列举里一直是「要你处理」）；人撤了星，下一轮照常收敛
       // 单腿事件（云端已经没了，只有本地这一条腿）→ 自己生成 id，无配对需求。
       if (cfg.drop?.(name)) await local.hardDelete(name);   // 2.1.0 三等资源：本地只是缓存，云端没了直接丢（不进回收站）
       else await local.trash(name, asideStamp(now()));     // 跨 GRACE 第二次+ → 本地 send trash（move-aside，可恢复）

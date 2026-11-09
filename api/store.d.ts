@@ -371,6 +371,27 @@ export declare function createStore(config: StoreConfig): {
                 failures: PushFailure[];
             }>;
         };
+        /** 这个库是不是「作品默认只读」（createStore({ lockByDefault }) 的原值）。图库 / app 据此决定要不要画锁和解锁钮。 */
+        lockByDefault: boolean;
+        /** 解锁一份作品。**只许由人的手势调用**（app 契约 + 各仓守卫测试）：代码替人解锁 = 这把锁白装。逐件、只记在这台设备、不同步；
+         *  放凉 unlockTtlMs（默认一天）过期，每次成功的 save 往后推；正开着的那份过期不打断。已经解着的 = 重新计时。 */
+        unlock: (identifier: string) => Promise<Unlock>;
+        /** 提前收回解锁（车钥匙那一下）。本来就锁着 = 什么都不做。 */
+        lock: (identifier: string) => Promise<void>;
+        /** 现在有没有活着的解锁（界面画灰 / 亮）；锁着 → null。同步、现算，零网络。 */
+        unlockOf: (identifier: string) => Unlock | null;
+        /** 订阅活着的解锁：订阅当场给一次全表，之后有变化（解 / 锁 / 过期 / 改名）再给。返退订。 */
+        watchUnlocks: (cb: (live: Unlock[]) => void) => (() => void);
+        /** 这个库开没开记号（createStore({ fileMarks }) 的原值）。 */
+        fileMarks: boolean;
+        /** 加星：之后库拒绝把它送进回收站（`file.trash` 抛 StarredError；冲突面里选「这份进回收站」→ unresolved / starred；云端没了过宽限也不自动送）。列举里 `Item.starred`。 */
+        star: (identifier: string) => Promise<void>;
+        /** 撤星。 */
+        unstar: (identifier: string) => Promise<void>;
+        /** 收起：纯显示记号（列举里 `Item.folded`）。库照常列出它、不拦任何动作。 */
+        fold: (identifier: string) => Promise<void>;
+        /** 取消收起。 */
+        unfold: (identifier: string) => Promise<void>;
         /** 订阅**一个**文件夹（网盘模型）：立即本地帧 + 云端帧同一 cb 再闪；之后本夹任何本地写即时重推本地帧。返回退订。 */
         watchFolder: (folder: string, cb: (s: FolderSnapshot) => void, opts?: {
             onError?: (err: unknown, phase: WatchFolderErrorPhase) => void;
@@ -528,6 +549,12 @@ export declare interface FetchMetaResult {
     size: number;
     /** 完整云端 item。 */
     item: CloudItem;
+}
+
+/** 一份文件上的记号。只在 true 时有这个键。 */
+export declare interface FileMarks {
+    starred?: true;
+    folded?: true;
 }
 
 /** 流式读取会话句柄（file.openStream 返回；A2）。字节 = at-rest 原样（内容盲）。 */
@@ -745,6 +772,12 @@ export declare interface Item {
      *  只在 true 时写。给 gallery 0.8.11「加密态 = 本地字节 ∨ store 的事实」当第三路：纯云端、这台没字节的加密件第一次打开前就能亮锁、不显明文封面。
      *  和 kind / tier 一样是库填好的事实，下游别再从名字推；不是 syncState 的派生、不参与 badge。列举本来就拿到名字，零多余请求。 */
     cloudSealed?: true;
+    /** 2.3.0：人给这份加了星（createStore({ fileMarks: true }) 才有；只在 true 时写）。加了星的，库拒绝送进回收站（file.trash 抛 StarredError）。
+     *  和 kind / tier 一样是库填好的事实，下游别从别处推。 */
+    starred?: true;
+    /** 2.3.0：人把这份收起了（同上，只在 true 时写）。**纯显示用**：库照常列出它、不拦任何动作；图库拿它决定画不画成一条细条。
+     *  名字带 `.backup-日期` 的那种「存下来的一版」不在这里——那是图库按名字认的，库零命名知识。 */
+    folded?: true;
 }
 
 /** localStorage / IDB / 内存 都能实现的极简 KV（store 不直碰 localStorage，红线 #7）。 */
@@ -823,6 +856,14 @@ export declare interface LocalSaveReceipt {
         backedUp: boolean;
         foreignRev: number;
     };
+}
+
+/** 2.3.0：`lockByDefault` 开着、这份作品没有活着的解锁时改它的内容 → 抛此错（app surface；这不是失败，是契约）。
+ *  走到这里说明 app 的界面层 / 保存层漏了：锁着的作品本来就不该收到编辑。app 要响亮报出来，不许吞；要改就让人先解锁（`files.unlock`，只许由人的手势调用）。 */
+export declare class LockedError extends Error {
+    identifier: string;
+    op: string;
+    constructor(identifier: string, op: string);
 }
 
 /** 镜像给某份文件的句柄（mirror.ts 的 createFileMirror / createHttpMirror 造；宿主也可以自己实现）。 */
@@ -980,6 +1021,9 @@ export declare interface RawFile {
         tryPush?: boolean;
         hint?: unknown; /** 0.17.0：上传进度（done / total 字节），只给宿主画进度条。 */
         onProgress?: (done: number, total: number) => void;
+        /** 2.3.0（只在 `lockByDefault` 开着、且这是 `mode:"new"` 的首存时有意义）：true = 新建的这份生来锁着（存下来的一版、导入的文件）；
+         *  默认 false = 存成后带一枚解锁（刚新建的东西当然要接着画）。别的场合忽略。 */
+        bornLocked?: boolean;
     }): Promise<SaveResult>;
     /** 打开读取，返回**明文** Blob（加密透明解壳）；拿不到（本地无且云端不可达）→ null。 */
     open(): Promise<Blob | null>;
@@ -1247,6 +1291,13 @@ export declare interface StagingStore {
     keys(): Promise<string[]>;
 }
 
+/** 2.3.0：加了星的文件不许送进回收站（app surface；这不是失败，是契约）。要删，人先撤星（`files.unstar`）。 */
+export declare class StarredError extends Error {
+    identifier: string;
+    op: string;
+    constructor(identifier: string, op: string);
+}
+
 /** StorageManager 最小面（参数注入 = 测试 seam；prod 缺省走 globalThis.navigator.storage）。 */
 export declare type StorageManagerLike = {
     persist?: () => Promise<boolean>;
@@ -1364,6 +1415,20 @@ export declare interface StoreConfig {
      *  encrypt/decrypt、建删夹、回收站恢复/清空）抛 ReadOnlyFilesError；**collections 不受影响**（阅读位置等照写）。
      *  只读消费面照常：open/openStream/keepOffline/offload/pullIfClean/watchFolder/reconcileAll。 */
     readOnlyFiles?: boolean;
+    /** **迁移开关，默认 false = 2.2 的全部行为一字不变。** true = 一等作品（docKinds 里 tier "work" 的文档）默认只读：
+     *  没有活着的解锁（`files.unlock(identifier)`）就不能改内容——`file.save`（改已有的）抛 `LockedError`。
+     *  `mode:"new"` 的首存不拦（新建不是改；存成后自动带一枚解锁，除非 `save(…, { bornLocked: true })`）。
+     *  不归锁管的：改名 / 移动、加密 / 解密 / 换密码、删除（归星管）、同步（快进、冲突面里人选的那一下、补推已经存下的字节、重新上传）。
+     *  不是声明过的文档（图片、杂物）、二等自动备份、三等资源：不受影响。每个 app 把界面和保存那条路改好之后再打开（专门迁移一轮，不许顺手开）。 */
+    lockByDefault?: boolean;
+    /** 一枚解锁放凉多久过期（ms）。默认 24 h（user「过期的话，我觉得就用一天吧」）。滑动：每次成功的 save 把它往后推；正开着的那份（activeIdentifier）过期不打断。 */
+    unlockTtlMs?: number;
+    /** true = 开「记号」：星（`files.star`，加了星的拒绝送进回收站）和收起（`files.fold`，纯显示）。记在一份库自己的同步文件里
+     *  （云端 `.${appId}/store.file-marks.json`，和 collection 同一套设施）。**默认 false = 不建那份文件、列举不带这两个字段、star / fold 抛错**——
+     *  开了会多建一份云端文件（第一次列目录 / 用到记号时）、每次开夹的云端帧多一次 fetchMeta，所以是显式开关（本库规则：行为变更默认关）。 */
+    fileMarks?: boolean;
+    /** 内部 / 测试 seam：本机时钟（只给解锁的过期用；默认 Date.now）。 */
+    now?: () => number;
 }
 
 /** store.dispose() 之后再调任何面 → 抛此错（app surface；这不是失败，是契约——切库/登出后旧句柄必须响亮死，绝不静默半工作）。 */
@@ -1551,6 +1616,16 @@ export declare type TryMoveResult = {
     ok: false;
     reason: "cancelled";
 };
+
+/** 一枚活着的解锁。expiresAt = max(解锁那刻, 最近一次成功 save) + ttl；正开着的那份过了这个时刻仍然活着（见头注释）。 */
+export declare interface Unlock {
+    /** 哪一份。 */
+    identifier: string;
+    /** 解锁那一刻（epoch ms，本机时钟）。 */
+    unlockedAt: number;
+    /** 放凉到这一刻过期（epoch ms，本机时钟）。只给界面显示用，别拿它做任何内容决策。 */
+    expiresAt: number;
+}
 
 /** provider.upload 的选项。 */
 export declare interface UploadOpts {
