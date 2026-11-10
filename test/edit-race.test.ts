@@ -6,7 +6,7 @@
 //     I2  干净快进（或冲突面选了云端）下载途中又保存了一次 → 下载完照样覆盖本地并清 dirty，刚保存的字节没了、也不在备份箱。
 //   user 2026-09-29「同步库的一个洞 修」。宿主（WXHW v2.1.15）已经在自己那层绕开了能碰到的路径；这里是库这一层自己承重。
 //   断言按数据安全词典序写：①云端赢家没被静默覆盖 ②本地刚保存的字节还在（在原位或在备份箱）③dirty / 谱系诚实。
-import { test, eq, assert } from "./runner.mjs";
+import { test, todo, eq, assert } from "./runner.mjs";
 import { TEST_KINDS } from "./kinds.mjs";
 import { createStore } from "../src/create-store.ts";
 import { createMockProvider } from "../src/testing/mock-provider.ts";
@@ -156,3 +156,9 @@ test("[edit-race] 没有撞车时一切照旧：干净快进成功、推送后�
   const again = await f.pullIfClean();
   eq(again.status, "in-sync");
 });
+
+// I3（家族周账 F-188，2026-11-10 Claude Fable 5.2 复现，库还没修——改库要先问 user）：保存发出之后、字节落本机之前有推送进了同名串行段
+//   → 推完清掉待传，随后落本机的那份其实没上云。复现脚本（现在是红的）= test/repro/f188-dirty-cleared-before-bytes-land.repro.ts。
+//   修好之后把那三段搬到这里换掉下面两条 todo。
+todo("[edit-race] I3 自动保存（只落本机）撞上自动续推（dirty.pushAll）→ 后落本机的那份必须仍算待传（现在 = 0）");
+todo("[edit-race] I3 存并推还没开始上传时又来一次只落本机的保存 → 推完仍待传（现在 = 0，随后的干净快进会无备份地吃掉它）");
