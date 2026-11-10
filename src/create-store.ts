@@ -7,6 +7,7 @@
 import { toU8, createSubstrate } from "./base/substrate.ts";
 import type { Bytes } from "./base/substrate.ts";
 import { createLocalHead } from "./works/local-head.ts";
+import { createDiskLedger } from "./works/disk-ledger.ts";
 import { createSeal, cryptExtFor } from "./works/seal.ts";
 import { createIdentifiers, type DocKind, type DocTier, type Identifiers, type IdentifierCodec } from "./base/identifiers.ts";
 import { createSafeResolve, type ResolveChoice } from "./works/safe-resolve.ts";
@@ -526,12 +527,16 @@ export function createStore(config: StoreConfig) {
   //     （**无保留名**：2026-07-13 起 `settings` 也只是个普通 collection 名，assertValidCollectionName 只校验文件名合法性。）
   const collectionsCloud: CloudSync = createCloudSync({ provider, kv, fileName: (n: string) => `.${appId}/${n}.json`, appKey: "collections" });
   const sub = createSubstrate();
-  const head = createLocalHead({
+  const headRaw = createLocalHead({
     kv,
     getCloudEtag: (n: string) => cloud.getETag(n),
     setCloudEtag: (n: string, e: string | null) => cloud.setETag(n, e),   // 采纳云版时提交 durable etag（见 local-head.markSynced 注释：合 R1，非违规）
     keyPrefix: "files",
   });   // → `${ns}.files.dirty:`（文件 dirty 权威）
+  // 2.3.2 盘上账本（F-238；works/disk-ledger.ts 头注释讲为什么）：「宣布和网盘一致」之前对号。纯内存、这一页一份。
+  //   head.forget（删除 / 腾空间 / 断谱系）同一步清掉盘上记录——包一层，十几个调用点不用各自记得。
+  const ledger = createDiskLedger();
+  const head: typeof headRaw = { ...headRaw, forget: (n: string) => { headRaw.forget(n); ledger.forget(n); } };
   // 数据迁移框架（ADR-0019）：**createStore 内部自跑、隐形**——app 看不见 migration。
   //   MIGRATIONS 现为空（无用户/无后向兼容，2026-07-13 清 tax）→ 编排跑空、无 op；框架留着待将来第一条真迁移。
   //   ops 首用前 await migrationReady（open/save/list）。测试/无 localStorage 环境跳过。
@@ -562,7 +567,8 @@ export function createStore(config: StoreConfig) {
       if (await local.exists(name)) return false;     // 用户其间正常 open 过 → 已有副本，收摊不覆盖
       if (head.isDirtyAnywhere(name)) return false;   // dirty 永不覆盖（双保险，anywhere：别 tab 的未推也算；dirty 理应蕴含有本地副本）
       await local.save(name, blob);
-      head.markSynced(name, etag);
+      const w = ledger.wrote(name);                   // R3（2.3.2）
+      if (ledger.settled(name, w)) head.markSynced(name, etag);   // 落地的那一下里发出了保存（它马上把盘上换掉）→ 不宣布一致，待传留着
       notifyFolderOf(name);                           // 列举即时反映「已留离线」
       return true;
     }),
@@ -781,6 +787,7 @@ export function createStore(config: StoreConfig) {
     validateAdopt: (plain, name) => (ids.rowOf(name)?.validate ?? validateAdopt)(plain),   // 2.1.0：每种文档可带自己的验真，没带用全局的
     unseal: (n, blob) => seal.unsealForRead(n, blob),   // 返明文；加密但锁定 → null（safePull 退验封套）
     looksEncrypted: (b) => enc.looksEncryptedContainer(b),
+    ledger,                                             // 2.3.2：覆盖本地前后对号（F-238）
   });
   // busy 文案接缝（2026-08-21）：模块只发 StoreTextKey，这里统一换译文（宿主 text 优先，缺省英文）。
   const busyT = <T>(label: string, fn: () => Promise<T>) => ui.busy(resolveStoreText(ui.text, label as StoreTextKey), fn, label as StoreTextKey);
@@ -801,7 +808,7 @@ export function createStore(config: StoreConfig) {
     };
   } : undefined;
   const recaptureLineage = config.recaptureLineageOnPush ?? true;   // 2.2.1
-  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: busyT, sessionFor, recaptureLineage, ...config.pushRetry });
+  const pushMod = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, ledger, editVersion: () => sub.edits.version(), busy: busyT, sessionFor, recaptureLineage, ...config.pushRetry });
 
   // ── ADR-0018 离线「新上传」回线补推（仅 never-synced float；编辑仍 consent-surface）────────────
   const uploadReplayPolicy: UploadReplayPolicy = config.offlineUploadReplay ?? "manual";
@@ -810,16 +817,23 @@ export function createStore(config: StoreConfig) {
     if (uploadReplayPolicy === "ask" && !ui.confirmReplay) throw new Error("createStore: offlineUploadReplay='ask' 需 ui.confirmReplay（回线询问用户）");
   }
   // 后台 push 实例：与 pushMod 同深模块编排，唯 busy 换透传——drain 不锁屏（ADR-0018 §4：非 busy 后台）。
-  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), sessionFor, recaptureLineage, ...config.pushRetry });
+  const pushBg = createPush({ cloud, head, seal, safeResolve, serialize: sub.serialize, ledger, editVersion: () => sub.edits.version(), busy: (_l, fn) => fn(), sessionFor, recaptureLineage, ...config.pushRetry });
   // 0.15.1（2026-09-26，WXHW user「为什么推加密件需要密码。不就是二进制吗」→「修」）：**本地 at-rest 字节直推，不解壳不重封**。
   //   以前先 unsealForRead 得明文再交 doPush 重新 sealForWrite —— 等于要密码才能把已经封好的容器搬上云；锁着（无密码）= status "locked" 留 dirty，
   //   pushAll / 离线补推在锁屏 / reload 后全推不动。sealForWrite 本就对「已是容器」原样透传（搬运路径），明文文件也原样（prev 非容器），
   //   所以直推 = 同一份字节、同一条 vetted push（If-Match / N6 / 撞名 surface / B5 重试逐字节相等）。锁着的加密件从此照推。
+  //   2.3.2（R2）：**调用方必须站在同名串行段里**（dirty.pushAll / uploadReplay / reupload 都是）——读盘和 doPush 开头取的盘上号才对得上。
   async function pushLocalBytes(name: string): Promise<{ status: string }> {
     const blob = await local.get(name);
     if (!blob) return { status: "no-local" };
     const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
-    return pushBg.doPush(name, { encode: () => atRest });   // 非 busy、未串行（uploadReplay 已 per-name serialize）；CloudNameCollisionError 抛出→出队 surface
+    return pushBg.doPush(name, { encode: () => atRest });   // 非 busy、未串行（调用方已 per-name serialize）；CloudNameCollisionError 抛出→出队 surface
+  }
+  /** 本机 at-rest 字节（给在队里跑的 encode 用：没了 = 抛，推送那一头当错误报）。 */
+  async function readAtRest(name: string): Promise<Uint8Array> {
+    const blob = await local.get(name);
+    if (!blob) throw new Error(`local copy of "${name}" vanished before push`);
+    return toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
   }
   const uploadReplay = createUploadReplay({
     kv, local, head, isOnline, serialize: sub.serialize, pushLocal: pushLocalBytes,
@@ -830,7 +844,7 @@ export function createStore(config: StoreConfig) {
   const fresh = createFreshness({ cloud, head, safeResolve, busy: busyT, hints: freshHints, lineageFromDurable: config.openLineageFromDurable ?? true });
   const del = createDelete({ cloud, local, head, kv, busy: busyT });
   const identity = createIdentity({
-    cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: busyT,
+    cloud, local, head, doPush: pushMod.doPush, serialize: sub.serialize, serialize2: sub.serialize2, seal, busy: busyT, ledger,
     // 离线 move = 删+建（决策 1A/2）：在线走 identity 内的服务端原子 move；离线降级，复用 del.del 离线删 + uploadReplay 补推。
     isOnline,
     deleteOffline: (name: string) => del.del(name, { isOnline }).then(() => {}),   // 完整离线删语义（move-aside + base-etag 云删排队 + null 守卫 + forget）
@@ -987,6 +1001,7 @@ export function createStore(config: StoreConfig) {
     const tracked = prevEtag != null;
     if (tracked && !online()) return { status: "offline" };
     await local.save(name, bytes);                               // ① 字节真相先落地（已在 encEncrypt 的 serialize 锁内）
+    const w = ledger.wrote(name);                                // R3（2.3.2）：库自己写了盘
     if (!tracked) return { status: "swapped" };
     try {
       const { item } = await cloud.push(name, bytes, { baseEtag: head.seenBase(name), encrypted });   // If-Match + 扩展名翻转
@@ -996,7 +1011,7 @@ export function createStore(config: StoreConfig) {
         head.onPushed(name, prevEtag, true);
         return { status: "cloud-deferred" };
       }
-      head.onPushed(name, item.eTag, false);                     // 落地：base←新 etag、清 dirty/parent
+      head.onPushed(name, item.eTag, !ledger.settled(name, w));   // 落地：base←新 etag、清 dirty/parent；2.3.2：加密途中发出的保存还在路上 = 网盘是这一版、本机马上更新 → 仍待传（I6）
       return { status: "swapped" };
     } catch (e: unknown) {
       head.onPushed(name, prevEtag, true);                       // ② 本地已换、云没跟上 → base/parent←换前云版 + dirty，push 流接力（下次 If-Match 旧云版：没人动→换成功；动过→412 surface）
@@ -1090,14 +1105,12 @@ export function createStore(config: StoreConfig) {
         return trashedOrWhy(d);
       }
       // 本地覆盖云端：和脏分支同一条 vetted push。先断旧谱系、标脏（= 首推，不带基准、撞名不覆盖）；撞上云端同名别的文件 → surfaceCollision → 库再弹「云端有新版本」的面，人再选。
-      const blob = await local.get(name);
-      if (!blob) return { status: "no-local" };
-      const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
+      if (!(await local.exists(name))) return { status: "no-local" };
       pendingGone.clear(name);
       head.forget(name);
       head.recordEdit(name);
       let r;
-      try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }
+      try { r = await pushMod.push(name, { encode: () => readAtRest(name), onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }   // 2.3.2（R2）：在队里读盘
       catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
       notifyFolderOf(name);
       if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };
@@ -1115,14 +1128,27 @@ export function createStore(config: StoreConfig) {
           const where = await nameOccupied(name);                // v417：把 where 带进错误——本地占用别谎称"云端同名"
           if (where) throw new CloudNameCollisionError(name, where);
         }
+        // 2.3.2 发出即占位（F-238，设计稿 2.1）：标脏、取号、进同名串行段这三步在**同一个同步步骤**里，中间没有 await——
+        //   落盘的顺序 = 发出的顺序；队里别的动作（推送 / 采纳网盘字节 / 加密转换 / 改名 / 删除）轮到自己时，在它之前发出的保存都已经落盘，
+        //   在它之后发出的一定排在它后面、而且在账本上「在路上」。转数组和封装挪进队里：按**轮到我时**盘上的加密状态封
+        //   （以前先封后排队：「加密这篇」和一次保存叠着时，保存按「还没加密」封好、在加密之后落盘 = 标着加密的稿子盘上是明文）。
+        //   seal.sealForWrite 里不许再进这条队（会自己锁自己）：test/declare-synced-guard.test.ts 钉住。
         head.recordEdit(name);                                   // 同步标脏：offload 的 isDirty 守卫立即可见（防驱逐吃未推字节）
-        pendingGone.clear(name);                                 // 编辑取消 candidate-gone：grace 内被编辑 → 立即当正常 dirty 文件处理（不等下轮 reconcile）
-        cancelFolderDeletionForDescendant(name);                 // 在待删夹下存文件 → 撤销该夹的排队删除（eager-cancel，Q6）
-        const plain = await toU8(bytes);
-        const sealed = await seal.sealForWrite(name, plain);
+        const g = ledger.issue(name);                            // 这次保存的号（推送拿它对号：推完 settled 才算传完）
         // A4 双 tab 互覆护栏：用户内容保存 = guard="user-save"（本 tab seen rev 对表；撞版=另一 tab
         //   写过 → local 层已先备份对方字节再覆盖，这里只负责 surface——冲突必 surface，绝不静默）。
-        const receipt = await sub.serialize(name, () => local.save(name, sealed, opts?.hint, "user-save")) as import("./base/types.ts").LocalSaveReceipt | void;   // local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图
+        //   local 写同名串行链：与 offload.hardDelete 互斥（C2 红线）；hint 透传缩略图。
+        const landing = sub.serialize(name, async () => {
+          try {
+            const sealed = await seal.sealForWrite(name, await toU8(bytes));
+            const receipt = await local.save(name, sealed, opts?.hint, "user-save") as import("./base/types.ts").LocalSaveReceipt | void;
+            ledger.landed(name, g);
+            return { sealed, receipt };
+          } catch (e) { ledger.failed(name, g); throw e; }   // 没落成：不算在路上（否则待传永远不归零）；错误照样从 save() 抛出去，队不卡（serialize = prev.then(fn, fn)）
+        });
+        pendingGone.clear(name);                                 // 编辑取消 candidate-gone：grace 内被编辑 → 立即当正常 dirty 文件处理（不等下轮 reconcile）
+        cancelFolderDeletionForDescendant(name);                 // 在待删夹下存文件 → 撤销该夹的排队删除（eager-cancel，Q6）
+        const { sealed, receipt } = await landing;
         if (receipt && typeof receipt === "object" && receipt.foreignOverwrite) {
           reportStoreError(new Error(`local overwrite conflict: "${name}" was written by another tab (rev ${receipt.foreignOverwrite.foreignRev}); their bytes were ${receipt.foreignOverwrite.backedUp ? "backed up before overwrite" : "overwritten (recent copy already in backup)"}`), "warning");
         }
@@ -1146,7 +1172,8 @@ export function createStore(config: StoreConfig) {
           //   以前本机封一次、推云时 doPush 又封一次（两次随机 salt / IV）→ 同一篇加密稿本机和云端是两份不同密文 →
           //   回执丢了之后重推（pushLocalBytes 推本机那份）撞 412、tryHeal 逐字节比不出 → 多弹一张面（安全模型 A3「库待修」）。
           //   现在本机 == 云端逐字节，自愈能认领。明文文件 sealed === plain，零变化；seal 对已是容器的输入原样透传。
-          const r = await pushMod.push(name, { encode: () => sealed, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress, loserBackup: tierOf(name) !== "auto-backup" });
+          //   2.3.2：gen = 这次保存的号——推完盘上已经是别的（后面又发出过保存）→ 不宣布一致，待传留着（I3-b）。
+          const r = await pushMod.push(name, { encode: () => sealed, gen: g, onConflict, surfaceCollision: mode !== "new", onProgress: opts?.onProgress, loserBackup: tierOf(name) !== "auto-backup" });
           // 只有拿到新 etag 的落地才算推上去了。deferred(落地未确认)/unresolved/cancelled 一律不算——
           //   把它们当成功正是 F0 红线要拦的那类「落地未确认当落地成功」。
           pushed = r.status === "pushed" || r.status === "healed" || r.status === "resolved";
@@ -1239,13 +1266,14 @@ export function createStore(config: StoreConfig) {
         //   唯一入口却没人比字节 → 云端 = 本机字节也弹「云端和本机各有一版新改动」（MoonSinger 工单 A2 的 e2e 抓到的假面）。
         //   拉不到 / 比不出 → tryHeal 返 false，照旧弹面；二等自动备份本来就 keepMine，比一次字节只省一次推。
         if (cloudState === "changed") {
-          const cur = await local.get(name);
+          // 2.3.2（R2）：比字节用的那份和它的号在同名串行段里一起取——拉网盘那一下不占着队（慢网时保存不被卡住），认领之前再对号。
+          const { cur, g: gCur } = await sub.serialize(name, async () => ({ cur: await local.get(name), g: ledger.disk(name) }));
           if (cur) {
             // 2.2.5：比字节那一趟拉云端也和「跳过到离线」赛跑（A19：每个等云端的时刻都有出口；open 路 2.2.2 早就这样）。
             //   probe 先到 = 人说「现在离线」→ 返 offline，不弹面（面是问「云端 vs 本机」，人刚说了不等云端）；下次再按照旧。
             const esc = ui.offlineEscape?.();
             try {
-              const healing = safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])));
+              const healing = safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])), { settled: () => ledger.settled(name, gCur) });
               const outcome = esc ? await Promise.race([healing.then((h) => ({ k: "heal" as const, h })), Promise.resolve(esc.probe).then(() => ({ k: "skip" as const }))]) : { k: "heal" as const, h: await healing };
               if (outcome.k === "skip") return { status: "offline" };
               if (outcome.h) { notifyFolderOf(name); return { status: "pushed" }; }
@@ -1267,11 +1295,10 @@ export function createStore(config: StoreConfig) {
           return r.status === "resolved" ? { status: "took-cloud", backupName: r.backupName } : { status: "unresolved", reason: r.reason };
         }
         // keepMine：at-rest 字节原样推（同 pushLocalBytes / dirty.pushAll），走 vetted push：If-Match 由谱系给、412 / 谱系断裂 → 库再弹面
-        const blob = await local.get(name);
-        if (!blob) return { status: "no-local" };
-        const atRest = await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
+        //   2.3.2（R2）：读盘挪进 encode = 在同名串行段里读，号 = doPush 开头读的盘上号（以前在队外先读、再进队推：中间落了一次保存，推的是旧的却宣布一致）。
+        if (!(await local.exists(name))) return { status: "no-local" };
         let r;
-        try { r = await pushMod.push(name, { encode: () => atRest, onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }
+        try { r = await pushMod.push(name, { encode: () => readAtRest(name), onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }
         catch (e) { ui.reportError(e); notifyFolderOf(name); return { status: "not-pushed", reason: "error" }; }
         notifyFolderOf(name);
         if (r.status === "resolved" && r.resolution === "takeCloud") return { status: "took-cloud", backupName: r.backupName };   // 推时撞上真分叉、人在第二张面选了云端
@@ -1293,7 +1320,7 @@ export function createStore(config: StoreConfig) {
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
           head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
           head.recordEdit(name);                   // 标未推 → 走首推路径（no-base，conflictBehavior:fail 撞名不覆盖）
-          const r = await pushLocalBytes(name);    // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）
+          const r = await sub.serialize(name, () => pushLocalBytes(name));   // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）；2.3.2（R2）：读盘 + 推在同名串行段里
           if (!head.isDirtyThisTab(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // per-tab episode：问「**我这次** push 落地没」；push 成功 = synced → 清 candidate + 重画
           return r;
         });

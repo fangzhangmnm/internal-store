@@ -77,7 +77,9 @@ import "./migration.test.mjs";
 import "./staging-split.test.mjs";   // 2026-10-21 2.2.0：staging 分库 + v001 迁移 + authority 默认 /consumers
 import "./store-narrow-waist.test.ts";
 import "./rename-event-hidden-signedin.test.mjs";   // 0.14.0：onRenamed / isOnline∧signedIn / hiddenName
+import "./disk-ledger.test.ts";   // 2026-11-10 2.3.2：盘上账本（F-238）
 import "./edit-race.test.ts";
+import "./declare-synced-guard.test.ts";   // 2026-11-10 2.3.2：每一处「宣布和网盘一致」都登记号从哪来（F-238）
 import "./identifiers.test.ts";   // 0.16.0：身份的语法（docKinds 表）
 import "./restore-naming.test.ts";   // 0.16.0：取回撞名两条腿走表；zip()/encrypt 守卫
 import "./lock.test.ts";   // 2.3.0：作品默认只读、手动解锁（lockByDefault，默认关）

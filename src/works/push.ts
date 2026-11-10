@@ -11,6 +11,7 @@ import type { CloudSync, UploadSessionPort } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
 import type { SafeResolve, ResolveChoice } from "./safe-resolve.ts";
+import type { DiskLedger } from "./disk-ledger.ts";
 
 type Busy = <T>(label: string, fn: () => Promise<T>) => Promise<T>;
 const passBusy: Busy = (_l, fn) => fn();
@@ -34,6 +35,8 @@ export interface PushCfg {
   seal: Pick<Seal, "sealForWrite" | "isContainer">;
   safeResolve: Pick<SafeResolve, "tryHeal" | "resolveConflict">;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
+  /** 2.3.2 盘上账本（F-238）：推成了 / 自愈 / 本地覆盖云端之后，宣布一致之前对号（settled）。不给 = 2.3.1 行为（只看保存计数；单元测试的替身场景）。 */
+  ledger?: Pick<DiskLedger, "disk" | "settled">;
   /** F-54：给这次推的字节一个「上传会话记忆面」（createStore 开了 uploads.resumable 才有）。不给 = 2.1.3 行为。 */
   sessionFor?: (name: string, bytes: Uint8Array) => Promise<UploadSessionPort | undefined>;
   editVersion: () => number;                  // 编辑游标（B2）；opts 可冻结覆盖
@@ -57,6 +60,9 @@ export interface PushCfg {
 
 export interface PushOpts {
   encode: () => BytesSource | Promise<BytesSource>;
+  /** 2.3.2：encode 交出来的这份字节是盘上的几号（save() 自己的号）。不给 = doPush 开头读 ledger.disk(name)——调用方必须站在同名串行段里、
+   *  encode 读的是盘上的字节（R2：pushLocalBytes / 「处理…」的本地覆盖云端 / 改名推新名都是）。 */
+  gen?: number;
   getEditVersion?: () => number;
   /** 真分叉时问人。2.2.1 起 ctx 可能带 cloudState（推之前刚问过云端时顺手给，省一趟 fetchMeta；没带 = 调用方自己去问）。 */
   onConflict?: (ctx: { name: string; cloudState?: "changed" | "absent" }) => ResolveChoice | Promise<ResolveChoice>;
@@ -82,13 +88,17 @@ export function createPush(cfg: PushCfg) {
   const { cloud, head, seal, safeResolve, serialize, editVersion, recaptureLineage = true,
     busy = passBusy, maxAttempts = pushRetryDefaults.maxAttempts, backoffMs = pushRetryDefaults.backoffMs, exponential = pushRetryDefaults.exponential, sleep = (ms) => new Promise<void>((r) => setTimeout(r, ms)) } = cfg;
 
-  async function doPush(name: string, { encode, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress, loserBackup }: PushOpts): Promise<PushResult> {
+  async function doPush(name: string, { encode, gen, getEditVersion = editVersion, onConflict, adopt, surfaceCollision = false, onProgress, loserBackup }: PushOpts): Promise<PushResult> {
     let ifMatch = head.ifMatchFor(name);                // 封装 bypass：dirty 缺 parent 且 base 已知 → throw BypassError
     const v0 = getEditVersion();
-    // 0.15.2：这个文件的保存计数。全局游标（getEditVersion）要宿主自己推进，拆库后没人推进过 → dirtyAfter 恒 false：
-    //   推送途中 save() 又落了新字节，推完却把 dirty 清掉。计数由 recordEdit 自己涨，不靠宿主。
+    // 「推完还算不算待传」。2.3.2（F-238）起看盘上账本：手里这份字节是几号（g）；推完时盘上还是 g、而且没有在路上的保存 = 推上去的就是盘上那份。
+    //   以前（0.15.2）看「这个文件被保存过几次」：那个数在保存**发出**时就加了——发出了还没落盘的那次保存，开头记的数已经含它、手里却是上一份字节，
+    //   推完数没变 → 宣布一致 → 随后它才落盘（本机比网盘新、待传却是 0）。没给账本（单元测试替身）= 照旧看保存计数。
+    //   全局游标（getEditVersion）是宿主自己推进的那一个，照旧算数。
+    const g = gen ?? cfg.ledger?.disk(name) ?? 0;
     const e0 = head.editCount?.(name) ?? 0;
-    const editedSince = (): boolean => getEditVersion() !== v0 || (head.editCount?.(name) ?? 0) !== e0;
+    const settled = (): boolean => (cfg.ledger ? cfg.ledger.settled(name, g) : (head.editCount?.(name) ?? 0) === e0);
+    const editedSince = (): boolean => getEditVersion() !== v0 || !settled();
     // encode 出明文 → seal 按 at-rest 态包壳（调用方对加密零感知）。只编码+包壳一次，重试复用（B5 逐字节比对要相等）。
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);
@@ -103,14 +113,15 @@ export function createPush(cfg: PushCfg) {
       else if (meta) staleKnown = true;                                                                           // 云端动过：真分叉
       // meta === null（云端没了）：照旧无 If-Match 推 = 建回去（ghost 的 save 语义不在本次改动范围）
     }
+    const unchanged = (): boolean => !editedSince();   // 2.3.2：交给自愈 / 本地覆盖云端，宣布一致之前再对一次号
     const onCloudConflict = async (): Promise<PushResult> => {
-      if (await safeResolve.tryHeal(name, bytes)) {   // lost-response 自愈
+      if (await safeResolve.tryHeal(name, bytes, { settled: unchanged })) {   // lost-response 自愈（盘上之后又换过 = 认领这一版当基准、仍待传）
         const dirtyAfter = editedSince();
-        if (dirtyAfter) head.recordEdit(name);        // 编辑发生在推期间 → 基于刚自愈的版本重标脏（B2）
+        if (dirtyAfter && !cfg.ledger) head.recordEdit(name);   // 没给账本（替身）= 2.3.1 的补救：基于刚自愈的版本重标脏（B2）
         return { status: "healed", dirtyAfter };
       }
       const choice = onConflict ? await onConflict({ name, cloudState: "changed" }) : "cancel";   // 真分叉 → 交 ui 选（默认 cancel=留 dirty）
-      return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
+      return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup, settled: unchanged });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
     };
     return busy("sync.pushing", async () => {
       if (staleKnown) return onCloudConflict();
@@ -140,7 +151,7 @@ export function createPush(cfg: PushCfg) {
           //   两条路都不盲目覆盖、都不丢字节；差别只是 ② 给了用户一条出路。
           if (surfaceCollision && (e as { name?: string })?.name === "CloudNameCollisionError") {
             const choice = onConflict ? await onConflict({ name }) : "cancel";
-            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
+            return await safeResolve.resolveConflict(name, choice, { bytes, adopt, inChain: true, loserBackup, settled: unchanged });   // 推送本身就站在同名串行链上（push / identity / 离线补推都是）
           }
           if (retriable(e) && attempt < maxAttempts) { lastErr = e; await sleep(exponential ? Math.min(backoffMs * 2 ** (attempt - 1), 15_000) : backoffMs * attempt); continue; }
           throw e;

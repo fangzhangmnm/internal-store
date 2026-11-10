@@ -9,6 +9,7 @@ import type { Bytes } from "../base/substrate.ts";
 import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import type { CloudSync, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
+import type { DiskLedger } from "./disk-ledger.ts";
 
 /** 冲突派发的选择串（keepMine / takeCloud / cancel）= **同步动词词汇表的全部**（2026-10-16 user「因为这个动词一开始就不合法，不在词汇表上」）。
  *  keepMine = 本地覆盖云端 · takeCloud = 云端覆盖本地 · cancel = 取消。app 的任何同步 UI 只许画这三个词，不许自造「传上去 / 推一把 / 重新上传 / 用这台的」；
@@ -24,7 +25,9 @@ import type { AdoptFn } from "../base/types.ts";
 export interface SafeResolveCfg {
   cloud: Pick<CloudSync, "pull" | "weakOverride">;
   local: Pick<LocalCache, "backup" | "save">;
-  head: Pick<LocalHead, "isDirtyAnywhere" | "markSynced" | "seenBase"> & Partial<Pick<LocalHead, "editCount">>;
+  head: Pick<LocalHead, "isDirtyAnywhere" | "markSynced" | "seenBase"> & Partial<Pick<LocalHead, "editCount" | "onPushed">>;
+  /** 2.3.2 盘上账本（F-238）：safePull 覆盖本地前后对号。不给 = 2.3.1 行为（只看保存计数）。 */
+  ledger?: Pick<DiskLedger, "disk" | "settled" | "wrote">;
   /** 同名串行链（substrate.serialize）。用户保存的本地写在这条链上；「核对 + 覆盖本地 + 提交谱系」也必须在这条链上，
    *  否则两次写谁后落盘说不准（0.15.2）。不给 = 不串行（单元测试的替身场景）。 */
   serialize?: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
@@ -45,9 +48,10 @@ export interface ResolveConflictResult { status: ResolveStatus; resolution?: str
 export interface SafeResolve {
   /** inChain：调用方已经站在这个名字的串行链上（推送撞冲突后的 resolveConflict）→ 临界段直接跑，不再排队（否则自己等自己）。 */
   safePull(name: string, opts?: { adopt?: AdoptFn; forceBackup?: boolean; inChain?: boolean }): Promise<SafePullResult>;
-  tryHeal(name: string, bytes: Bytes): Promise<boolean>;
-  weakOverride(name: string, bytes: Bytes): Promise<{ backedUp: string | null; deferred?: boolean }>;
-  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean }): Promise<ResolveConflictResult>;
+  /** opts.settled（2.3.2）：认领之前对号——为假（这份字节之后盘上又换过 / 有发出了还没落盘的保存）= 认领网盘那一版当基准，但仍算待传。 */
+  tryHeal(name: string, bytes: Bytes, opts?: { settled?: () => boolean }): Promise<boolean>;
+  weakOverride(name: string, bytes: Bytes, backup?: boolean, settled?: () => boolean): Promise<{ backedUp: string | null; deferred?: boolean }>;
+  resolveConflict(name: string, choice: ResolveChoice, ctx?: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean; settled?: () => boolean }): Promise<ResolveConflictResult>;
 }
 
 export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
@@ -59,7 +63,13 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
     onReplacing = () => {},
     looksEncrypted = () => Promise.resolve(false),
     serialize = (_n, fn) => fn(),
+    ledger,
   } = cfg;
+  /** 宣布一致：对得上号 → markSynced；对不上 → 把这一版记成基准（谱系接上），待传留着（2.3.2，F-238）。 */
+  const declare = (name: string, etag: string | null, settled?: () => boolean): void => {
+    if (settled && !settled() && head.onPushed) head.onPushed(name, etag, true);
+    else head.markSynced(name, etag);
+  };
   const editCount = (name: string): number => head.editCount?.(name) ?? 0;
 
   // 安全拉取覆盖：先 backup（dirty 才备；失败即 abort，绝不 pull/覆盖）→ 拉 → 校验 → 覆盖 → 采纳后置 etag → adopt。
@@ -83,6 +93,9 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
     onReplacing(true);
     try {
       const e0 = editCount(name);
+      // 2.3.2（F-238）：备份那一刻盘上是几号。之后盘上换过（发出了还没落盘的保存在这之后落了——它的字节不在刚才那份备份里）
+      //   = 按「途中保存过」处理。只看保存计数看不出来：那次保存是在 e0 之前**发出**的。
+      const d0 = ledger?.disk(name) ?? 0;
       let backupName: string | undefined;
       // clean 本地 = 可从云重取的已知版本，无未见内容可丢 → 跳 backup（ADR-0016，不 spam .backup）。
       //   ⚠ 该论据的前提是**谱系已知**（seenBase 非 null：本地 == 云端某已知版）。!base（从未 synced /
@@ -102,13 +115,14 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
       if (!ok) return { ok: false, reason: "invalid-cloud-bytes", backupName };
       const commit = async (): Promise<SafePullResult> => {
         const e1 = editCount(name);
-        if (e1 !== e0) {                                      // ① 途中保存过
+        if (e1 !== e0 || (ledger != null && ledger.disk(name) !== d0)) {   // ① 途中保存过（2.3.2：或者备份之后盘上换过）
           if (!forceBackup) return { ok: false, reason: "edited-during-pull", backupName };
           try { backupName = await local.backup(name); }
           catch (e) { reportStoreError(e, "warning"); return { ok: false, reason: "backup-failed", backupName, error: e }; }
         }
         await local.save(name, r.blob);                       // ② 覆盖本地（存 at-rest/sealed 字节；dirty 时原件已备份）
-        if (editCount(name) !== e1) return { ok: false, reason: "edited-during-pull", backupName };   // ③ 不提交谱系
+        const w = ledger?.wrote(name);                        // R3：库自己写了盘
+        if (editCount(name) !== e1 || (ledger != null && !ledger.settled(name, w!))) return { ok: false, reason: "edited-during-pull", backupName };   // ③ 不提交谱系（2.3.2：或者有发出了还没落盘的保存）
         head.markSynced(name, r.item?.eTag ?? null);          // 采纳后置（R1）：etag/dirty 只在 save 成功后推进
         return { ok: true, backupName };
       };
@@ -122,31 +136,31 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
   }
 
   // lost-response 自愈：412 可能是自己已落盘的写。拉云逐字节比对，相等即采纳（B5/W1）。
-  async function tryHeal(name: string, bytes: Bytes): Promise<boolean> {
+  async function tryHeal(name: string, bytes: Bytes, opts: { settled?: () => boolean } = {}): Promise<boolean> {
     let pulled;
     try { pulled = await cloud.pull(name); } catch (e) { reportStoreError(e, "log"); return false; }
     if (!pulled) return false;
     if (bytesEqual(await toU8(pulled.blob), bytes)) {
-      head.markSynced(name, pulled.item?.eTag ?? null);     // 自愈 → 这次推等价已在云端
+      declare(name, pulled.item?.eTag ?? null, opts.settled);   // 自愈 → 这次推等价已在云端；盘上之后又换过 = 基准接上、仍待传（2.3.2）
       return true;
     }
     return false;
   }
 
   // keepMine：云端→.backup，再 force-push 本地（never-lose 覆盖）。本地胜、loser 进 .backup → 落地为 synced。
-  async function weakOverride(name: string, bytes: Bytes, backup = true): Promise<{ backedUp: string | null; deferred?: boolean }> {
+  async function weakOverride(name: string, bytes: Bytes, backup = true, settled?: () => boolean): Promise<{ backedUp: string | null; deferred?: boolean }> {
     const r = await cloud.weakOverride(name, bytes, { encrypted: await looksEncrypted(bytes), backup });   // backup=false（2.1.0 二等自动备份）：输的那份不进 .backup
     // F0 红线同款 deferred guard（push.ts:73-77 的形状，2026-08-25 案卷 §4(b) 补）：provider 没回 item/eTag
     //   = 落地未确认（响应丢失/分块吞 body）。旧版无条件 markSynced(name, null)——dirty 清、etag 清、badge
     //   假 synced，且下次推 no-base fail 409。→ 不 markSynced（dirty/parent 原样保住），报 deferred；
     //   下次 push If-Match 旧 base → 若上传其实落了则 412 → tryHeal 逐字节比对自愈（组合闭环）。
     if (!(r.item && r.item.eTag)) return { backedUp: r.backedUp, deferred: true };
-    head.markSynced(name, r.item.eTag);
+    declare(name, r.item.eTag, settled);                   // 2.3.2：问人的那一下里又发出了保存 = 网盘是这一版、本机还有更新的 → 仍待传
     return { backedUp: r.backedUp, deferred: false };
   }
 
   // 3 选项派发（README.md §7）：takeCloud=safePull · keepMine=weakOverride · cancel=什么都不动（留 dirty）。
-  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean } = {}): Promise<ResolveConflictResult> {
+  async function resolveConflict(name: string, choice: ResolveChoice, ctx: { bytes?: Bytes | null; adopt?: AdoptFn; inChain?: boolean; loserBackup?: boolean; settled?: () => boolean } = {}): Promise<ResolveConflictResult> {
     if (choice === "takeCloud") {
       const r = await safePull(name, { adopt: ctx.adopt, forceBackup: true, inChain: ctx.inChain });   // 换世界线 → 当前世界线无条件进 .backup（user 2026-08-25 拍板）
       return r.ok
@@ -154,7 +168,7 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
         : { status: "unresolved", reason: r.reason, backupName: r.backupName };
     }
     if (choice === "keepMine" && ctx.bytes != null) {
-      const r = await weakOverride(name, ctx.bytes, ctx.loserBackup !== false);
+      const r = await weakOverride(name, ctx.bytes, ctx.loserBackup !== false, ctx.settled);
       if (r.deferred) return { status: "unresolved", reason: "deferred", backedUp: r.backedUp };   // 落地未确认 ≠ 已化解：dirty 保住，下次推自愈（tryHeal）
       return { status: "resolved", resolution: "keepMine", backedUp: r.backedUp };
     }

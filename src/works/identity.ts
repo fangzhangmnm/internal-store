@@ -14,12 +14,13 @@ import { CloudNameCollisionError } from "./cloud-sync.ts";
 import type { CloudSync, FetchMetaResult, LocalCache } from "../base/types.ts";
 import type { LocalHead } from "./local-head.ts";
 import type { Seal } from "./seal.ts";
+import type { DiskLedger } from "./disk-ledger.ts";
 
 import type { Busy } from "../base/types.ts";
 const passBusy: Busy = (_l, fn) => fn();
 type Bytes = Uint8Array;
 type AdoptFn = (plain: Blob, name: string) => unknown | Promise<unknown>;
-type PushFn = (name: string, opts: { encode: () => BytesSource | Promise<BytesSource>; getEditVersion?: () => number }) => Promise<{ status: string }>;
+type PushFn = (name: string, opts: { encode: () => BytesSource | Promise<BytesSource>; getEditVersion?: () => number; gen?: number }) => Promise<{ status: string }>;
 
 export interface IdentityCfg {
   cloud: Pick<CloudSync, "fetchMeta" | "rename" | "getETag" | "pull" | "trash">;
@@ -29,6 +30,8 @@ export interface IdentityCfg {
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   serialize2: <T>(a: string, b: string, fn: () => Promise<T>) => Promise<T>;
   seal?: Pick<Seal, "unsealForRead">;
+  /** 2.3.2 盘上账本（F-238）：改名把字节写到新名字、首次取回落本机都是库自己写盘（R3 wrote），宣布一致之前对号。不给 = 2.3.1 行为。 */
+  ledger?: Pick<DiskLedger, "wrote" | "settled">;
   busy?: Busy;
   // ── 离线 move = 删 old + 建 new（决策 1A/2，2026-07-12；在线走服务端原子 move，离线不可原子才降级）──
   isOnline?: () => boolean;
@@ -54,7 +57,7 @@ export interface IdResult {
 }
 
 export function createIdentity(cfg: IdentityCfg) {
-  const { cloud, local, head, doPush, serialize, serialize2, seal, busy: _busy = passBusy, isOnline, deleteOffline, queueUpload, nameOccupied, askKeepOld } = cfg;
+  const { cloud, local, head, doPush, serialize, serialize2, seal, busy: _busy = passBusy, isOnline, deleteOffline, queueUpload, nameOccupied, askKeepOld, ledger } = cfg;
   const unseal = (name: string, blob: Blob) => seal ? seal.unsealForRead(name, blob) : Promise.resolve(blob as Blob | null);
 
   // 目标名占用护栏（**碰撞检查内化**：caller 不必先 list 目标夹——app 原则上不知道别夹内容）。
@@ -95,6 +98,7 @@ export function createIdentity(cfg: IdentityCfg) {
       //   字节永不丢：new 本地 dirty 永不驱逐 + old 进 .trash（可恢复）。cloud-only(无本地字节)离线无法搬 → 落到下方现状分支。
       if (doCloud && isOnline && !isOnline() && deleteOffline && hasLocal) {
         await local!.save(newName, bytes!);         // 建 new（本地字节 = old 的 at-rest 字节；含未推编辑/加密原样搬）
+        ledger?.wrote(newName);                     // R3（2.3.2）：库自己写了新名字的盘
         head.recordEdit(newName);                   // new = never-synced float（_parent=null → 首推 conflictBehavior:fail，撞名 surface）
         queueUpload?.(newName);                     // 重连补推（ADR-0018）
         await deleteOffline(oldName);               // 删 old：本地 move-aside + 云删排队(base-etag 守卫) + head.forget
@@ -114,8 +118,10 @@ export function createIdentity(cfg: IdentityCfg) {
           }
         }
       }
+      let wroteNew: number | undefined;             // 2.3.2：新名字盘上那份的号（推新名时拿它对号；改名途中又往新名字发出的保存 = 推完仍待传）
       if (local && hasLocal) {
         await local.save(newName, bytes!);          // 先存新名（phantom-path：绝不先删）
+        wroteNew = ledger?.wrote(newName);          // R3
         await local.hardDelete(oldName);            // 成功后才删旧名
       }
       if (!doCloud) { head.forget(oldName); return { status: "renamed", where: "local", newName }; }
@@ -129,7 +135,7 @@ export function createIdentity(cfg: IdentityCfg) {
         }
         if (bytes == null) { head.forget(oldName); return { status: "renamed", where: "local", newName }; }
         const baseAtStart = head.seenBase(oldName);   // 「用户按下改名时，本机认为自己派生自哪一版」
-        await doPush(newName, { encode: () => bytes!, getEditVersion });   // dirty/无旧云文件 → 推当前字节（含 B5/retry/conflict）
+        await doPush(newName, { encode: () => bytes!, getEditVersion, gen: wroteNew });   // dirty/无旧云文件 → 推当前字节（含 B5/retry/conflict）；gen 没有 = 没写本机（纯云端字节）→ doPush 读盘上的号
         // ── 旧名怎么办：move（搬走）还是 save-as（留着）───────────────────────────────────────
         //   「推新名 + 旧名进 .trash」是 **move** 语义，它隐含一个前提：
         //        本地这份字节，是旧名云端那份的**后代**。
@@ -192,7 +198,9 @@ export function createIdentity(cfg: IdentityCfg) {
       const r = await cloud.pull(cloudName);
       if (!r) return { status: "absent" };
       if (local) await local.save(localName, r.blob);
-      head.markSynced(localName, r.item?.eTag ?? null);
+      const w = local ? ledger?.wrote(localName) : undefined;   // R3（2.3.2）
+      // 取回的那一下里有发出了还没落盘的保存（它马上要把盘上换掉）→ 不宣布一致：待传留着，之后推送撞名 / 冲突面问人（不静默盖网盘）
+      if (w == null || ledger!.settled(localName, w)) head.markSynced(localName, r.item?.eTag ?? null);
       if (adopt) { const plain = await unseal(localName, r.blob); if (plain) await adopt(plain, localName); }
       return { status: "acquired", localName, item: r.item };
     }));
