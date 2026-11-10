@@ -23,7 +23,7 @@ export type SafePullResult =
 import type { AdoptFn } from "../base/types.ts";
 
 export interface SafeResolveCfg {
-  cloud: Pick<CloudSync, "pull" | "weakOverride">;
+  cloud: Pick<CloudSync, "pull" | "weakOverride"> & Partial<Pick<CloudSync, "setETag">>;
   local: Pick<LocalCache, "backup" | "save">;
   head: Pick<LocalHead, "isDirtyAnywhere" | "markSynced" | "seenBase"> & Partial<Pick<LocalHead, "editCount" | "onPushed">>;
   /** 2.3.2 盘上账本（F-238）：safePull 覆盖本地前后对号。不给 = 2.3.1 行为（只看保存计数）。 */
@@ -65,9 +65,12 @@ export function createSafeResolve(cfg: SafeResolveCfg): SafeResolve {
     serialize = (_n, fn) => fn(),
     ledger,
   } = cfg;
-  /** 宣布一致：对得上号 → markSynced；对不上 → 把这一版记成基准（谱系接上），待传留着（2.3.2，F-238）。 */
+  /** 宣布一致：对得上号 → markSynced；对不上 → 把这一版记成基准（谱系接上），待传留着（2.3.2，F-238）。
+   *  对不上那一支也要把版本号写进持久的那条轨（审稿补，Fable 5.2）：markSynced 会写、onPushed 不写——自愈认领的那一版是「拉」来的，
+   *  cloud.pull 自己不写（R1）；不补这一句，刷新之后本机认的还是更早的版本号 → 谱系对不上 → 对着自己推上去的那一版弹冲突面
+   *  （2.3.1 是 markSynced + recordEdit，写了的）。「本地覆盖云端」那条路 cloud.weakOverride 自己已经写过，再写一次同值。 */
   const declare = (name: string, etag: string | null, settled?: () => boolean): void => {
-    if (settled && !settled() && head.onPushed) head.onPushed(name, etag, true);
+    if (settled && !settled() && head.onPushed) { head.onPushed(name, etag, true); cloud.setETag?.(name, etag); }
     else head.markSynced(name, etag);
   };
   const editCount = (name: string): number => head.editCount?.(name) ?? 0;

@@ -42,15 +42,15 @@ function scan(): Site[] {
 }
 // 文件 · 所在函数 · 调了哪个 · 归哪一类 / 号从哪来
 const TABLE: Array<Site & { why: string }> = [
-  { file: "works/push.ts", fn: "doPush", call: "onPushed", why: "推成了：号 = opts.gen（save 自己的号）或 doPush 开头读的 ledger.disk（调用方在同名串行段里读盘，R2）；dirtyAfter = 宿主游标变了 ∨ !settled" },
-  { file: "works/safe-resolve.ts", fn: "declare", call: "onPushed", why: "自愈 / 本地覆盖云端的宣布：调用方给的 settled() 为假 → 基准接上、仍待传" },
+  { file: "works/push.ts", fn: "doPush", call: "onPushed", why: "推成了：号 = opts.gen（save 自己的号）或 doPush 开头读的 ledger.disk（调用方在同名串行段里读盘，R2）；dirtyAfter = 宿主游标变了 ∨ pendingAfter（有保存在路上 / 盘上是别的一份；盘上没了不算）" },
+  { file: "works/safe-resolve.ts", fn: "declare", call: "onPushed", why: "自愈 / 本地覆盖云端的宣布：调用方给的 settled() 为假 → 基准接上（持久的版本号也写）、仍待传" },
   { file: "works/safe-resolve.ts", fn: "declare", call: "markSynced", why: "同上，settled() 为真（或没给 = 2.3.1 行为）" },
-  { file: "works/safe-resolve.ts", fn: "tryHeal", call: "declare", why: "推送撞 412 拉回来逐字节一样：settled = 这次推的号（push.ts unchanged）；「处理…」比字节：号 = 在队里和字节一起取的 ledger.disk" },
+  { file: "works/safe-resolve.ts", fn: "tryHeal", call: "declare", why: "推送撞 412 拉回来逐字节一样：settled = 这次推的号（push.ts unchanged）；open / 「处理…」比字节：readForHeal（先取号再读盘，不进队），严格 settled。每个调用方都必须给 settled——下面单独一条守卫" },
   { file: "works/safe-resolve.ts", fn: "weakOverride", call: "declare", why: "冲突面选了本地覆盖云端：settled = 这次推的号" },
   { file: "works/safe-resolve.ts", fn: "commit", call: "markSynced", why: "云端覆盖本地 / 干净快进：号 = 覆盖之后 ledger.wrote；备份之后盘上换过（d0）= 途中保存过；!settled = 不提交谱系（③）" },
   { file: "works/identity.ts", fn: "acquire", call: "markSynced", why: "首次取回落本机：号 = ledger.wrote；!settled = 不宣布" },
   { file: "create-store.ts", fn: "adoptLocal", call: "markSynced", why: "下载会话落地：号 = ledger.wrote；!settled = 不宣布" },
-  { file: "create-store.ts", fn: "encSwap", call: "onPushed", why: "加密转换：云没回版本号 / 推失败 = dirtyAfter 恒 true（不宣布）；推成了 = 号 ledger.wrote，dirtyAfter = !settled" },
+  { file: "create-store.ts", fn: "encSwap", call: "onPushed", why: "加密转换：云没回版本号 / 推失败 = dirtyAfter 恒 true（不宣布）；推成了 = 号 ledger.wrote，dirtyAfter = pendingAfter" },
   { file: "create-store.ts", fn: "encSwap", call: "onPushed", why: "（同上，三处）" },
   { file: "create-store.ts", fn: "encSwap", call: "onPushed", why: "（同上，三处）" },
 ];
@@ -90,4 +90,48 @@ test("[对号守卫] 读盘上的字节来推的，都在同名串行段里读�
   const iq = q.indexOf("pushLocal(name)");
   assert(iq > 0 && q.lastIndexOf("serialize(name, async", iq) > q.lastIndexOf("}));", iq), "离线补推在同名串行段里调它");
   assert(!/encode: \(\) => atRest/.test(s.slice(s.indexOf("async resolve(") >>> 0)), "「处理…」的本地覆盖云端不再在队外先读好字节");
+});
+
+// ── 审稿补的三条（Claude Fable 5.2 2026-11-10）：上面那张表只钉了「宣布」这一头，没钉「调用方有没有把号递过来」「写盘有没有记账」──
+const code = (rel: string) => readFileSync(join(SRC, rel), "utf8").split("\n").map((l) => l.replace(/\/\/.*$/, ""));
+
+test("[对号守卫] 每一个叫 tryHeal 的地方都递了 settled（漏递 = 那一处照旧不对号就认领；open 那条路第一稿就是这么漏的）", () => {
+  const bad: string[] = [];
+  for (const f of walk(SRC)) {
+    const rel = relative(SRC, f).replace(/\\/g, "/");
+    code(rel).forEach((l, i) => {
+      if (!/\.tryHeal!?\(/.test(l)) return;
+      if (!/settled\s*[:}]/.test(l) && !/\{\s*settled\b/.test(l)) bad.push(`${rel}:${i + 1}`);
+    });
+  }
+  eq(bad.join(" | "), "", "这些调用点没给 settled");
+  const n = [...walk(SRC)].reduce((a, f) => a + code(relative(SRC, f)).filter((l) => /\.tryHeal!?\(/.test(l)).length, 0);
+  eq(n, 3, "tryHeal 的三个调用方：推送撞 412（push.ts）/ open（freshness.ts）/「处理…」（create-store.ts）——多了一个就来这里想清它的号");
+});
+
+test("[对号守卫] 往本机盘上写应用文件的每一处，下一行就记账（用户保存 landed，库自己写 wrote）（R3）", () => {
+  const sites: string[] = [], bad: string[] = [];
+  for (const rel of ["create-store.ts", "works/safe-resolve.ts", "works/identity.ts", "works/push.ts", "works/freshness.ts", "works/offload.ts", "works/delete.ts", "works/reconcile.ts", "works/trash.ts", "works/upload-queue.ts"]) {
+    const lines = code(rel);
+    lines.forEach((l, i) => {
+      if (!/\blocal!?\.save\(/.test(l)) return;
+      sites.push(`${rel}:${i + 1}`);
+      if (!/ledger\??\.(wrote|landed)\(/.test(lines[i + 1] ?? "")) bad.push(`${rel}:${i + 1}`);
+    });
+  }
+  eq(bad.join(" | "), "", "这些写盘的下一行没有记账");
+  eq(sites.length, 7, `写盘点 7 处（save / 下载落地 / 加密转换 / 采纳网盘字节 / 改名 ×2 / 首次取回）；实得 ${sites.join(" ")}`);
+  const cs = readFileSync(join(SRC, "create-store.ts"), "utf8");
+  const ir = cs.indexOf("await trashMod.restore(...a)");
+  assert(ir > 0 && /ledger\.wrote\(r\.name\)/.test(cs.slice(ir, ir + 200)), "从回收站恢复（本机那条腿把字节放回这个名字）之后记 wrote");
+  eq([...walk(SRC)].filter((f) => !f.endsWith("works/trash.ts")).reduce((a, f) => a + code(relative(SRC, f)).filter((l) => /\blocal!?\.restore\(/.test(l)).length, 0), 0, "local.restore 只在 works/trash.ts 里叫（别处多一个就得自己记账）");
+});
+
+test("[对号守卫] 账本的「没了」只跟着 head.forget 走；只断谱系、字节还在盘上的两处不碰账本", () => {
+  const cs = code("create-store.ts").join("\n");
+  eq((cs.match(/ledger\.forget\(/g) ?? []).length, 1, "ledger.forget 只在包 head 的那一层里");
+  assert(/forget: \(n: string\) => \{ headRaw\.forget\(n\); ledger\.forget\(n\); \}/.test(cs), "head.forget = 清谱系 + 账本记「没了」");
+  eq((cs.match(/forgetLineage\(name\)/g) ?? []).length, 2, "只断谱系的两处：「处理…」云端没了选本地覆盖云端 / 重新上传");
+  for (const m of cs.matchAll(/forgetLineage\(name\)/g)) assert(/head\.recordEdit\(name\)/.test(cs.slice(m.index!, m.index! + 400)), "断谱系之后紧跟着标脏（字节还在、要重新首推）");
+  eq((cs.match(/\bhead\.forget\(/g) ?? []).length, 0, "create-store 里自己不直接叫 head.forget（要么是模块里的「没了」，要么是 forgetLineage）");
 });

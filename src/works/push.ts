@@ -36,7 +36,7 @@ export interface PushCfg {
   safeResolve: Pick<SafeResolve, "tryHeal" | "resolveConflict">;
   serialize: <T>(name: string, fn: () => Promise<T>) => Promise<T>;
   /** 2.3.2 盘上账本（F-238）：推成了 / 自愈 / 本地覆盖云端之后，宣布一致之前对号（settled）。不给 = 2.3.1 行为（只看保存计数；单元测试的替身场景）。 */
-  ledger?: Pick<DiskLedger, "disk" | "settled">;
+  ledger?: Pick<DiskLedger, "disk" | "pendingAfter">;
   /** F-54：给这次推的字节一个「上传会话记忆面」（createStore 开了 uploads.resumable 才有）。不给 = 2.1.3 行为。 */
   sessionFor?: (name: string, bytes: Uint8Array) => Promise<UploadSessionPort | undefined>;
   editVersion: () => number;                  // 编辑游标（B2）；opts 可冻结覆盖
@@ -97,8 +97,10 @@ export function createPush(cfg: PushCfg) {
     //   全局游标（getEditVersion）是宿主自己推进的那一个，照旧算数。
     const g = gen ?? cfg.ledger?.disk(name) ?? 0;
     const e0 = head.editCount?.(name) ?? 0;
-    const settled = (): boolean => (cfg.ledger ? cfg.ledger.settled(name, g) : (head.editCount?.(name) ?? 0) === e0);
-    const editedSince = (): boolean => getEditVersion() !== v0 || !settled();
+    //   审稿补（Fable 5.2）：问的是 pendingAfter 不是 !settled——上传途中这份被删进回收站 = 盘上没了、没有字节可传，不算待传
+    //   （算了就是一个本机没有字节、永远推不掉的假待传；2.3.1 这里是干净落地）。删的那一下还有保存在路上 → 仍算（它落盘后就是没传的字节）。
+    const pending = (): boolean => (cfg.ledger ? cfg.ledger.pendingAfter(name, g) : (head.editCount?.(name) ?? 0) !== e0);
+    const editedSince = (): boolean => getEditVersion() !== v0 || pending();
     // encode 出明文 → seal 按 at-rest 态包壳（调用方对加密零感知）。只编码+包壳一次，重试复用（B5 逐字节比对要相等）。
     const bytes = await seal.sealForWrite(name, await toU8(await encode()));
     const isEnc = await seal.isContainer(bytes);

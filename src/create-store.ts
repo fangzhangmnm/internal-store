@@ -534,9 +534,11 @@ export function createStore(config: StoreConfig) {
     keyPrefix: "files",
   });   // → `${ns}.files.dirty:`（文件 dirty 权威）
   // 2.3.2 盘上账本（F-238；works/disk-ledger.ts 头注释讲为什么）：「宣布和网盘一致」之前对号。纯内存、这一页一份。
-  //   head.forget（删除 / 腾空间 / 断谱系）同一步清掉盘上记录——包一层，十几个调用点不用各自记得。
+  //   head.forget（删进回收站 / 腾空间 / 改名搬走）= 盘上这一份没了，同一步记进账本——包一层，十几个调用点不用各自记得。
+  //   只断谱系、字节还在盘上的两处（「处理…」里云端没了选本地覆盖云端、重新上传）用 forgetLineage，不碰账本（审稿补，Fable 5.2：盘上没换就不许换号）。
   const ledger = createDiskLedger();
   const head: typeof headRaw = { ...headRaw, forget: (n: string) => { headRaw.forget(n); ledger.forget(n); } };
+  const forgetLineage = (n: string): void => headRaw.forget(n);
   // 数据迁移框架（ADR-0019）：**createStore 内部自跑、隐形**——app 看不见 migration。
   //   MIGRATIONS 现为空（无用户/无后向兼容，2026-07-13 清 tax）→ 编排跑空、无 op；框架留着待将来第一条真迁移。
   //   ops 首用前 await migrationReady（open/save/list）。测试/无 localStorage 环境跳过。
@@ -835,6 +837,15 @@ export function createStore(config: StoreConfig) {
     if (!blob) throw new Error(`local copy of "${name}" vanished before push`);
     return toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart]));
   }
+  /** 回执丢失自愈（open / 「处理…」）比字节用：盘上的字节，和「认领之前对号」的那个判据。审稿补（Fable 5.2）。
+   *  **不进同名串行段**：同名的上传卡在路上时，open / 「处理…」不该干等在队里（2.3.1 不等；每个等云端的时刻都要有出口）。
+   *  不进队也对得上，靠的是**先取号、再读盘**：读的那一下盘上换了 = 手里是旧号、新字节 → 之后 settled 为假；有保存在路上 → settled 为假。
+   *  两种都只会少认领一次（照旧弹面问人），不会错认领。反过来（先读盘再取号）才会错：读到旧字节、拿到新号。 */
+  async function readForHeal(name: string): Promise<{ bytes: Uint8Array | null; settled: () => boolean }> {
+    const g = ledger.disk(name);
+    const blob = await local.get(name);
+    return { bytes: blob ? await toU8(blob instanceof Blob ? blob : new Blob([blob as BlobPart])) : null, settled: () => ledger.settled(name, g) };
+  }
   const uploadReplay = createUploadReplay({
     kv, local, head, isOnline, serialize: sub.serialize, pushLocal: pushLocalBytes,
     policy: uploadReplayPolicy, confirm: ui.confirmReplay, onStatus: ui.onReplayStatus,
@@ -1011,7 +1022,7 @@ export function createStore(config: StoreConfig) {
         head.onPushed(name, prevEtag, true);
         return { status: "cloud-deferred" };
       }
-      head.onPushed(name, item.eTag, !ledger.settled(name, w));   // 落地：base←新 etag、清 dirty/parent；2.3.2：加密途中发出的保存还在路上 = 网盘是这一版、本机马上更新 → 仍待传（I6）
+      head.onPushed(name, item.eTag, ledger.pendingAfter(name, w));   // 落地：base←新 etag、清 dirty/parent；2.3.2：加密途中发出的保存还在路上 = 网盘是这一版、本机马上更新 → 仍待传（I6）
       return { status: "swapped" };
     } catch (e: unknown) {
       head.onPushed(name, prevEtag, true);                       // ② 本地已换、云没跟上 → base/parent←换前云版 + dirty，push 流接力（下次 If-Match 旧云版：没人动→换成功；动过→412 surface）
@@ -1107,7 +1118,7 @@ export function createStore(config: StoreConfig) {
       // 本地覆盖云端：和脏分支同一条 vetted push。先断旧谱系、标脏（= 首推，不带基准、撞名不覆盖）；撞上云端同名别的文件 → surfaceCollision → 库再弹「云端有新版本」的面，人再选。
       if (!(await local.exists(name))) return { status: "no-local" };
       pendingGone.clear(name);
-      head.forget(name);
+      forgetLineage(name);                                       // 只断谱系：字节还在盘上，账本不动
       head.recordEdit(name);
       let r;
       try { r = await pushMod.push(name, { encode: () => readAtRest(name), onConflict, surfaceCollision: true, loserBackup: tierOf(name) !== "auto-backup" }); }   // 2.3.2（R2）：在队里读盘
@@ -1195,6 +1206,7 @@ export function createStore(config: StoreConfig) {
           // offlineEscape：在线但 fetchMeta 挂死（iOS 老 token iframe）时，用户点「跳过到离线」→ probe 赢 race → 读本地。
           //   对齐前身引擎 cloud-freshness「跳过到离线」（无硬超时，用户即超时）。不立即返缓存=防云端变了再采纳的闪。
           const esc = isOnline() ? ui.offlineEscape?.() : undefined;
+          let healSettled: () => boolean = () => false;   // localBytes 读的那一份的对号判据（没读过 = 不许认领）
           try {
             // 冲突必 surface（ADR-0016 后半，20260820 事故修）：dirty ∧ cloudMoved → onNewer 走 push 412 同一张
             //   resolveConflict sheet（takeCloud=safePull 先备份再拉 / keepMine|cancel=留本地 dirty，之后 push 412 再 surface）。
@@ -1206,7 +1218,8 @@ export function createStore(config: StoreConfig) {
               isOnline, probe: esc?.probe,
               onNewer: onConflictFor("open"),
               localDirty: () => sub.edits.localDirty(),
-              localBytes: async () => { const b = await local.get(name); return b ? await toU8(b instanceof Blob ? b : new Blob([b as BlobPart])) : null; },   // 2.2.2：回执丢失自愈
+              localBytes: async () => { const h = await readForHeal(name); healSettled = h.settled; return h.bytes; },   // 2.2.2：回执丢失自愈
+              localSettled: () => healSettled(),   // 2.3.2 审稿补：认领之前对号（那份字节之后盘上换过 / 有保存在路上 → 不认领，照旧问人）
             }).catch((e) => ui.reportError(e));
           } finally { esc?.settle(); }
           return readLocal();
@@ -1266,14 +1279,14 @@ export function createStore(config: StoreConfig) {
         //   唯一入口却没人比字节 → 云端 = 本机字节也弹「云端和本机各有一版新改动」（MoonSinger 工单 A2 的 e2e 抓到的假面）。
         //   拉不到 / 比不出 → tryHeal 返 false，照旧弹面；二等自动备份本来就 keepMine，比一次字节只省一次推。
         if (cloudState === "changed") {
-          // 2.3.2（R2）：比字节用的那份和它的号在同名串行段里一起取——拉网盘那一下不占着队（慢网时保存不被卡住），认领之前再对号。
-          const { cur, g: gCur } = await sub.serialize(name, async () => ({ cur: await local.get(name), g: ledger.disk(name) }));
-          if (cur) {
+          // 2.3.2：比字节用的那份和它的号一起取（readForHeal：先取号再读盘，不进队也不等队），认领之前再对号。
+          const mine = await readForHeal(name);
+          if (mine.bytes) {
             // 2.2.5：比字节那一趟拉云端也和「跳过到离线」赛跑（A19：每个等云端的时刻都有出口；open 路 2.2.2 早就这样）。
             //   probe 先到 = 人说「现在离线」→ 返 offline，不弹面（面是问「云端 vs 本机」，人刚说了不等云端）；下次再按照旧。
             const esc = ui.offlineEscape?.();
             try {
-              const healing = safeResolve.tryHeal(name, await toU8(cur instanceof Blob ? cur : new Blob([cur as BlobPart])), { settled: () => ledger.settled(name, gCur) });
+              const healing = safeResolve.tryHeal(name, mine.bytes, { settled: mine.settled });
               const outcome = esc ? await Promise.race([healing.then((h) => ({ k: "heal" as const, h })), Promise.resolve(esc.probe).then(() => ({ k: "skip" as const }))]) : { k: "heal" as const, h: await healing };
               if (outcome.k === "skip") return { status: "offline" };
               if (outcome.h) { notifyFolderOf(name); return { status: "pushed" }; }
@@ -1318,7 +1331,7 @@ export function createStore(config: StoreConfig) {
         return busyK("file.reuploading", undefined, async () => {
           if (!(await local.exists(name))) return { status: "no-local" };
           pendingGone.clear(name);                 // 用户已对 candidate 动手 → 清标记（成功=synced；失败=转 dirty/conflict，都不再是 pendingGone）
-          head.forget(name);                       // 断旧云谱系（cloud 已 gone）→ no-base 首推
+          forgetLineage(name);                     // 断旧云谱系（cloud 已 gone）→ no-base 首推；字节还在盘上，账本不动
           head.recordEdit(name);                   // 标未推 → 走首推路径（no-base，conflictBehavior:fail 撞名不覆盖）
           const r = await sub.serialize(name, () => pushLocalBytes(name));   // 复用 vetted push（seal 正确 + N6 + 撞名抛 CloudNameCollisionError → app surface）；2.3.2（R2）：读盘 + 推在同名串行段里
           if (!head.isDirtyThisTab(name)) { pendingGone.clear(name); notifyFolderOf(name); }   // per-tab episode：问「**我这次** push 落地没」；push 成功 = synced → 清 candidate + 重画
@@ -1678,7 +1691,12 @@ export function createStore(config: StoreConfig) {
       /** 备份箱列表（同 listTrash 的两端聚合；备份箱是冲突 loser 留底，无 conflictLive 语义）。 */
       listBackup: () => aggregateBox("backup"),
       /** 从回收站/备份箱恢复一项。 */
-      restoreTrash: singleFlight("恢复", (...a: Parameters<typeof trashMod.restore>) => { roGuard("restoreTrash"); return trashMod.restore(...a); }),
+      restoreTrash: singleFlight("恢复", async (...a: Parameters<typeof trashMod.restore>) => {
+        roGuard("restoreTrash");
+        const r = await trashMod.restore(...a);
+        if (r.local && r.name) ledger.wrote(r.name);   // 2.3.2 审稿补（R3）：本机那条腿把字节放回了这个名字 = 库自己写盘，记一个新号
+        return r;
+      }),
       /** 彻底删除回收站/备份箱一项。 */
       purgeTrash: singleFlight("彻底删除", async (...a: Parameters<typeof trashMod.purge>) => { roGuard("purgeTrash"); await starGuardTrashItem(a[0] ?? {}); return trashMod.purge(...a); }),   // 2.3.1：加了星的那一份不许彻底删（StarredError）
       /** 清空回收站。 */

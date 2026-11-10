@@ -195,17 +195,20 @@ function rig2(o: { gateLocal?: boolean; gateEnc?: boolean; password?: () => stri
     resolveConflict: async ({ occasion }: { occasion: string }) => { conflicts.push(occasion); return await ctl.choice(occasion); },
     reportError: () => {},
   } as never;
-  const store = createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption, persistence: "none",
-    appId: "wp", provider, ui, validateAdopt: () => true, kv: kvRaw(), local,
+  const kv = kvRaw();
+  /** 同一份 kv / 本机盘 / 网盘上再开一个库 = 刷新页面（内存里的谱系和账本清空，持久的照旧）。 */
+  const reopen = () => createStore({ docKinds: TEST_KINDS, reconcilePolicy: "app-driven", encryption, persistence: "none",
+    appId: "wp", provider, ui, validateAdopt: () => true, kv, local,
     isOnline: () => true, signedIn: () => true, skipMigration: true,
     crypt: { getPassword: o.password ?? (() => null) },
     ...(o.maxAttempts ? { pushRetry: { maxAttempts: o.maxAttempts } } : {}),
   });
+  const store = reopen();
   const cloudText = async (name: string) => { const it = await provider.getItemByPath(name); return it ? asStr(await origDownload(it.ref)) : null; };
   const backups = async () => Promise.all(((local.listBackup ? await local.listBackup() : []) as Array<{ trashKey: string }>).map(async (b) => asStr(await (local as unknown as { get(k: string): Promise<Blob | null> }).get(b.trashKey))));
   const dirty = () => store.files.dirty.count();
   const here = async (name: string) => asStr(await local.get(name));
-  return { provider, local, store, encryption, conflicts, ctl, up, down, userWrite, sealGate, packGate, cloudText, backups, dirty, here };
+  return { provider, local, store, reopen, encryption, conflicts, ctl, up, down, userWrite, sealGate, packGate, cloudText, backups, dirty, here };
 }
 /** 本机比网盘新，却算都传完了 = 这一组测试要拦的那一个错。 */
 const notLying = (cloud: string | null, mine: string | null, dirty: number) => assert(!(cloud !== mine && dirty === 0), `本机比网盘新却算都传完了：网盘=${cloud} 本机=${mine} 待传=${dirty}`);
@@ -406,4 +409,94 @@ test("[edit-race] I9 保存没落成（写盘抛错 / 锁着封不上）→ 不�
   const r2 = await g.save(enc("L2"), { tryPush: true });
   eq(r2.pushed, true);
   eq(await dirty(), 0);
+});
+
+// ── 审稿时实测出来、补上的四处（Claude Fable 5.2 2026-11-10；审稿记录 = 家族根 ai-docs/20261110-review-store-232-disk-ledger.md）──
+//   I10 是同一类毛病里漏掉的一处（2.3.1 也红）；I11 / I12 / I13 是 2.3.2 第一稿新带进来的（2.3.1 绿、第一稿红）。
+
+test("[edit-race] I10 回执丢了（网盘 = 本机上一份）；一次保存发出了还没落盘时 open() → 认领网盘那一版当基准，但那次保存仍算待传", async () => {
+  const { store, provider, userWrite, cloudText, dirty, here, conflicts } = rig2({ gateLocal: true });
+  const f = store.file("稿.txt", { mode: "existing" });
+  await f.save(enc("V0"), { tryPush: true });
+  await f.save(enc("V1"), { tryPush: false });
+  provider._seed("稿.txt", "V1");                      // 上次推其实落了云、回执没回来
+  userWrite.hold();
+  const p2 = f.save(enc("V2"), { tryPush: false });     // 发出了，写盘被按住
+  while (!userWrite.waiting()) await tick(1);
+  await f.open();                                       // 打开时比字节：网盘 V1 == 盘上 V1 → 以前直接认领成已同步
+  userWrite.release(); await p2;
+  notLying(await cloudText("稿.txt"), await here("稿.txt"), await dirty());
+  eq(await dirty(), 1, "V2 没上云（修前 = 0）");
+  eq(conflicts.length, 0, "不弹面：网盘那一版就是自己推的");
+  const r = await f.save(enc("V2"), { tryPush: true });
+  eq(r.pushed, true, "谱系接上了：下一次推不撞面");
+  eq(await cloudText("稿.txt"), "V2"); eq(await dirty(), 0); eq(conflicts.length, 0);
+});
+
+test("[edit-race] I11-a 推送还在上传时把这份删进回收站 → 不留下一个本机没有字节的「待传」", async () => {
+  const { store, local, up, dirty } = rig2();
+  const f = store.file("稿.txt", { mode: "existing" });
+  await f.save(enc("V0"), { tryPush: true });
+  up.hold();
+  const p1 = f.save(enc("V1"), { tryPush: true });
+  while (!up.waiting()) await tick(1);
+  const d = await f.trash();
+  eq(d.status, "trashed");
+  up.release(); await p1;
+  eq(await local.exists("稿.txt"), false, "本机这份进了回收站");
+  eq(await dirty(), 0, "没有字节可传 → 不算待传（第一稿 = 1，永远推不掉）");
+});
+
+test("[edit-race] I11-b 同上，但删的那一下还有一次保存在路上 → 它落盘之后仍算待传（不许因为「删过」就当传完了）", async () => {
+  const { store, up, cloudText, dirty, here } = rig2();
+  const f = store.file("稿.txt", { mode: "existing" });
+  await f.save(enc("V0"), { tryPush: true });
+  up.hold();
+  const p1 = f.save(enc("V1"), { tryPush: true });
+  while (!up.waiting()) await tick(1);
+  const p2 = f.save(enc("V2"), { tryPush: false });     // 排在上传后面，还没落盘
+  await f.trash();
+  up.release(); await p1; await p2;
+  eq(await here("稿.txt"), "V2", "那次保存落了盘");
+  notLying(await cloudText("稿.txt"), await here("稿.txt"), await dirty());
+  eq(await dirty(), 1);
+});
+
+test("[edit-race] I12 同名的上传卡在路上时按「处理…」→ 不干等在队里（比字节那一读不进队）", async () => {
+  const { store, provider, up, dirty } = rig2();
+  const f = store.file("稿.txt", { mode: "existing" });
+  await f.save(enc("V0"), { tryPush: true });
+  await f.save(enc("V1"), { tryPush: false });
+  provider._seed("稿.txt", "V1");                      // 回执丢了：网盘其实已经是 V1
+  up.hold();
+  const pa = store.files.dirty.pushAll();               // 自动续推卡在上传里（占着同名的队）
+  while (!up.waiting()) await tick(1);
+  let done: { status: string } | null = null;
+  const pr = f.resolve().then((r) => { done = r; return r; });
+  await tick(60);
+  const back = done as { status: string } | null;
+  up.release(); await pa; await pr;
+  assert(back != null, "「处理…」在上传卡住期间就回来了（第一稿：一直等到上传放行）");
+  eq(back!.status, "pushed", "比出来一样 → 认领");
+  eq(await dirty(), 0);
+});
+
+test("[edit-race] I13 回执丢了、重推撞 412 自愈的那一下又发出一次保存；刷新之后再存并推 → 不弹面（认领的那一版写进了持久的谱系）", async () => {
+  const { store, reopen, provider, down, cloudText, dirty, here, conflicts } = rig2();
+  const f = store.file("稿.txt", { mode: "existing" });
+  await f.save(enc("V0"), { tryPush: true });
+  await f.save(enc("V1"), { tryPush: false });
+  provider._seed("稿.txt", "V1");
+  down.hold();
+  const pa = store.files.dirty.pushAll();               // 推 V1 → 412 → 拉回来比（拉被按住）
+  while (!down.waiting()) await tick(1);
+  const p2 = f.save(enc("V2"), { tryPush: false });     // 这一下发出的保存
+  await tick(5); down.release();
+  await pa; await p2;
+  eq(await here("稿.txt"), "V2"); eq(await cloudText("稿.txt"), "V1");
+  eq(await dirty(), 1, "V2 没上云");
+  const f2 = reopen().file("稿.txt", { mode: "existing" });   // 刷新页面
+  const r = await f2.save(enc("V2"), { tryPush: true });
+  eq(conflicts.length, 0, "不弹面（第一稿：对着自己推上去的 V1 弹「云端和本机各有一版」）");
+  eq(r.pushed, true); eq(await cloudText("稿.txt"), "V2");
 });

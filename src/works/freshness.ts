@@ -40,6 +40,9 @@ export interface OpenOpts {
    *  不一样才交 onNewer。和 push 路径的 tryHeal 是同一条规则（MoonSinger 2026-10-08「一直会遇到云端冲突的提示」= 这条路以前只在推时有，open 时没有，
    *  所以 MoonSinger 开歌前先批量推一遍借它自愈；user 2026-10-26「批，库出 2.2.2」）。拉的过程照样被 probe（「跳过到离线」）打断：慢网不许把人卡死。 */
   localBytes?: () => Promise<Uint8Array | null>;
+  /** 2.3.2（审稿补，Fable 5.2）：localBytes 交出来的那一份，到认领的那一刻还是不是盘上的那一份、有没有发出了还没落盘的保存。
+   *  为假 = 不认领成已同步（网盘那一版记成基准、待传留着）。不给 = 2.3.1 行为（单元测试的替身）。createStore 一定给。 */
+  localSettled?: () => boolean;
 }
 /** refresh（事件驱动的纯干净快进）的选项。 */
 export interface RefreshOpts {
@@ -103,7 +106,7 @@ export function createFreshness(cfg: FreshnessCfg) {
     : reason;
 
   async function open(name: string, opts: OpenOpts = {}): Promise<FreshResult> {
-    const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy, localBytes } = opts;
+    const { isOnline = () => true, probe, onNewer, adopt, localDirty, busy = passBusy, localBytes, localSettled } = opts;
     if (!isOnline()) { adoptDurableBase(name, localDirty); return { source: "local", reason: "offline" }; }
     if (hintedInSync(name)) { head.markSeen(name, head.seenBase(name)!); return { source: "local", reason: "in-sync" }; }   // 同下面 meta.etag===base 分支，只是证据来自刚列的帧
     return busy("cloud.checking", async () => {
@@ -145,7 +148,7 @@ export function createFreshness(cfg: FreshnessCfg) {
       if (localBytes && safeResolve.tryHeal) {
         const mine = await localBytes().catch((e) => { reportStoreError(e, "log"); return null; });
         if (mine && (meta.size == null || meta.size === mine.byteLength)) {
-          const healing = (async () => { try { return await safeResolve.tryHeal!(name, mine); } catch (e) { reportStoreError(e, "log"); return false; } })();
+          const healing = (async () => { try { return await safeResolve.tryHeal!(name, mine, { settled: localSettled }); } catch (e) { reportStoreError(e, "log"); return false; } })();
           const outcome = probe ? await Promise.race([healing.then((h) => ({ k: "heal" as const, h })), Promise.resolve(probe).then(() => ({ k: "skip" as const }))]) : { k: "heal" as const, h: await healing };
           if (outcome.k === "skip") return { source: "local", reason: "skipped" };
           if (outcome.h) return { source: "local", reason: "healed" };

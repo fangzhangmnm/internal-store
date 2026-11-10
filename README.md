@@ -9,7 +9,7 @@
 
 > 2.1.4：`createStore({ uploads: { resumable: true } })` = 上传会话落盘（> 4 MB 的分块上传刷新 / 被杀后接着传；默认关；详 `ai-docs/20261021-2.1.4-f19-heal-f54-resumable-upload.md`）。
 
-> 2.3.2：**宣布和网盘一致之前对号**（家族周账 F-238）。保存发出即占位（落盘顺序 = 发出顺序）+ 盘上账本：自动保存和自动续推撞在一起、回执丢了之后又改过这类叠法，不再「本机比网盘新、待传却是 0」。对外接口一个没变；没有叠着的保存时行为不变。详 `ai-docs/20261110-2.3.2-disk-ledger.md`。
+> 2.3.2：**宣布和网盘一致之前对号**（家族周账 F-238）。保存发出即占位（落盘顺序 = 发出顺序）+ 盘上账本：自动保存和自动续推撞在一起、回执丢了之后又改过这类叠法，不再「本机比网盘新、待传却是 0」。对外接口一个没变；没有叠着的保存时行为不变。详 `ai-docs/20261110-2.3.2-disk-ledger.md`（§8 = 审稿时补的四处）。
 > 2.3.0：**锁 / 星 / 收起**（家族「源文件原则上只读」，user 2026-11-08）。两个开关都默认关 = 2.2 行为：`createStore({ lockByDefault: true })` = 一等作品没解锁就 `save` 抛 `LockedError`（`files.unlock / lock / unlockOf / watchUnlocks`）；`createStore({ fileMarks: true })` = `files.star / unstar / fold / unfold` + `Item.starred / folded`，加了星的拒绝送进回收站（`StarredError`）。见下面 §2.2；详 `ai-docs/20261108-2.3.0-lock-star-fold.md`。
 
 > 2.2.0：流式暂存区住自己的库 `${appId}.${databaseId}.staging`（主库旧 `staging/` 键由 `MIGRATIONS` v001 整批删）；MSAL authority 默认 `/consumers`、别的值直接拒（家规 #7）。详 `ai-docs/20261021-2.2.0-staging-split-authority-consumers.md`。

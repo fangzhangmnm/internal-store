@@ -1,5 +1,5 @@
 // disk-ledger（2.3.2）单元测试：发出 / 落盘 / 失败 / 库自己写 / 清，各种先后。created 2026-11-10 by Claude Opus 5.5（家族周账 F-238）
-import { describe, it, eq } from "./runner.mjs";
+import { describe, it, eq, assert } from "./runner.mjs";
 import { createDiskLedger } from "../src/works/disk-ledger.ts";
 
 describe("disk-ledger", () => {
@@ -49,14 +49,42 @@ describe("disk-ledger", () => {
     eq(l.settled("a", a), true, "b 在路上不影响 a");
     eq(l.settled("b", 0), false);
   });
-  it("清掉：盘上回到 0；在路上的保存不丢账，落盘时照样记", () => {
+  it("盘上这一份没了：记成负的新号，不回到 0；在路上的保存不丢账，落盘时照样记", () => {
     const l = createDiskLedger();
     const g1 = l.issue("a"); l.landed("a", g1);
     const g2 = l.issue("a");
     l.forget("a");
-    eq(l.disk("a"), 0);
+    assert(l.disk("a") < 0, "没了 = 负号");
     eq(l.settled("a", 0), false, "还有一次在路上");
     l.landed("a", g2);
     eq(l.disk("a"), g2); eq(l.settled("a", g2), true);
+  });
+  it("没了之后不和「这一页还没写过」撞号：刷新后读过盘的人手里是 0，中间落过保存又被清掉 → 对不上（审稿补）", () => {
+    const l = createDiskLedger();
+    eq(l.settled("a", 0), true, "刚开页：0 对得上");
+    const g = l.issue("a"); l.landed("a", g);          // 手里拿着 0 的人还没回来，盘上已经换了
+    l.forget("a");
+    eq(l.settled("a", 0), false, "不许回到 0");
+    l.forget("a");
+    eq(l.settled("a", 0), false);
+  });
+  it("pendingAfter：有保存在路上 / 盘上换成别的一份 = 还算待传；盘上没了 = 不算（没有字节可传）（审稿补）", () => {
+    const l = createDiskLedger();
+    const g1 = l.issue("a"); l.landed("a", g1);
+    eq(l.pendingAfter("a", g1), false, "盘上就是推上去的那份");
+    const g2 = l.issue("a");
+    eq(l.pendingAfter("a", g1), true, "有保存在路上");
+    l.landed("a", g2);
+    eq(l.pendingAfter("a", g1), true, "盘上是后一份");
+    eq(l.pendingAfter("a", g2), false);
+    l.forget("a");
+    eq(l.pendingAfter("a", g2), false, "盘上没了：不算待传");
+    eq(l.settled("a", g2), false, "但也不许拿它认领成已同步");
+    const g3 = l.issue("a");
+    eq(l.pendingAfter("a", g2), true, "删的那一下还有保存在路上：算");
+    l.landed("a", g3);
+    eq(l.pendingAfter("a", g2), true, "它落盘之后盘上是别的一份：算");
+    const w = l.wrote("a");
+    eq(l.pendingAfter("a", w), false); eq(l.pendingAfter("b", 0), false, "没写过的名字");
   });
 });

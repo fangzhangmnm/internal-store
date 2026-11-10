@@ -8,7 +8,7 @@
 //   以前靠 local-head 的「这份文件被保存过几次」（editCount）近似——那个数在保存**发出**时就加一，字节却要过一会儿才落盘：
 //   这中间进来的推送拿着上一份字节、看见数没变，就宣布了一致（F-238 = F-188 的复现）。
 //
-// 号 = 这一页里全局递增的整数（跨名字不重复，从 1 起）；0 = 这一页还没写过这个名字。刷新之后全部从 0 开始：没人在路上、盘上 = 0，
+// 号 = 这一页里全局递增的整数（跨名字不重复，从 1 起）；0 = 这一页还没写过这个名字；负数 = 盘上这一份没了。刷新之后全部从 0 开始：没人在路上、盘上 = 0，
 //   读盘来推的拿到的也是 0，对得上。
 //
 // 三条用法规矩（R1–R3，设计稿 2.2）：
@@ -19,6 +19,13 @@
 //
 // 2.3.2 和设计稿接口的一处差别：没有 move(from, to)。改名把字节写到新名字那一下按 R3 调 wrote(新名)，旧名跟着 head.forget 一起 forget，
 //   两件就够了；move 没有调用者，不留。
+//
+// 审稿时补的两条（Claude Fable 5.2 2026-11-10，审稿记录 = 家族根 ai-docs/20261110-review-store-232-disk-ledger.md）：
+//   · forget = 「盘上这一份没了」（删进回收站 / 腾空间 / 改名搬走），记成一个**负的新号**，不回到 0。回到 0 会和「这一页还没写过」撞号：
+//     刷新后读过盘的人手里是 0，中间落过一次保存、又被清掉 → 又是 0 → 对得上 → 错认。只断谱系、字节还在盘上的（「处理…」里云端没了选本地覆盖云端、
+//     重新上传）不算「没了」，不调它。从回收站恢复 = 库自己写盘，调 wrote。
+//   · pendingAfter(name, g) = 推完 / 对完之后还算不算待传：有保存在路上，或者盘上换成了**别的一份**。盘上「没了」不算——没有字节可传，
+//     算了就是一个永远推不掉的假待传（推送还在上传时把这份删进回收站，实测出来的）。认领（回执丢失自愈）照旧用严格的 settled。
 export interface DiskLedger {
   /** 一次用户保存发出：在路上的 +1，回这次保存的号。必须和「进同名串行段」在同一个同步步骤里（发出即占位）。 */
   issue(name: string): number;
@@ -30,9 +37,11 @@ export interface DiskLedger {
   wrote(name: string): number;
   /** 盘上现在是几号（这一页没写过 = 0）。 */
   disk(name: string): number;
-  /** 唯一的判据：没有在路上的保存 ∧ 盘上就是 g。 */
+  /** 严格的判据：没有在路上的保存 ∧ 盘上就是 g。「认领成已同步」（采纳网盘字节、回执丢失自愈）用它。 */
   settled(name: string, g: number): boolean;
-  /** 这个名字的盘上记录清掉（删除 / 腾空间 / 断谱系，随 head.forget）。在路上的保存不动：它们落盘时照样记账。 */
+  /** 推完 / 换完之后还算不算待传：有保存在路上 ∨ 盘上是**别的一份**（不是 g，也不是「没了」）。盘上没了 = 没有字节可传，不算待传。 */
+  pendingAfter(name: string, g: number): boolean;
+  /** 盘上这一份没了（删进回收站 / 腾空间 / 改名搬走，随 head.forget）：记一个负的新号，之前读到的号（含 0）都对不上。在路上的保存不动：它们落盘时照样记账。 */
   forget(name: string): void;
 }
 
@@ -56,6 +65,7 @@ export function createDiskLedger(): DiskLedger {
     wrote(name) { const g = ++next; onDisk.set(name, g); return g; },
     disk(name) { return onDisk.get(name) ?? 0; },
     settled(name, g) { return !inFlight.has(name) && (onDisk.get(name) ?? 0) === g; },
-    forget(name) { onDisk.delete(name); },
+    pendingAfter(name, g) { const d = onDisk.get(name) ?? 0; return inFlight.has(name) || (d !== g && d >= 0); },
+    forget(name) { onDisk.set(name, -(++next)); },
   };
 }
