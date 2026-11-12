@@ -16,6 +16,39 @@
 //     没有 = 老的报错，或别的段（上传会话、复制监控）——宿主照旧走原来那句。
 //   - `host`：**只有主机名**。下载地址是带签名的临时地址，拿到就能下载——整条地址、路径、查询串一律不进报错
 //     （`test/graph-download-diagnostics.test.ts` 拿带假签名的地址去撞）。
+// ── 上游报错原文一个字都不进我们的报错（2.3.5，2026-11-12；统筹 Claude Fable 5.2 重审裁定一推翻 2.3.3 的「找地址再删」，代码 Claude Opus 5.5）──
+//   「在别人给的一段话里找地址再删」挡不住没见过的写法（统筹的攻击脚本 14 种里漏 9 种：括号 / 撇号 / 引号 / 尖括号 / 没协议头 / 换行 /
+//   错误里再套一层 / 错误对象上另挂地址字段 / 抛的不是 Error）。改成：网络报错的字只由三样拼成——我们自己的固定字样、where 那一串
+//   （主机名、文件名、用时）、下面这个固定词表里的类别。原错只用来**归类**（按 name + 几句已知的浏览器原话精确匹配），一个字都不抄；
+//   cause 不再挂原错对象，挂一个只带 name（也是固定词表）和类别的替身。
+/** 网络层失败的类别（固定词表；认不出 = "other"）。 */
+export type NetCategory = "failed-to-fetch" | "load-failed" | "network-error" | "fetch-failed" | "aborted" | "timed-out" | "other";
+const KNOWN_NAMES = new Set(["TypeError", "AbortError", "TimeoutError", "NetworkError", "DOMException", "Error"]);
+// 已知的浏览器 / 运行时原话（精确相等才算，不做包含匹配）：Chromium / WebKit / Firefox / Node undici。
+const KNOWN_PHRASES: Record<string, NetCategory> = {
+  "Failed to fetch": "failed-to-fetch",
+  "Load failed": "load-failed",
+  "NetworkError when attempting to fetch resource.": "network-error",
+  "fetch failed": "fetch-failed",
+};
+const ownString = (e: unknown, key: "name" | "message"): string => {
+  if (e == null || (typeof e !== "object" && typeof e !== "function")) return "";
+  try { const v = (e as Record<string, unknown>)[key]; return typeof v === "string" ? v : ""; } catch { return ""; }
+};
+/** 把原错归进固定词表（只读 name / message 做精确比较，不抄任何一段）。 */
+export function netCategory(e: unknown): NetCategory {
+  const name = ownString(e, "name");
+  if (name === "TimeoutError") return "timed-out";
+  if (name === "AbortError") return "aborted";
+  if (name === "TypeError") return KNOWN_PHRASES[ownString(e, "message")] ?? "other";
+  return "other";
+}
+/** cause 的替身：只带固定词表里的 name 和类别；冻结的普通对象（没有 message、没有 stack、没有别的字段）。 */
+export function netCause(e: unknown): { readonly name: string; readonly category: NetCategory } {
+  const name = ownString(e, "name");
+  return Object.freeze({ name: KNOWN_NAMES.has(name) ? name : "other", category: netCategory(e) });
+}
+
 export class CloudNetworkError extends Error {
   override readonly cause?: unknown;
   /** 2.3.3：断在哪一段。"graph" = Graph 接口；"content" = 下载文件内容。没有 = 老的报错 / 别的段（宿主照旧处理）。 */

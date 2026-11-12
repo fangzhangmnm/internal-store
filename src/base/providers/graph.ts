@@ -20,7 +20,7 @@
 //   旧形 = 模块级 configureGraphTokenSource 单例 + 模块级 approot/subfolder/downloadUrl 缓存——
 //   第二个 provider 会覆盖第一个的 token 源，且**跨账号缓存互相投毒**（A 账号的 approot id 配 B 账号
 //   token = 打错盘）。createGraph(tokenSource) 起，token 源与全部缓存 per-instance，双库双账号并联安全。
-import { CloudNetworkError } from "../errors.ts";
+import { CloudNetworkError, netCategory, netCause } from "../errors.ts";
 import { anySignal, readBody } from "./range-body.ts";
 
 // ---- 实际读到的 Graph JSON 形状（只声明本文件真正访问的字段，其余 Graph 字段忽略）。----
@@ -78,29 +78,24 @@ const timed = (kind: keyof GraphTimeouts): AbortSignal | undefined => {
   const ms = graphTimeouts[kind];
   return typeof AbortSignal !== "undefined" && typeof (AbortSignal as { timeout?: unknown }).timeout === "function" ? AbortSignal.timeout(ms) : undefined;
 };
-// ── 报错里只许主机名（2.3.3，2026-11-12 小黑屋维修线施工单第 1 条；规矩 = 统筹 Claude Fable 5.2，代码 = Claude Opus 5.5）──
+// ── 报错里只许主机名（2.3.3 起；2.3.5 收紧：上游报错原文一个字都不进来）──
 //   downloadUrl / uploadUrl / 复制监控地址都是带签名的临时地址，拿到就能用：整条地址、路径、查询串一律不进报错
-//   （报错会进宿主的黑匣子、横幅、控制台）。报错只带：阶段（CloudNetworkError.stage）、主机名、文件名（拿得到就带）、
-//   从发出到失败用了多少毫秒——分得清「网络拦了（通常几十毫秒）」和「那边没回音（通常十几秒）」。
-//   守卫：test/graph-download-diagnostics.test.ts（带假签名的地址去撞 + 本文件里 `String(e)` 必须过 scrubUrls、cause 必须过 safeCause）。
+//   （报错会进宿主的黑匣子、横幅、控制台）。网络报错的字只由三样拼成：我们自己的固定字样、where 那一串（主机名、文件名、
+//   从发出到失败用了多少毫秒）、errors.ts 的固定词表类别（netCategory）；cause = 只带 name 和类别的替身（netCause）。
+//   2.3.3 的「在原错的字里找地址再删」2.3.5 整个删掉了：统筹 Claude Fable 5.2 重审时 14 种写法漏 9 种。
+//   守卫：test/graph-download-diagnostics.test.ts（14 种写法 × 五条路，查 message / String / stack / 整条 cause 链 / JSON；
+//   结构守卫：本文件里构造网络报错的地方不许出现 String(e)、e.message、e.stack，cause 只许 netCause）。
 const clock = (): number => (typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now());
 const since = (t0: number): number => Math.max(0, Math.round(clock() - t0));
 /** 只取主机名；解析不了 → "unknown-host"（绝不退回整条地址）。 */
 function hostOf(url: string): string {
   try { return new URL(url).hostname || "unknown-host"; } catch { return "unknown-host"; }
 }
-/** 字里出现的任何「scheme://…」整段换成主机名（浏览器的 fetch 报错一般不带地址，但别的运行时 / 以后的浏览器可能带）。 */
-const scrubUrls = (text: string): string => text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>()]+/gi, (u) => hostOf(u));
-/** cause 也会被宿主打进控制台：原错的字里带地址 → 换成同名、字被洗过的一份；不带 → 原样保留（类型、栈都在）。 */
-function safeCause(e: unknown): unknown {
-  if (typeof e === "string") return scrubUrls(e);
-  if (!(e instanceof Error) || !e.message.includes("://")) return e;
-  const msg = scrubUrls(e.message);
-  let c: Error;
-  try { c = new (e.constructor as new (m: string) => Error)(msg); } catch { c = new Error(msg); }
-  if (c.message !== msg) c = new Error(msg);   // 构造器不按 (message) 收（如 DOMException 以外的怪类）→ 退回普通 Error
-  if (c.name !== e.name) { try { Object.defineProperty(c, "name", { value: e.name, configurable: true }); } catch { /* 名字带不过去就算了 */ } }
-  return c;
+/** graphFetch 的路径进报错：我们自己拼的相对路径原样；整条绝对地址（分页的 nextLink 等）只留主机名。按「能不能单独解析成地址」判，不用正则去找。 */
+function pathForMsg(pathOrUrl: string): string {
+  let absolute = false;
+  try { new URL(pathOrUrl); absolute = true; } catch { absolute = false; }
+  return absolute ? hostOf(pathOrUrl) : pathOrUrl;
 }
 /** 下载报错的定位串：host=… [file="…"] after=…ms。 */
 const where = (host: string, name: string | null | undefined, t0: number): string =>
@@ -157,7 +152,7 @@ async function rangeFromUrl(downloadUrl: string, offset: number | null, length: 
   const t0 = clock();
   let r: Response;
   try { r = await fetch(downloadUrl, { headers: { Range: _rangeHeader(offset, length) }, signal: anySignal([timed("range"), opts.signal]) }); }
-  catch (e) { throw new CloudNetworkError(`range download: network fetch failed ${where(host, fileName, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
+  catch (e) { throw new CloudNetworkError(`range download: network fetch failed ${where(host, fileName, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host }); }
   if (!r.ok && r.status !== 206) {
     const err: GraphError = new Error(`range download failed ${r.status} ${where(host, fileName, t0)}`);
     err.status = r.status;
@@ -165,7 +160,7 @@ async function rangeFromUrl(downloadUrl: string, offset: number | null, length: 
   }
   // 按流读 + 报进度（只在 caller 要进度时；否则一口 arrayBuffer，= 0.18）。读体中途断 / 被中止 → 网络错（和 fetch 自身 throw 同一类）。
   try { return await readBody(r, opts.onProgress); }
-  catch (e) { throw new CloudNetworkError(`range download: body failed ${where(host, fileName, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
+  catch (e) { throw new CloudNetworkError(`range download: body failed ${where(host, fileName, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host }); }
 }
 
 //   "replace" 默认覆盖；"fail" 同名拒收（用于 sibling-copy）。
@@ -226,11 +221,11 @@ async function graphFetch(method: string, pathOrUrl: string, { headers = {}, bod
   const host = hostOf(url);
   const t0 = clock();
   try { response = await fetch(url, init); }
-  catch (e) { throw new CloudNetworkError(`Graph ${method} ${scrubUrls(pathOrUrl)}: network fetch failed host=${host} after=${since(t0)}ms (${scrubUrls(String(e))})`, safeCause(e), { stage: "graph", host }); }
+  catch (e) { throw new CloudNetworkError(`Graph ${method} ${pathForMsg(pathOrUrl)}: network fetch failed host=${host} after=${since(t0)}ms (${netCategory(e)})`, netCause(e), { stage: "graph", host }); }
   if (!response.ok) {
     let detail = "";
     try { detail = await response.text(); } catch (_) {}
-    const err: GraphError = new Error(`Graph ${method} ${pathOrUrl} → ${response.status}: ${detail}`);
+    const err: GraphError = new Error(`Graph ${method} ${pathForMsg(pathOrUrl)} → ${response.status}: ${detail}`);
     err.status = response.status;
     err.body = detail;
     throw err;
@@ -282,15 +277,15 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
     const t0 = clock();
     let r: Response;
     try { r = await fetch(dl, { signal: timed("blob") }); }
-    catch (e) { throw new CloudNetworkError(`downloadUrl: network fetch failed ${where(host, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
+    catch (e) { throw new CloudNetworkError(`downloadUrl: network fetch failed ${where(host, name, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host }); }
     if (!r.ok) throw new Error(`downloadUrl failed ${r.status} ${where(host, name, t0)}`);
     try { return await r.blob(); }
-    catch (e) { throw new CloudNetworkError(`downloadUrl: body failed ${where(host, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
+    catch (e) { throw new CloudNetworkError(`downloadUrl: body failed ${where(host, name, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host }); }
   }
   const t0 = clock();
   const r = await contentViaGraph(itemId, name, t0, "blob");
   try { return await r.blob(); }
-  catch (e) { throw new CloudNetworkError(`content via Graph: body failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
+  catch (e) { throw new CloudNetworkError(`content via Graph: body failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
 }
 
 // 2.3.3（统筹 Claude Fable 5.2 审稿时补）：拿不到下载地址时退到 Graph 的 /content——微软把它重定向到发文件的服务器，
@@ -301,7 +296,8 @@ async function contentViaGraph(itemId: string, name: string | null, t0: number, 
   try { return await graphFetch("GET", `/me/drive/items/${itemId}/content`, headers ? { headers, timeout } : { timeout }); }   // 2.3.4：整份 = blob 档、按范围 = range 档（以前落在 meta 30 s）
   catch (e) {
     if (!(e instanceof CloudNetworkError)) throw e;
-    throw new CloudNetworkError(`content via Graph: network fetch failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e.cause ?? ""))})`, e.cause, { stage: "content", host: VIA_GRAPH_REDIRECT });   // e.cause 在 graphFetch 里已过 safeCause
+    const c = (e.cause ?? netCause(null)) as ReturnType<typeof netCause>;   // graphFetch 已经挂好了替身（固定词表）
+    throw new CloudNetworkError(`content via Graph: network fetch failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${c.category})`, c, { stage: "content", host: VIA_GRAPH_REDIRECT });
   }
 }
 
@@ -328,7 +324,7 @@ async function downloadItemRange(itemId: string, offset: number | null, length: 
   const t0 = clock();
   const r = await contentViaGraph(itemId, info.name, t0, "range", { Range: _rangeHeader(offset, length) });
   try { return await r.arrayBuffer(); }
-  catch (e) { throw new CloudNetworkError(`content via Graph (range): body failed ${where(VIA_GRAPH_REDIRECT, info.name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
+  catch (e) { throw new CloudNetworkError(`content via Graph (range): body failed ${where(VIA_GRAPH_REDIRECT, info.name, t0)} (${netCategory(e)})`, netCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
 }
 
 // 拿一个新的 1h 短效 downloadUrl（过期重申请用）
@@ -438,7 +434,7 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
     await graphSleep(chunkBackoffMs(failures));
     let st: Response;
     try { st = await fetch(sessionUrl, { signal: timed("meta") }); }
-    catch (e) { throw new CloudNetworkError(`Graph upload session status: network fetch failed host=${hostOf(sessionUrl)} (${scrubUrls(String(e))})`, safeCause(e), { host: hostOf(sessionUrl) }); }
+    catch (e) { throw new CloudNetworkError(`Graph upload session status: network fetch failed host=${hostOf(sessionUrl)} (${netCategory(e)})`, netCause(e), { host: hostOf(sessionUrl) }); }
     if (!st.ok) throw new CloudNetworkError(`Graph upload session ${path}: gone (${st.status}) after ${why}`);
     const j = await st.json().catch(() => null) as GraphUploadSession | null;
     const next = j?.nextExpectedRanges?.[0]?.split("-")[0];
@@ -474,8 +470,8 @@ async function uploadChunked(path: string, source: ChunkSource, conflictBehavior
         signal: timed("chunk"),
       });
     } catch (e) {   // 分块 PUT 打的是 uploadUrl（不走 graphFetch）→ 网络层：开了 chunkResume 就问会话接着传，否则同 0.17.0 整份失败
-      if (!graphChunkResume) throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${total}): network fetch failed host=${hostOf(sessionUrl)} (${scrubUrls(String(e))})`, safeCause(e), { host: hostOf(sessionUrl) });
-      offset = await resumeFrom(`network: ${scrubUrls(String(e))}`);
+      if (!graphChunkResume) throw new CloudNetworkError(`Graph chunked upload PUT (${offset}-${end}/${total}): network fetch failed host=${hostOf(sessionUrl)} (${netCategory(e)})`, netCause(e), { host: hostOf(sessionUrl) });
+      offset = await resumeFrom(`network: ${netCategory(e)}`);
       continue;
     }
     if (!r.ok && r.status !== 202) {
@@ -606,7 +602,7 @@ async function copyItemToFolder(itemId: string, targetFolderId: string, newName:
   for (let attempt = 1; attempt <= 170; attempt++) {
     let mr: Response;
     try { mr = await fetch(monitor, { signal: timed("meta") }); }
-    catch (e) { throw new CloudNetworkError(`Graph copy monitor: network fetch failed host=${hostOf(monitor)} (${scrubUrls(String(e))})`, safeCause(e), { host: hostOf(monitor) }); }
+    catch (e) { throw new CloudNetworkError(`Graph copy monitor: network fetch failed host=${hostOf(monitor)} (${netCategory(e)})`, netCause(e), { host: hostOf(monitor) }); }
     const j = await mr.json().catch(() => null) as { status?: string; resourceId?: string; id?: string } | null;
     if (j?.status === "failed") throw new Error(`Graph copy ${itemId}: server reported failed`);
     const rid = j?.resourceId ?? (j?.status === "completed" ? j?.id : null);

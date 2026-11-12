@@ -16,7 +16,8 @@ test("graph fetch 网络层 throw → CloudNetworkError（name 可辨认 / statu
     assert(err instanceof CloudNetworkError, "网络层 throw 被翻成 CloudNetworkError");
     eq((err as Error).name, "CloudNetworkError", "name 可辨认（app 侧按 name 换文案）");
     assert((err as { status?: number }).status === undefined, "status undefined → retriable 仍视为可重试");
-    assert((err as { cause?: unknown }).cause instanceof TypeError, "原始 TypeError 保留在 cause（诊断可追）");
+    // 2.3.5（统筹重审裁定一）：cause 不再挂原错对象（它的字可能带签名地址），换成只带 name 和类别的替身；Safari 的「Load failed」归 load-failed。
+    eq(JSON.stringify((err as { cause?: unknown }).cause), JSON.stringify({ name: "TypeError", category: "load-failed" }), "cause = 替身（name + 类别）");
   } finally {
     (globalThis as { fetch: unknown }).fetch = orig;
   }
