@@ -37,6 +37,7 @@ import "./safe-resolve.test.ts";
 import "./graph-network-error.test.ts";   // 2026-08-25 网络层翻译（CloudNetworkError）
 import "./graph-download-diagnostics.test.ts";   // 2026-11-12 2.3.3：下载报错带阶段 / 主机名 / 文件名 / 用时，签名地址绝不出（小黑屋维修线施工单第 1 条）
 import "./content-failing.test.ts";   // 2026-11-12 2.3.3：冲突面的 contentFailing（小黑屋维修线施工单第 3 条）
+import "./graph-timeout-tiers.test.ts";   // 2026-11-12 2.3.4：按请求种类分超时档（一次性上传 = chunk、/content 兜底 = blob / range）+ 超时掐断已落盘的上传走自愈
 import "./graph-upload-resilience.test.ts";   // 2026-10-15 0.17.1：分块上传接着传 / 提交前核 eTag / 请求超时（KudsRocket iOS 锁屏挂死）
 import "./ifmatch-guard.test.ts";   // 2026-08-25 全库 If-Match 语法护栏
 import "./idb-tx-guard.test.ts";   // 2026-08-26 IDB 事务形状语法护栏（0.3.6 收敛；行为面=tools/idb-tx-commit-check.mjs）

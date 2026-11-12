@@ -120,6 +120,9 @@ type GraphBody = string | ArrayBuffer | ArrayBufferView | Blob | Record<string, 
 interface GraphFetchOpts {
   headers?: Record<string, string>;
   body?: GraphBody;
+  /** 2.3.4：这个请求用哪一档超时（只在宿主开了 transport.timeouts 时生效）。不给 = meta（列举 / 元数据 / 会话创建；现有调用全部不变）。
+   *  按请求种类分档：一次性上传的 PUT = chunk（4 MB 以内，和分块上传每块同一个量级的最低速度）；/content 兜底下载 = blob（整份）/ range（按范围）。 */
+  timeout?: keyof GraphTimeouts;
 }
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
@@ -198,10 +201,10 @@ export function createGraph(tokenSource: () => Promise<string>, opts: GraphTrans
     return tokenSource();
   };
 
-async function graphFetch(method: string, pathOrUrl: string, { headers = {}, body = null }: GraphFetchOpts = {}): Promise<Response> {
+async function graphFetch(method: string, pathOrUrl: string, { headers = {}, body = null, timeout = "meta" }: GraphFetchOpts = {}): Promise<Response> {
   const token = await getToken();
   const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${GRAPH_BASE}${pathOrUrl}`;
-  const init: RequestInit & { headers: Record<string, string> } = { method, headers: { Authorization: `Bearer ${token}`, ...headers }, signal: timed("meta") };
+  const init: RequestInit & { headers: Record<string, string> } = { method, headers: { Authorization: `Bearer ${token}`, ...headers }, signal: timed(timeout) };
   if (body != null) {
     if (
       typeof body === "string" ||
@@ -285,7 +288,7 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
     catch (e) { throw new CloudNetworkError(`downloadUrl: body failed ${where(host, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
   }
   const t0 = clock();
-  const r = await contentViaGraph(itemId, name, t0);
+  const r = await contentViaGraph(itemId, name, t0, "blob");
   try { return await r.blob(); }
   catch (e) { throw new CloudNetworkError(`content via Graph: body failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
 }
@@ -294,8 +297,8 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
 //   失败时分不清断在哪一跳。它是在**下载文件内容**，归 stage "content"；真正的主机名拿不到，写固定字样 VIA_GRAPH_REDIRECT，
 //   **不写 graph.microsoft.com**（那会把锅归给接口，正是这一版要分清的事）。非 2xx（带 status 的 GraphError）照旧原样上抛：调用方按 status 判。
 const VIA_GRAPH_REDIRECT = "via-graph-redirect";
-async function contentViaGraph(itemId: string, name: string | null, t0: number, headers?: Record<string, string>): Promise<Response> {
-  try { return await graphFetch("GET", `/me/drive/items/${itemId}/content`, headers ? { headers } : {}); }
+async function contentViaGraph(itemId: string, name: string | null, t0: number, timeout: "blob" | "range", headers?: Record<string, string>): Promise<Response> {
+  try { return await graphFetch("GET", `/me/drive/items/${itemId}/content`, headers ? { headers, timeout } : { timeout }); }   // 2.3.4：整份 = blob 档、按范围 = range 档（以前落在 meta 30 s）
   catch (e) {
     if (!(e instanceof CloudNetworkError)) throw e;
     throw new CloudNetworkError(`content via Graph: network fetch failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e.cause ?? ""))})`, e.cause, { stage: "content", host: VIA_GRAPH_REDIRECT });   // e.cause 在 graphFetch 里已过 safeCause
@@ -323,7 +326,7 @@ async function downloadItemRange(itemId: string, offset: number | null, length: 
     }
   }
   const t0 = clock();
-  const r = await contentViaGraph(itemId, info.name, t0, { Range: _rangeHeader(offset, length) });
+  const r = await contentViaGraph(itemId, info.name, t0, "range", { Range: _rangeHeader(offset, length) });
   try { return await r.arrayBuffer(); }
   catch (e) { throw new CloudNetworkError(`content via Graph (range): body failed ${where(VIA_GRAPH_REDIRECT, info.name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
 }
@@ -353,10 +356,13 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
   if (eTag) headers["If-Match"] = eTag;
   if (blob.size <= SIMPLE_UPLOAD_LIMIT) {
     onProgress?.(0, blob.size);
+    // 2.3.4（统筹 Claude Fable 5.2 定，代码 Claude Opus 5.5）：一次性上传带着整份字节（最多 4 MB），以前和列举共用 meta 那档 30 s——
+    //   慢网上一本 3–4 MB 带图的书每次都超时、永远传不上去（按请求种类分档分漏了）。改用 chunk 那档（120 s，和分块上传每块同一个量级）。
+    //   超时掐断时那一次可能已经落盘：抛的是没有 status 的网络错 → 推送层重试撞 412 / 409 → 逐字节比对自愈（回执丢失那条路），不会记成传完。
     const r = await graphFetch(
       "PUT",
       `/me/drive/special/approot:/${encodeApprootPath(path)}:/content?@microsoft.graph.conflictBehavior=${conflictBehavior}`,
-      { headers, body: blob },
+      { headers, body: blob, timeout: "chunk" },
     );
     onProgress?.(blob.size, blob.size);
     return r.json() as Promise<GraphDriveItem>;
