@@ -245,6 +245,19 @@ test("[签名地址 · 2.3.5] graphFetch 拿到整条绝对地址（分页 nextL
   } finally { r2(); }
 });
 
+test("[下载报错 · 2.3.5] Graph 回非 2xx 的错误正文留着（诊断要用）但截到 300 个字符：报错的字和 err.body 都是", async () => {
+  const long = JSON.stringify({ error: { code: "itemNotFound", message: "x".repeat(2000) } });
+  const r = withFetch(async () => new Response(long, { status: 403 }));
+  try {
+    const e = await caught(createGraph(() => Promise.resolve("T")).listChildren("")) as Error & { status?: number; body?: string };
+    eq(e.status, 403, "status 照旧");
+    assert(e.message.includes('"code":"itemNotFound"'), "开头的错误码还在（诊断要用）");
+    const tail = e.message.slice(e.message.indexOf(": ") + 2);
+    assert(tail.length <= 301, `报错里的正文 ≤ 300 字符 + 省略号：实得 ${tail.length}`);
+    assert((e.body ?? "").length <= 301, `err.body 也截了：实得 ${(e.body ?? "").length}`);
+  } finally { r(); }
+});
+
 // 结构守卫（2.3.5）：以后在 graph.ts 里加新的网络报错，原错的字也进不来。
 test("[下载报错·守卫] graph.ts 构造网络报错的地方没有 String(e) / e.message / e.stack，cause 只许是替身；模板里不插地址变量", () => {
   const src = readFileSync(new URL("../src/base/providers/graph.ts", import.meta.url), "utf8");

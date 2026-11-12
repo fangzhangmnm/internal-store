@@ -121,6 +121,7 @@ interface GraphFetchOpts {
 }
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const GRAPH_DETAIL_MAX = 300;   // 2.3.5：非 2xx 时 Graph 错误正文进报错的上限（字符）
 const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024;
 
 function encodeSeg(name: string): string {
@@ -225,6 +226,8 @@ async function graphFetch(method: string, pathOrUrl: string, { headers = {}, bod
   if (!response.ok) {
     let detail = "";
     try { detail = await response.text(); } catch (_) {}
+    // 2.3.5（统筹 Claude Fable 5.2 审稿）：Graph 的错误正文留着（诊断要用：code / message / request-id），但截到 300 个字符——它是上游原文，不让它无限长地进报错。
+    if (detail.length > GRAPH_DETAIL_MAX) detail = detail.slice(0, GRAPH_DETAIL_MAX) + "…";
     const err: GraphError = new Error(`Graph ${method} ${pathForMsg(pathOrUrl)} → ${response.status}: ${detail}`);
     err.status = response.status;
     err.body = detail;
