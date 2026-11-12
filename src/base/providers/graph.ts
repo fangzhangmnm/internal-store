@@ -53,9 +53,17 @@ interface GraphUploadSession {
 // ── 请求超时（0.17.1，2026-10-15 Claude Fable 5.1）──
 //   iOS 锁屏 / 切后台后在途的 fetch 常常既不成功也不报错、永远挂着（KudsRocket 10-15「多锁几次，全卡死了」）：
 //   每个请求都带 AbortSignal.timeout，挂死的变成 CloudNetworkError → 上层按网络错误重试 / 留 dirty 续推。
-//   meta = 元数据 / 列举 / 会话创建；chunk = 一块 5 MiB 的 PUT（100 KB/s 的上行也够）；range = 一片 byte-range；blob = 整文件下载。
+//   meta = 元数据 / 列举 / 会话创建；chunk = 一块 5 MiB 的 PUT（100 KB/s 的上行也够）；range = 一片 byte-range；blob = 整文件下载；
+//   upload（2.3.6，可选）= 一次传完的上传（≤ 4 MB 的那一个 PUT），不写 = 用 meta 那档（= 2.3.3 及以前的行为；2.3.4 / 2.3.5 默认改成了 chunk 那档，是错的，2.3.6 改回）。
 //   AbortSignal.timeout 老浏览器没有（iOS < 16）→ 不带 signal，行为同 0.17.0。
-export interface GraphTimeouts { meta: number; chunk: number; range: number; blob: number }
+export interface GraphTimeouts {
+  meta: number; chunk: number; range: number; blob: number;
+  /** 2.3.6（统筹 Claude Fable 5.2 定，代码 Claude Opus 5.5）：一次传完的上传（≤ 4 MB 的那一个 PUT）的时限。**不写 = 用 meta 那档（= 2.3.3 及以前的行为）**；
+   *  宿主显式写了才用写的值（本库规矩 ①：传输层行为变更做成显式开关，默认 = 变更前的行为）。
+   *  为什么单列：慢网上传得上去（要宽）和上传卡死时恢复得快（要窄）互相顶着——三维 / 画画靠请求时限保证上传卡死时不一直卡着
+   *  （卡着 = 保存一直在进行 = 自动保存全被跳过 = 改动只在内存里），这个数归宿主定。分块上传的每一块照旧用 chunk。 */
+  upload?: number;
+}
 /** 推荐值（KudsRocket 在用）：消费方显式传给 createOneDriveProvider({ transport: { timeouts } }) 才生效。 */
 export const DEFAULT_GRAPH_TIMEOUTS: GraphTimeouts = { meta: 30_000, chunk: 120_000, range: 60_000, blob: 15 * 60_000 };
 /** 0.17.2（user 2026-10-15「行为变更默认关、消费方显式开」）：传输层的行为开关。不传 = 0.17.0 的行为（无超时、单块失败整份重试、提交前不核）。 */
@@ -75,7 +83,8 @@ let graphVerifyCommit = false;
 let graphSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const timed = (kind: keyof GraphTimeouts): AbortSignal | undefined => {
   if (!graphTimeouts) return undefined;
-  const ms = graphTimeouts[kind];
+  const ms = kind === "upload" ? (graphTimeouts.upload ?? graphTimeouts.meta) : graphTimeouts[kind];   // 2.3.6：upload 没写 = meta 那档（2.3.3 及以前的行为）
+  if (ms == null) return undefined;
   return typeof AbortSignal !== "undefined" && typeof (AbortSignal as { timeout?: unknown }).timeout === "function" ? AbortSignal.timeout(ms) : undefined;
 };
 // ── 报错里只许主机名（2.3.3 起；2.3.5 收紧：上游报错原文一个字都不进来）──
@@ -355,13 +364,13 @@ async function uploadFileToApproot(path: string, blob: Blob, contentType = "appl
   if (eTag) headers["If-Match"] = eTag;
   if (blob.size <= SIMPLE_UPLOAD_LIMIT) {
     onProgress?.(0, blob.size);
-    // 2.3.4（统筹 Claude Fable 5.2 定，代码 Claude Opus 5.5）：一次性上传带着整份字节（最多 4 MB），以前和列举共用 meta 那档 30 s——
-    //   慢网上一本 3–4 MB 带图的书每次都超时、永远传不上去（按请求种类分档分漏了）。改用 chunk 那档（120 s，和分块上传每块同一个量级）。
+    // 一次传完的上传带着整份字节（最多 4 MB）。2.3.4 / 2.3.5 默认把它从 meta 那档（30 s）改成了 chunk 那档（120 s）——对开着请求时限的宿主
+    //   是一条默认生效的行为变更（违反本库规矩 ①），2.3.6 改成单列的 upload 档：宿主没写 = meta 那档（2.3.3 及以前），慢网要宽的宿主自己写。
     //   超时掐断时那一次可能已经落盘：抛的是没有 status 的网络错 → 推送层重试撞 412 / 409 → 逐字节比对自愈（回执丢失那条路），不会记成传完。
     const r = await graphFetch(
       "PUT",
       `/me/drive/special/approot:/${encodeApprootPath(path)}:/content?@microsoft.graph.conflictBehavior=${conflictBehavior}`,
-      { headers, body: blob, timeout: "chunk" },
+      { headers, body: blob, timeout: "upload" },
     );
     onProgress?.(blob.size, blob.size);
     return r.json() as Promise<GraphDriveItem>;

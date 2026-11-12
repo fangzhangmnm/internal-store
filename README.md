@@ -57,6 +57,10 @@
 import { createStore, createOneDriveProvider } from "@internal/store";
 
 const { provider } = createOneDriveProvider({ clientId, msalUrl: "./vendor/msal/msal-browser.min.js" });
+// 选填 transport（默认全关 = 没有请求时限）：{ timeouts, chunkResume, verifyChunkedCommit }。timeouts 是每种请求的时限（ms，DEFAULT_GRAPH_TIMEOUTS 是推荐值）：
+//   meta 元数据 / 列举 · chunk 分块上传的一块 · range 按范围下载 · blob 整份下载 · upload（2.3.6，可选）一次传完的上传（≤ 4 MB），不写 = 用 meta 那档（2.3.3 及以前的行为）。
+//   upload 单列是因为「慢网上传得上去」和「上传卡死时恢复得快」互相顶着：慢网上带图的大文件传不上去的宿主写一个更长的（比如和 chunk 一样）；
+//   靠时限防卡死的宿主（保存一直在进行时自动保存会被跳过的）不写或写更短的。2.3.4 / 2.3.5 默认用的是 chunk 那档（错的），开着请求时限的宿主别停在那两版。
 
 const store = createStore({
   provider,                                  // 必填：云端低层（OneDrive / mock provider）

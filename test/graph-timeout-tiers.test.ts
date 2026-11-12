@@ -1,9 +1,10 @@
 // 2.3.4：按请求种类分超时档（统筹 Claude Fable 5.2 定；代码 / 测试 Claude Opus 5.5，2026-11-12）
 //   毛病：graphFetch 一律用 meta 那档（30 s）。一次性上传（≤ 4 MB）带着整份字节也落在这一档——慢网上一本 3–4 MB 带图的书每次都超时、
-//   永远传不上去；拿不到下载地址时的 /content 兜底下载同样。修的是分档，不调数字：一次性上传 = chunk 档；/content 整份 = blob 档、按范围 = range 档。
+//   永远传不上去；拿不到下载地址时的 /content 兜底下载同样。修的是分档，不调数字：/content 整份 = blob 档、按范围 = range 档（保留默认开，理由见 2.3.6 发版说明）；
+//   一次性上传 2.3.4 / 2.3.5 默认改成 chunk 档是错的（默认生效的行为变更），2.3.6 改成单列的 upload 档：不写 = meta 档（2.3.3 及以前）、宿主显式写了才用。
 //   守的：超时把上传掐断时那一次可能已经落盘 → 必须走「落地未确认 → 留着待传 → 下次推对字节自愈」，不许记成传完。
 import { test, eq, assert } from "./runner.mjs";
-import { createGraph } from "../src/base/providers/graph.ts";
+import { createGraph, DEFAULT_GRAPH_TIMEOUTS } from "../src/base/providers/graph.ts";
 import { CloudNetworkError } from "../src/base/errors.ts";
 import { TEST_KINDS } from "./kinds.mjs";
 import { createStore } from "../src/create-store.ts";
@@ -11,7 +12,7 @@ import { createMockProvider } from "../src/testing/mock-provider.ts";
 import { createMockEncryption } from "../src/testing/mock-encryption.ts";
 import { createMockLocal } from "../src/testing/mock-local.ts";
 
-// 四档各给一个认得出的数
+// 四档各给一个认得出的数（upload 不写 = meta 那档）
 const TIERS = { meta: 1111, chunk: 2222, range: 3333, blob: 4444 };
 const json = (o: unknown) => new Response(JSON.stringify(o), { status: 200, headers: { "Content-Type": "application/json" } });
 
@@ -30,15 +31,57 @@ function rig(handler: (url: string, init?: RequestInit) => Promise<Response>) {
 }
 const msOf = (seen: Array<{ what: string; ms: number | null }>, pred: (w: string) => boolean): Array<number | null> => seen.filter((x) => pred(x.what)).map((x) => x.ms);
 
-test("[超时分档] 开着 timeouts：一次性上传的 PUT 用 chunk 档，不是 meta 档", async () => {
+test("[超时分档] 开着 timeouts、没写 upload：一次性上传的 PUT 用 meta 档（2.3.3 及以前的行为；2.3.4 / 2.3.5 默认 chunk 是错的，2.3.6 改回）", async () => {
   const r = rig(async () => json({ id: "I1", name: "书.zip", eTag: "e2", size: 3 }));
   try {
     const g = createGraph(() => Promise.resolve("TOKEN"), { timeouts: TIERS });
     await g.uploadFileToApproot("书.zip", new Blob([new Uint8Array([1, 2, 3])]), "application/zip", { conflictBehavior: "replace", eTag: "e1" });
     const puts = msOf(r.seen, (w) => w.startsWith("PUT ") && w.endsWith("/content"));
     eq(puts.length, 1, "一次性上传打了一个 PUT");
-    eq(puts[0], TIERS.chunk, "PUT 的时限 = chunk 档");
+    eq(puts[0], TIERS.meta, "PUT 的时限 = meta 档（没写 upload）");
   } finally { r.restore(); }
+});
+
+// 2.3.6（统筹 Claude Fable 5.2 定；Claude Opus 5.5）：一次传完的上传单列成可选的 upload 档——不写 = meta 那档（上面那条验）；
+//   写了 = 一次传完的上传用它，分块上传的每一块照旧 chunk，元数据照旧 meta。
+const BIG = 4 * 1024 * 1024 + 10;   // > 4 MiB → 分块上传
+test("[超时分档 · 2.3.6] 写了 upload：一次传完的上传用 upload 档；分块上传那一块还是 chunk 档；元数据还是 meta 档", async () => {
+  const UP = 5555;
+  const r = rig(async (url, init) => {
+    if (url.includes("createUploadSession")) return json({ uploadUrl: "https://upload.example/sess/1" });
+    if (url.startsWith("https://upload.example/") && init?.method === "PUT") return new Response(JSON.stringify({ id: "I2", name: "大书.zip", eTag: "e9", size: BIG }), { status: 201 });
+    return json({ id: "I1", name: "书.zip", eTag: "e2", size: 3 });
+  });
+  try {
+    const g = createGraph(() => Promise.resolve("TOKEN"), { timeouts: { ...TIERS, upload: UP } });
+    await g.uploadFileToApproot("书.zip", new Blob([new Uint8Array([1, 2, 3])]), "application/zip", { conflictBehavior: "replace", eTag: "e1" });
+    await g.uploadFileToApproot("大书.zip", new Blob([new Uint8Array(BIG)]), "application/zip", { conflictBehavior: "fail" });
+    const simple = msOf(r.seen, (w) => w.startsWith("PUT ") && w.endsWith("/content"));
+    eq(JSON.stringify(simple), JSON.stringify([UP]), "一次传完的 PUT = upload 档");
+    const chunks = msOf(r.seen, (w) => w.startsWith("PUT /sess/"));
+    assert(chunks.length >= 1 && chunks.every((ms) => ms === TIERS.chunk), `分块的每一块 = chunk 档：${JSON.stringify(chunks)}`);
+    eq(JSON.stringify(msOf(r.seen, (w) => w.startsWith("POST ") && w.includes("createUploadSession"))), JSON.stringify([TIERS.meta]), "会话创建（元数据）= meta 档");
+  } finally { r.restore(); }
+});
+test("[超时分档 · 2.3.6] 默认时限表里没有 upload（宿主传 DEFAULT_GRAPH_TIMEOUTS = 一次传完的上传用 meta 那档，和 2.3.3 及以前一样）", () => {
+  assert(!("upload" in DEFAULT_GRAPH_TIMEOUTS), "默认表不写 upload");
+});
+test("[超时分档 · 2.3.6] upload 档到点：抛的是没有 status 的网络错（类别 timed-out）——和整台测试注入的那种一样，走「不算推成、仍是待传、下次续推自愈」", async () => {
+  const orig = globalThis.fetch;
+  (globalThis as { fetch: unknown }).fetch = (_u: unknown, init?: RequestInit) => new Promise((_res, rej) => {
+    const sig = init?.signal;
+    if (sig) sig.addEventListener("abort", () => rej(sig.reason));   // 上传卡死：一直不回，直到时限把它掐掉
+  });
+  try {
+    const g = createGraph(() => Promise.resolve("TOKEN"), { timeouts: { ...TIERS, upload: 60 } });
+    const t0 = Date.now();
+    let err: unknown = null;
+    try { await g.uploadFileToApproot("书.zip", new Blob([new Uint8Array([1, 2, 3])]), "application/zip", { conflictBehavior: "replace", eTag: "e1" }); } catch (e) { err = e; }
+    assert(err instanceof CloudNetworkError, `是 CloudNetworkError：${String(err)}`);
+    eq((err as { status?: number }).status, undefined, "没有 status（推送层按可重试处理）");
+    eq(((err as { cause?: { category?: string } }).cause)?.category, "timed-out", "类别 = timed-out");
+    assert(Date.now() - t0 < 1000, "按显式写的 upload 档 60 ms 掐，不是 meta 档的 1111 ms 那么久之后才掐");
+  } finally { (globalThis as { fetch: unknown }).fetch = orig; }
 });
 
 test("[超时分档] 开着 timeouts：/content 兜底下载整份用 blob 档、按范围用 range 档；拿下载地址那一趟还是 meta 档", async () => {

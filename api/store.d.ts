@@ -664,6 +664,11 @@ export declare interface GraphTimeouts {
     chunk: number;
     range: number;
     blob: number;
+    /** 2.3.6（统筹 Claude Fable 5.2 定，代码 Claude Opus 5.5）：一次传完的上传（≤ 4 MB 的那一个 PUT）的时限。**不写 = 用 meta 那档（= 2.3.3 及以前的行为）**；
+     *  宿主显式写了才用写的值（本库规矩 ①：传输层行为变更做成显式开关，默认 = 变更前的行为）。
+     *  为什么单列：慢网上传得上去（要宽）和上传卡死时恢复得快（要窄）互相顶着——三维 / 画画靠请求时限保证上传卡死时不一直卡着
+     *  （卡着 = 保存一直在进行 = 自动保存全被跳过 = 改动只在内存里），这个数归宿主定。分块上传的每一块照旧用 chunk。 */
+    upload?: number;
 }
 
 /** 把 Graph transport（graph.ts）翻成库的 CloudProvider（原始 Graph item → CloudItem）。

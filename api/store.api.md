@@ -478,6 +478,7 @@ export interface GraphTimeouts {
     meta: number;
     // (undocumented)
     range: number;
+    upload?: number;
 }
 
 // @public
