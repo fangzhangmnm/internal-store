@@ -284,8 +284,22 @@ async function downloadItemBlob(itemId: string): Promise<Blob> {
     try { return await r.blob(); }
     catch (e) { throw new CloudNetworkError(`downloadUrl: body failed ${where(host, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host }); }
   }
-  const r = await graphFetch("GET", `/me/drive/items/${itemId}/content`);
-  return await r.blob();
+  const t0 = clock();
+  const r = await contentViaGraph(itemId, name, t0);
+  try { return await r.blob(); }
+  catch (e) { throw new CloudNetworkError(`content via Graph: body failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
+}
+
+// 2.3.3（统筹 Claude Fable 5.2 审稿时补）：拿不到下载地址时退到 Graph 的 /content——微软把它重定向到发文件的服务器，
+//   失败时分不清断在哪一跳。它是在**下载文件内容**，归 stage "content"；真正的主机名拿不到，写固定字样 VIA_GRAPH_REDIRECT，
+//   **不写 graph.microsoft.com**（那会把锅归给接口，正是这一版要分清的事）。非 2xx（带 status 的 GraphError）照旧原样上抛：调用方按 status 判。
+const VIA_GRAPH_REDIRECT = "via-graph-redirect";
+async function contentViaGraph(itemId: string, name: string | null, t0: number, headers?: Record<string, string>): Promise<Response> {
+  try { return await graphFetch("GET", `/me/drive/items/${itemId}/content`, headers ? { headers } : {}); }
+  catch (e) {
+    if (!(e instanceof CloudNetworkError)) throw e;
+    throw new CloudNetworkError(`content via Graph: network fetch failed ${where(VIA_GRAPH_REDIRECT, name, t0)} (${scrubUrls(String(e.cause ?? ""))})`, e.cause, { stage: "content", host: VIA_GRAPH_REDIRECT });   // e.cause 在 graphFetch 里已过 safeCause
+  }
 }
 
 // byte-range 下载
@@ -308,8 +322,10 @@ async function downloadItemRange(itemId: string, offset: number | null, length: 
       if (info.url) { _dlUrlCache.set(itemId, { url: info.url, name: info.name }); return await rangeFromUrl(info.url, offset, length, opts, info.name); }
     }
   }
-  const r = await graphFetch("GET", `/me/drive/items/${itemId}/content`, { headers: { Range: _rangeHeader(offset, length) } });
-  return await r.arrayBuffer();
+  const t0 = clock();
+  const r = await contentViaGraph(itemId, info.name, t0, { Range: _rangeHeader(offset, length) });
+  try { return await r.arrayBuffer(); }
+  catch (e) { throw new CloudNetworkError(`content via Graph (range): body failed ${where(VIA_GRAPH_REDIRECT, info.name, t0)} (${scrubUrls(String(e))})`, safeCause(e), { stage: "content", host: VIA_GRAPH_REDIRECT }); }
 }
 
 // 拿一个新的 1h 短效 downloadUrl（过期重申请用）

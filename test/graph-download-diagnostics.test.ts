@@ -130,6 +130,43 @@ test("[下载报错] 问微软接口这一步断了：stage=graph、host=graph.m
   } finally { restore(); }
 });
 
+// 统筹审稿补（2026-11-12）：Graph 没给下载地址 → 退到 /content，微软再重定向到发文件的服务器。断在这条路上也是「下载文件内容」，
+//   归 stage "content"；真正的主机拿不到，写固定字样 via-graph-redirect，绝不写成 graph.microsoft.com（那会把锅归给接口）。
+function noUrlThen(onContent: (url: string, init?: RequestInit) => Promise<Response>) {
+  return async (url: string, init?: RequestInit): Promise<Response> => {
+    if (url.endsWith(`/me/drive/items/${ITEM_ID}`)) return json({ id: ITEM_ID, name: "a.txt" });   // 没有 downloadUrl
+    return onContent(url, init);
+  };
+}
+for (const [label, call] of [
+  ["整份下载", (g: ReturnType<typeof createGraph>) => g.downloadItemBlob(ITEM_ID)],
+  ["按范围下载", (g: ReturnType<typeof createGraph>) => g.downloadItemRange(ITEM_ID, 0, 100)],
+] as const) {
+  test(`[下载报错] ${label}没拿到下载地址、走 Graph /content 兜底时断了：stage=content、host=via-graph-redirect，不说成 graph.microsoft.com`, async () => {
+    let contentHits = 0;
+    const restore = withFetch(noUrlThen(async (url) => { assert(url.endsWith("/content"), `兜底打的是 /content：${url}`); contentHits++; throw new TypeError("Failed to fetch"); }));
+    try {
+      const e = await caught(call(createGraph(() => Promise.resolve("TOKEN"))));
+      eq(contentHits, 1, "兜底那一趟真打出去了");
+      assert(e instanceof CloudNetworkError, "翻成 CloudNetworkError");
+      eq((e as CloudNetworkError).stage, "content", "阶段 = 下载文件内容（不是接口）");
+      eq((e as CloudNetworkError).host, "via-graph-redirect", "主机名写明是经 Graph 转过去的");
+      const m = (e as Error).message;
+      assert(!m.includes("graph.microsoft.com"), `字里不许把锅归给接口主机：${m}`);
+      assert(m.includes("host=via-graph-redirect") && m.includes(`file="a.txt"`) && /after=\d+ms/.test(m), `带定位：${m}`);
+      assert(m.includes("Failed to fetch"), "原因还在");
+    } finally { restore(); }
+  });
+}
+test("[下载报错] /content 兜底回了非 2xx：照旧是带 status 的错（调用方按 status 判），不翻成网络错", async () => {
+  const restore = withFetch(noUrlThen(async () => new Response("nope", { status: 404 })));
+  try {
+    const e = await caught(createGraph(() => Promise.resolve("TOKEN")).downloadItemBlob(ITEM_ID));
+    assert(!(e instanceof CloudNetworkError), "不是网络错");
+    eq((e as { status?: number }).status, 404, "status 原样");
+  } finally { restore(); }
+});
+
 // 结构守卫：以后在 graph.ts 里加新的网络报错，也走同一套洗法。
 test("[下载报错·守卫] graph.ts 里 String(e) 一律过 scrubUrls、CloudNetworkError 的 cause 一律过 safeCause、模板里不插地址变量", () => {
   const src = readFileSync(new URL("../src/base/providers/graph.ts", import.meta.url), "utf8");
