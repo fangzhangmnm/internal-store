@@ -17,11 +17,13 @@ import type { FolderConflictPolicy } from "./folder-merge.ts";
 import type { FolderEnvelope, ResolveFn } from "./folder-merge.ts";
 import type { Bytes, CloudSync } from "../base/types.ts";
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+// 2.3.3（2026-11-12，小黑屋维修线施工单第 1 条）：以前抛光秃秃的 "timeout"，进了宿主黑匣子分不出是哪个请求、等了多久
+//   （小黑屋 11-12 15:59:11 那一行）。现在字里写清：哪个 collection、拉还是推、等了多少毫秒。行为不变（还是 log 级、退回本地、留 dirty）。
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
   if (!ms) return p;
   return Promise.race([
     p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), { _timeout: true })), ms)),
+    new Promise<T>((_, rej) => setTimeout(() => rej(Object.assign(new Error(`timeout: ${what} got no answer in ${ms}ms`), { _timeout: true })), ms)),
   ]);
 }
 const is412 = (e: unknown): boolean => {
@@ -80,7 +82,7 @@ export function createFolderFlow(cfg: FolderFlowConfig): FolderFlow {
     if (isOnline && !isOnline()) return { status: "offline", folder: localFolder };
 
     let pulled;
-    try { pulled = await withTimeout(cloud.pull(name), timeoutMs); }
+    try { pulled = await withTimeout(cloud.pull(name), timeoutMs, `collection "${name}" pull`); }
     catch (e) { reportStoreError(e, "log"); return { status: "offline", folder: localFolder, error: e }; }   // 离线 / 慢网超时 / 伪在线 API 错
 
     let cloudFolder = emptyFolder();
@@ -102,7 +104,7 @@ export function createFolderFlow(cfg: FolderFlowConfig): FolderFlow {
 
     try {
       // CloudSync.push 现收 Bytes|Blob（cloud-sync 内部 toU8 归一化），encode 出 Blob 直接传。
-      const res = await withTimeout(cloud.push(name, encode(merged), { baseEtag: pulled?.item?.eTag }), timeoutMs);
+      const res = await withTimeout(cloud.push(name, encode(merged), { baseEtag: pulled?.item?.eTag }), timeoutMs, `collection "${name}" push`);
       return { status: "synced", folder: merged, pushed: true, etag: res?.item?.eTag };
     } catch (e) {
       if (is412(e) && depth < 5) return _sync(merged, depth + 1);   // 有人插队 → 重拉重 merge 重推（带上已 merge 的本地）

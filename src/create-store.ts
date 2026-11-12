@@ -8,6 +8,7 @@ import { toU8, createSubstrate } from "./base/substrate.ts";
 import type { Bytes } from "./base/substrate.ts";
 import { createLocalHead } from "./works/local-head.ts";
 import { createDiskLedger } from "./works/disk-ledger.ts";
+import { createContentHealth } from "./works/content-health.ts";   // 2.3.3：「文件内容最近下载不下来」→ 冲突面的 contentFailing
 import { createSeal, cryptExtFor } from "./works/seal.ts";
 import { createIdentifiers, type DocKind, type DocTier, type Identifiers, type IdentifierCodec } from "./base/identifiers.ts";
 import { createSafeResolve, type ResolveChoice } from "./works/safe-resolve.ts";
@@ -59,7 +60,11 @@ export interface StoreUI {
   //   的 presetResolution = 典型越狱，已删）、不许按 occasion 自动返回、不许用 cancel 以外的默认值；也不许把三个值画成别的词——按钮文字 1:1 对应
   //   keepMine = 本地覆盖云端、takeCloud = 云端覆盖本地、cancel = 取消（全家族 2026-10-16 统一；主按钮 = 云端覆盖本地）。库分不出人点的还是代码返回的，
   //   这一层只能靠纪律 + 宿主的结构守卫（grep「预设 / preset」类写法）。
-  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push"; cloudState?: CloudState }) => Promise<ResolveChoice>;
+  //   2.3.3 `contentFailing`（2026-11-12 小黑屋维修线施工单第 3 条；规矩 = 统筹 Claude Fable 5.2）：这个页面里最近一次下载文件内容失败了、
+  //   之后还没成功过（不猜原因、不设时限；成功一次就清掉）。为真 = 选「云端覆盖本地」现在大概完不成（要下载）；「本地覆盖云端」不用下载、照样能做。
+  //   宿主据此**多说一句实话、把默认钮换成「取消」**；三个钮照旧都给，一个不藏、不变灰（不硬拦）。库里的派发、先备份再覆盖的顺序一个字不变。
+  //   没给 / 为假 = 和以前一样。
+  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push"; cloudState?: CloudState; contentFailing?: boolean }) => Promise<ResolveChoice>;
   /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
   reportError: (err: unknown, level?: StoreErrorLevel) => void;
   // 加密密码**不走 ui**——非交互 crypt.getPassword（app 持内存密码 + 解锁循环在 busy 外，见 §5/§7）。故无 askPassword。
@@ -521,11 +526,13 @@ export function createStore(config: StoreConfig) {
   //     若 cloud-sync 也写同键，push 成功写 "0" 会与「push 期间用户新编辑写 '1'」竞态、把未推编辑误判 clean 被驱逐（§A 最狠红线）。
   //   toName：云端名 → 身份——全库唯一加密名判定 seam，cloud-sync 与 mergeTrash 共用同一个函数；0.16.0 起由 docKinds 表推导（identifiers.fromCloud）。
   const toName = (cloudName: string): string => ids.fromCloud(cloudName).identifier;
-  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: (n: string) => n, encFileName: (n: string) => ids.sealed(n), toName, appKey: "files", manageDirty: false, hidden: config.hidden, identifiers: ids });
+  //   2.3.3：两个实例共用一份 contentHealth（这个页面里最近一次下载文件内容失败了、之后还没成功过）——只给冲突面说实话用，库里任何决定都不看它。
+  const contentHealth = createContentHealth();
+  const cloud: CloudSync = createCloudSync({ provider, kv, fileName: (n: string) => n, encFileName: (n: string) => ids.sealed(n), toName, appKey: "files", manageDirty: false, hidden: config.hidden, identifiers: ids, contentHealth });
   //   collections 实例：云端落 `/.${appId}/<name>.json`（隐藏夹，isHidden 过滤出图库）；appKey="collections" → `${ns}.collections.etag:`/`.dirty:`。
   //     store.collection(name) 走它。name 无后缀，store 追加 `.json`。
   //     （**无保留名**：2026-07-13 起 `settings` 也只是个普通 collection 名，assertValidCollectionName 只校验文件名合法性。）
-  const collectionsCloud: CloudSync = createCloudSync({ provider, kv, fileName: (n: string) => `.${appId}/${n}.json`, appKey: "collections" });
+  const collectionsCloud: CloudSync = createCloudSync({ provider, kv, fileName: (n: string) => `.${appId}/${n}.json`, appKey: "collections", contentHealth });
   const sub = createSubstrate();
   const headRaw = createLocalHead({
     kv,
@@ -947,7 +954,7 @@ export function createStore(config: StoreConfig) {
   const onConflictFor = (occasion: "open" | "push") => async ({ name, cloudState, cloudEtag }: { name: string; cloudState?: CloudState; cloudEtag?: string }): Promise<ResolveChoice> => {
     if (tierOf(name) === "auto-backup") return "keepMine";   // 2.1.0 二等自动备份：永不弹面，这台的赢（输的那份不进备份箱 —— push 的 loserBackup）
     const state: CloudState = cloudState ?? (cloudEtag != null ? "changed" : await cloudStateNow(name));   // open：freshness 已经看到云端 etag ≠ base
-    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: state });
+    return ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion, cloudState: state, contentFailing: contentHealth.failing() });
   };
   const onConflict = onConflictFor("push");   // save 的 push 412 / surfaceCollision 走这份；open 路径用 onConflictFor("open")
 
@@ -1106,7 +1113,7 @@ export function createStore(config: StoreConfig) {
       catch (e) { ui.reportError(e, "log"); return candidate ? { status: "offline" } : { status: "clean" }; }   // 未知 ≠ 没了：不据此弹面
       if (meta) return { status: "clean" };                                               // 云端在：同版 = 已同步；有新版 = 走 pullIfClean，不是这里
       const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "takeCloud"   // 2.1.0 二等：云端没了就跟着云端（别的设备轮转掉的格子不该被这台复活），不问人
-        : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent" });
+        : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState: "absent", contentFailing: contentHealth.failing() });
       if (choice === "cancel") return { status: "cancelled" };
       if (choice === "takeCloud") {                                                       // 跟着云端：本地这份移到回收站（库的删除路径，可恢复；不硬删）——只在云端此刻确实没有时
         if (await starredForResolve()) return { status: "unresolved", reason: "starred" };   // 2.3.0：加了星 → 两边都不动，人先撤星
@@ -1294,7 +1301,7 @@ export function createStore(config: StoreConfig) {
           }
         }
         const choice: ResolveChoice = tierOf(name) === "auto-backup" ? "keepMine"   // 2.1.0 二等：不问人，这台的赢
-          : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState });
+          : await ui.resolveConflict({ name, local: await local.get(name), cloud: null, occasion: "push", cloudState, contentFailing: contentHealth.failing() });
         if (choice === "cancel") return { status: "cancelled" };
         if (choice === "takeCloud") {
           if (cloudState === "absent" || cloudState === "never") {   // 云端没有可拉的：跟着云端 = 这份不要了 → 本地 move-aside 进回收站（库的删除路径，可恢复；不硬删）

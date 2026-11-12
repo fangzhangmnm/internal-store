@@ -10,12 +10,24 @@
 //   - 只在「fetch 自身 throw」处包装（那里 TypeError 必是网络层）；绝不拿 `e instanceof TypeError`
 //     在上层泛判——我们自己代码的 TypeError bug 会被误装成「网络问题」而藏死。
 //   - app 侧 ui.reportError 按 `name === "CloudNetworkError"` 换人话文案（i18n 归宿主，库内零文案）。
+//   2.3.3（2026-11-12，小黑屋维修线施工单第 1 条；规矩 = 统筹 Claude Fable 5.2，代码 = Claude Opus 5.5）：
+//   加两个可选字段，让宿主分得清「问微软的接口断了」还是「文件内容下载不下来」（两台不同的服务器）：
+//   - `stage`："graph" = 经 Graph 接口（列文件 / 拿版本号 / 拿下载地址）；"content" = 下载文件内容（整份 / 按范围）。
+//     没有 = 老的报错，或别的段（上传会话、复制监控）——宿主照旧走原来那句。
+//   - `host`：**只有主机名**。下载地址是带签名的临时地址，拿到就能下载——整条地址、路径、查询串一律不进报错
+//     （`test/graph-download-diagnostics.test.ts` 拿带假签名的地址去撞）。
 export class CloudNetworkError extends Error {
   override readonly cause?: unknown;
-  constructor(message: string, cause?: unknown) {
+  /** 2.3.3：断在哪一段。"graph" = Graph 接口；"content" = 下载文件内容。没有 = 老的报错 / 别的段（宿主照旧处理）。 */
+  readonly stage?: "graph" | "content";
+  /** 2.3.3：出事的主机名（只有主机名，绝不带路径和查询串）。 */
+  readonly host?: string;
+  constructor(message: string, cause?: unknown, info: { stage?: "graph" | "content"; host?: string } = {}) {
     super(message);
     this.name = "CloudNetworkError";
     this.cause = cause;
+    if (info.stage) this.stage = info.stage;
+    if (info.host) this.host = info.host;
   }
 }
 

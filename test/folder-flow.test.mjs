@@ -93,3 +93,18 @@ describe("FolderFlow.sync", () => {
     eq(J(ids), J(["cloudB", "localA"]), "两边都在");
   });
 });
+
+// 2.3.3（2026-11-12，小黑屋维修线施工单第 1 条；Claude Opus 5.5）：超时的报错以前只有光秃秃的 "timeout"（小黑屋黑匣子 11-12 15:59:11），
+//   分不出是哪个请求、等了多久。现在字里写清 collection 名、拉还是推、等了多少毫秒；行为照旧（退回本地 offline）。
+describe("FolderFlow 超时报错带上下文", () => {
+  it("pull 一直不回 → offline，报错写清是哪个 collection 的 pull、等了多少毫秒", async () => {
+    const cloud = { pull: () => new Promise(() => {}), push: async () => ({ item: { eTag: "x" } }) };
+    const ff = createFolderFlow({ cloud, name: "encdict", encode, decode, timeoutMs: 30 });
+    const r = await ff.sync(folder([it1("a", 1)]));
+    eq(r.status, "offline", "超时 = 退回本地（行为不变）");
+    const msg = String(r.error?.message ?? "");
+    assert(msg.includes('collection "encdict" pull'), `写清是哪个请求：${msg}`);
+    assert(msg.includes("30ms"), `写清等了多久：${msg}`);
+    assert(r.error?._timeout === true, "_timeout 标记还在");
+  });
+});

@@ -15,6 +15,7 @@ import { withStemTail, type Identifiers } from "../base/identifiers.ts";   // �
 import { isHidden } from "../base/is-hidden.ts";       // 列举隐藏判定（.trash/.backup/.<appId> + 任意 dot 项）
 import { reportStoreError } from "../base/error-handling.ts";   // 全接但分级：静默 swallow 也 funnel（不改控制流）
 import { CloudStaleRefError } from "../base/errors.ts";   // 「已被别处动过」错误族（restore/purge 的 404 收敛）
+import type { ContentHealth } from "./content-health.ts";   // 2.3.3：「文件内容最近下载不下来」这件事实（只给冲突面说实话用）
 import type { ByteSource, Bytes, CloudItem, CloudProvider, CloudSync, FetchMetaResult, FolderDeleteResult, Kv, PullResult, PushResult, WeakOverrideResult, UploadSessionPort } from "../base/types.ts";
 
 export class CloudConflictError extends Error {
@@ -81,6 +82,8 @@ interface CloudSyncCfg {
   hidden?: (name: string) => boolean;
   /** 0.16.0：身份语法（恢复撞名时戳插在哪）。不给 = 没有文档种类（collections 实例）。 */
   identifiers?: Identifiers;
+  /** 2.3.3：下载文件内容的每一趟都报给它（失败记上、成功清掉）。不给 = 不记。create-store 给两个实例同一份。 */
+  contentHealth?: ContentHealth;
 }
 
 /**
@@ -105,6 +108,8 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     trashFolder = ".trash", backupFolder = ".backup", appKey = "sync", manageDirty = true } = cfg;
   const now = cfg.now || (() => Date.now());
   const isHiddenAny = (n: string): boolean => isHidden(n) || !!cfg.hidden?.(n);
+  // 2.3.3：向 provider 要内容字节的每一处都过这一道（content-health.ts）；结果和错误原样透传。
+  const fetchContent = <T>(download: () => Promise<T>): Promise<T> => (cfg.contentHealth ? cfg.contentHealth.track(download) : download());
 
   // name → 云端实际 item（同一 name 在任一时刻只住一个扩展名下；明文路径先试 = 多数命中 1 RTT）。
   // 找不到时返回明文路径（新建落明文名；加密字节的新建在 push 里按字节选 enc 路径）。
@@ -174,7 +179,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     try {
       const n = Math.min(_ADOPT_TAIL_N, size);
       const offset = Math.max(0, (fresh.size || size) - n);
-      const raw = await provider.downloadRange(fresh.ref, offset, n);
+      const raw = await fetchContent(() => provider.downloadRange(fresh.ref, offset, n));
       const cloudTail = raw instanceof Uint8Array ? raw
         : raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer())
         : new Uint8Array(raw);
@@ -261,7 +266,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
   async function pull(name: string): Promise<PullResult | null> {
     const { item } = await _find(name);
     if (!item) return null;
-    const blob = await provider.download(item.ref);
+    const blob = await fetchContent(() => provider.download(item.ref));
     return { blob, item, suggestedName: name };
   }
 
@@ -276,7 +281,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const { item, enc } = await _find(name);
     if (!item) return null;
     const offset = Math.max(0, (item.size || 0) - n);
-    const raw = await provider.downloadRange(item.ref, offset, Math.min(n, item.size || n));
+    const raw = await fetchContent(() => provider.downloadRange(item.ref, offset, Math.min(n, item.size || n)));
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());
@@ -293,7 +298,7 @@ export function createCloudSync(cfg: CloudSyncCfg): CloudSync {
     const off = Math.max(0, Math.min(offset, size));
     const len = Math.max(0, Math.min(length, size - off));
     if (len === 0) return { bytes: new Uint8Array(0), item, encrypted: enc };
-    const raw = await provider.downloadRange(item.ref, off, len);
+    const raw = await fetchContent(() => provider.downloadRange(item.ref, off, len));
     const bytes = raw instanceof Uint8Array ? raw
       : raw instanceof ArrayBuffer ? new Uint8Array(raw)
       : new Uint8Array(await (raw as Blob).arrayBuffer());

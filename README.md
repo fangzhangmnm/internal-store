@@ -359,8 +359,13 @@ const ui = {
   // 危险写操作的锁屏遮罩：store 把每个写裹进来。你画一个吞输入的全屏遮罩即可。
   busy: <T>(label: string, fn: () => Promise<T>) => Promise<T>,
   // push 撞冲突时 store 调它；返回有限选项之一，后果由 store 执行(见下表)。**必给真 sheet，绝不静默 cancel**。
-  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null }) => Promise<ConflictChoice>,
+  resolveConflict: (ctx: { name: string; local: Blob | null; cloud: Blob | null; occasion: "open" | "push"; cloudState?: CloudState; contentFailing?: boolean }) => Promise<ConflictChoice>,
+  //   contentFailing（2.3.3）：这个页面里最近一次下载文件内容失败了、之后还没成功过（不猜原因、不设时限，成功一次就清掉）。
+  //   为真 = 「云端覆盖本地」现在大概完不成（要下载）；「本地覆盖云端」不用下载、照样能做。宿主多说一句实话、默认钮换成「取消」，
+  //   三个钮照旧都给（不藏、不变灰）。库里的派发和「先备份再覆盖」不看它。没给 / 为假 = 和以前一样。
   // 非阻断错误(网络/文件不存在/字节非法)：store 调它弹 error banner。**必给，绝不吞 console**。
+  //   网络层失败 = `CloudNetworkError`（2.3.3 起带 `stage`："graph" = 问微软的接口断了，"content" = 文件内容下载不下来（另一台服务器）；
+  //   `host` = 只有主机名）。字里带主机名、文件名、用时；**带签名的下载地址整条不会出现在报错里**。宿主可以按 stage 分开说。
   //   level 缺省 "error"。分级 "error"|"warning"→banner、"info"→状态栏、"log"→仅 console(良性 offline/fallback)。
   //   深模块不直接持有 ui：它们 import 库内 `error-handling.ts` 的 `reportStoreError(err, level)`，
   //   createStore 装配时把它接到本 `reportError`（store 侧只 funnel、不 console.log，最终消费者才 log）。

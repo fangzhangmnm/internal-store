@@ -56,9 +56,14 @@ export interface CloudItem {
 
 // @public (undocumented)
 export class CloudNetworkError extends Error {
-    constructor(message: string, cause?: unknown);
+    constructor(message: string, cause?: unknown, info?: {
+        stage?: "graph" | "content";
+        host?: string;
+    });
     // (undocumented)
     readonly cause?: unknown;
+    readonly host?: string;
+    readonly stage?: "graph" | "content";
 }
 
 // @public
@@ -1001,6 +1006,7 @@ export interface StoreUI {
         cloud: Blob | null;
         occasion: "open" | "push";
         cloudState?: CloudState;
+        contentFailing?: boolean;
     }) => Promise<ResolveChoice>;
     resolveRenameOld?: (ctx: {
         oldName: string;

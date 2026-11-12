@@ -64,7 +64,14 @@ export declare interface CloudItem {
 
 export declare class CloudNetworkError extends Error {
     readonly cause?: unknown;
-    constructor(message: string, cause?: unknown);
+    /** 2.3.3：断在哪一段。"graph" = Graph 接口；"content" = 下载文件内容。没有 = 老的报错 / 别的段（宿主照旧处理）。 */
+    readonly stage?: "graph" | "content";
+    /** 2.3.3：出事的主机名（只有主机名，绝不带路径和查询串）。 */
+    readonly host?: string;
+    constructor(message: string, cause?: unknown, info?: {
+        stage?: "graph" | "content";
+        host?: string;
+    });
 }
 
 /** 低层云端传输契约。生产用 OneDriveProvider（包 Graph），测试用 MockProvider。 */
@@ -1470,6 +1477,7 @@ export declare interface StoreUI {
         cloud: Blob | null;
         occasion: "open" | "push";
         cloudState?: CloudState;
+        contentFailing?: boolean;
     }) => Promise<ResolveChoice>;
     /** 错误必 surface：绝不吞 console。level 缺省 "error"（见 error-handling.ts 分级）。 */
     reportError: (err: unknown, level?: StoreErrorLevel) => void;
